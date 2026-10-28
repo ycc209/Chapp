@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Tailwind reads Chapp's tokens (tokens.css), so bg-sunken, text-muted or rounded-card match the style guide. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-sunken: var(--sunken);
+  --color-ink: var(--ink);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-mark: var(--mark);
+  --color-mark-ink: var(--mark-ink);
+  --color-blue: var(--blue);
+  --color-std-0: var(--std-0);
+  --color-std-1: var(--std-1);
+  --color-std-2: var(--std-2);
+  --color-std-3: var(--std-3);
+  --color-std-4: var(--std-4);
+  --color-std-5: var(--std-5);
+  --color-std-6: var(--std-6);
+  --color-std-7: var(--std-7);
+  --color-std-8: var(--std-8);
+  --color-sample-bg: var(--sample-bg);
+  --color-sample-line: var(--sample-line);
+  --color-sample-ink: var(--sample-ink);
+  --color-expected: var(--expected);
+  --color-expected-bg: var(--expected-bg);
+  --color-tip: var(--tip);
+  --color-tip-bg: var(--tip-bg);
+  --color-caution: var(--caution);
+  --color-caution-bg: var(--caution-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+
+  --radius-card: var(--radius-card);
+  --radius-inner: var(--radius-inner);
+  --radius-chip: var(--radius-chip);
+  --shadow-card: var(--shadow);
+  --shadow-soft: var(--shadow-soft);
+  --font-sans: var(--font);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chapp-anim {
+    animation: none !important;
+  }
+}

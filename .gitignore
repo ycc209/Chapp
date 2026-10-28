@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+# Vendor manuals, extracted text and anything derived from them stay local (see README → Data).
+data/
+# Private planning notes stay local.
+docs/

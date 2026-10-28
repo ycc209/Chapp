@@ -1,0 +1,21 @@
+/* Scan-Import: what was shared appears line by line once it arrives, as the setup lands on the labmate's phone. */
+@keyframes share-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.share-appear {
+  animation: share-appear 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-appear {
+    animation: none;
+  }
+}

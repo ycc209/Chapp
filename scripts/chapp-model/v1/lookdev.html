@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Chapp look-dev</title>
+<!-- Renders public/chapp/*.webp. Run `node scripts/chapp-model/server.mjs`, open http://127.0.0.1:5181/scripts/chapp-model/lookdev.html?views=14&size=480&bg=none
+     and in the console: views[0].pose(); await save(0, 'chapp.webp', 'image/webp', 0.92). Poses: { blink: true }, { tilt: 0.12, lookY: 0.035, lookX: 0.01, turn: -0.05 }. -->
+<style>
+html, body { margin: 0; height: 100%; background: #f6f6f4; }
+#stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 0; }
+canvas { display: block; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/node_modules/three/build/three.module.js", "three/addons/": "/node_modules/three/examples/jsm/" } }
+</script>
+</head>
+<body>
+<div id="stage"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const q = new URLSearchParams(location.search);
+const FILE = q.get('file') || '/public/chapp/chapp.glb';
+const SIZE = Number(q.get('size') || 560);          // css px of each view
+const DPR = Number(q.get('dpr') || 1);
+const VIEWS = (q.get('views') || '0').split(',').map(Number); // yaw angles in degrees
+const BG = q.get('bg') !== 'none';
+
+const stage = document.getElementById('stage');
+const loader = new GLTFLoader();
+const gltf = await loader.loadAsync(FILE + '?v=' + Date.now());
+
+function lights(scene, renderer) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
+  scene.environmentIntensity = Number(q.get('env') || 0.5);
+  const key = new THREE.DirectionalLight(0xfff6ee, 2.0); key.position.set(-2.5, 4, 5); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xbfefff, 0.55); fill.position.set(4, 0.5, 3); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xd9ccff, 1.4); rim.position.set(3, 2.5, -4); scene.add(rim);
+  const rim2 = new THREE.DirectionalLight(0xbff4ee, 1.0); rim2.position.set(-3.5, 1.5, -3); scene.add(rim2);
+  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0xd9d0ff, 0.35));
+}
+
+window.views = [];
+for (const yaw of VIEWS) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(SIZE, SIZE);
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = Number(q.get('exposure') || 1.0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  if (BG) renderer.setClearColor(0xf6f6f4, 1); else renderer.setClearColor(0x000000, 0);
+  stage.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  lights(scene, renderer);
+  const model = gltf.scene.clone(true);
+  model.rotation.y = THREE.MathUtils.degToRad(yaw);
+  scene.add(model);
+  model.traverse((o) => {
+    if (o.isMesh && o.material.name === 'chapp_body') {
+      const m = o.material;
+      m.vertexColors = true;
+      m.envMapIntensity = 0.9;
+    }
+    if (o.isMesh && o.material.name === 'chapp_glint') o.material.emissiveIntensity = 1.4;
+    if (o.isMesh && o.material.name === 'chapp_eye') o.material.envMapIntensity = 0.35;
+  });
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100);
+  camera.position.set(0, 0.35, 6.4);
+  camera.lookAt(0, 0.06, 0);
+  const view = { renderer, scene, camera, model };
+  view.pose = (p = {}) => {
+    model.traverse((o) => {
+      if (o.name === 'eye_L' || o.name === 'eye_R') {
+        o.userData.base = o.userData.base || { s: o.scale.clone(), p: o.position.clone() };
+        o.scale.copy(o.userData.base.s).multiply(new THREE.Vector3(1.04, p.blink ? 0.12 : 1, 1));
+        o.position.copy(o.userData.base.p).add(new THREE.Vector3(p.lookX || 0, p.lookY || 0, 0));
+      }
+      if (o.name.startsWith('glint')) o.visible = !p.blink;
+    });
+    model.rotation.z = p.tilt || 0;
+    model.rotation.y = THREE.MathUtils.degToRad(yaw) + (p.turn || 0);
+    renderer.render(scene, camera);
+  };
+  view.pose();
+  window.views.push(view);
+}
+
+// Saves a view as a file through the lab server (POST /save/<name>).
+window.save = async (i, name, type = 'image/png', quality = 0.92) => {
+  const blob = await new Promise((r) => window.views[i].renderer.domElement.toBlob(r, type, quality));
+  const res = await fetch('/save/' + name, { method: 'POST', body: blob });
+  return name + ' ' + blob.size + ' ' + res.status;
+};
+window.__ready = true;
+</script>
+</body>
+</html>

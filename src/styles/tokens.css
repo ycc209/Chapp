@@ -1,0 +1,71 @@
+/*
+ * Chapp design tokens. Bench-first: calm neutral canvas and two colors, Meta blue and yellow.
+ * Blue shades the standards by concentration; yellow marks the user's samples and the thing to do now.
+ */
+:root {
+  /* Canvas and ink */
+  --bg: #ffffff;
+  --card: #ffffff;
+  --sunken: #efefec;
+  --ink: #111113;
+  --text: #2a2a2e;
+  --muted: #6c6c72;
+  --faint: #a7a7ad;
+  --line: #e6e6e3;
+
+  /* The one highlight: the thing to do now */
+  --mark: #ffe863;
+  --mark-ink: #3b3200;
+
+  /* Meta blue */
+  --blue: #0064e0;
+
+  /* Standards in Meta blue, blank (0) to the most concentrated (8) */
+  --std-0: #f1f6ff;
+  --std-1: #e1ecff;
+  --std-2: #c8dbff;
+  --std-3: #a8c6ff;
+  --std-4: #80abff;
+  --std-5: #568dfa;
+  --std-6: #2b72ef;
+  --std-7: #0064e0;
+  --std-8: #00479f;
+
+  /* The user's samples, in yellow */
+  --sample-bg: #fff1a3;
+  --sample-line: #e5c100;
+  --sample-ink: #5a4700;
+
+  /* Notes */
+  --expected: #1f7a3f;
+  --expected-bg: #eaf7ee;
+  --tip: var(--blue);
+  --tip-bg: #eaf2ff;
+  --caution: #a15c00;
+  --caution-bg: #fff4e0;
+  --info: #55555c;
+  --info-bg: #f0f0ed;
+
+  /* Shape */
+  --radius-card: 24px;
+  --radius-inner: 16px;
+  --radius-chip: 10px;
+  --shadow: 0 1px 2px rgba(17, 17, 19, 0.04), 0 6px 22px rgba(17, 17, 19, 0.07);
+  --shadow-soft: 0 1px 2px rgba(17, 17, 19, 0.03), 0 4px 14px rgba(17, 17, 19, 0.05);
+
+  /* Type */
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang TC', 'Noto Sans TC', system-ui, sans-serif;
+  --t-display: 700 34px/40px var(--font);
+  --t-title: 650 22px/28px var(--font);
+  --t-body: 400 17px/24px var(--font);
+  --t-label: 600 15px/20px var(--font);
+  --t-caption: 500 13px/18px var(--font);
+  /* The one line read at the bench, from arm's length */
+  --t-bench: 760 36px/42px var(--font);
+
+  /* Touch: 44 px everywhere, 60 px for what you press with gloves on mid-run */
+  --tap: 44px;
+  --tap-bench: 60px;
+  --mic: 68px;
+  --gutter: 20px;
+}
