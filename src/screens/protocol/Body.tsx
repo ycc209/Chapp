@@ -1,11 +1,11 @@
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { ProtocolIntro } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
 import { answer, bottles, bottleDetail, kitContents, precautions, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
-import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, NudgeIcon, PlusIcon, StepsIcon, WarningIcon } from './icons.tsx';
+import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
 
 export type Section = 'kit' | 'steps' | 'principle' | 'precautions';
 export const SECTIONS: Section[] = ['kit', 'steps', 'principle', 'precautions'];
@@ -155,14 +155,7 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
         </AccordionPrimitive.Header>
         <Content>
           <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
-            <ol className="flex flex-col gap-2">
-              {steps.map((s, i) => (
-                <li key={s.id} className="grid grid-cols-[14px_minmax(0,1fr)] items-baseline gap-2.5 text-[16px] leading-[22px] text-ink">
-                  <span className="text-[14px] font-bold text-text tabular-nums">{i + 1}</span>
-                  <span>{s.text}</span>
-                </li>
-              ))}
-            </ol>
+            <StepCards steps={steps} />
             {/* Fix-Steps (comparing each step with its page) is not built; until then the PDF opens at the steps. */}
             <a
               href={`${protocol.source.url}#page=${pdfPage}`}
@@ -267,14 +260,7 @@ export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
         </AccordionPrimitive.Header>
         <Content>
           <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
-            <ol className="flex flex-col gap-2">
-              {steps.map((s, i) => (
-                <li key={i} className="grid grid-cols-[14px_minmax(0,1fr)] items-baseline gap-2.5 text-[16px] leading-[22px] text-ink">
-                  <span className="text-[14px] font-bold text-text tabular-nums">{i + 1}</span>
-                  <span>{s.text}</span>
-                </li>
-              ))}
-            </ol>
+            <StepCards steps={steps} />
             {others.length > 0 && <p className="text-[15px] leading-[22px] text-text">Also in the manual: {others.join(', ')}.</p>}
             {intro.source.url && (
               <a
@@ -291,6 +277,193 @@ export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
         </Content>
       </AccordionPrimitive.Item>
     </AccordionPrimitive.Root>
+  );
+}
+
+type CardStep = { id?: string; title?: string; text: string; stage?: string; facts?: string[]; original?: string };
+
+// Steps done with the hands (making, mixing, loading, washing) get a picture; waiting, reading and working out the
+// result are said in a line. A step without a stage (the quick read's) is judged by its words.
+const HANDS_ON = new Set(['standards', 'prepare', 'mix', 'load', 'treat', 'wash']);
+const needsPicture = (s: CardStep) =>
+  s.stage ? HANDS_ON.has(s.stage) : !/\b(?:incubat|wait|cool|equilibrat|read|measur|subtract|plot|calculat|analy[sz])/i.test(s.text);
+
+type Card = { picture: boolean; steps: { step: CardStep; n: number }[] };
+
+/** One card per step that needs a picture; steps that don't, two to a card. */
+function cardsOf(steps: CardStep[]) {
+  const cards: Card[] = [];
+  steps.forEach((step, i) => {
+    const last = cards[cards.length - 1];
+    if (needsPicture(step)) cards.push({ picture: true, steps: [{ step, n: i + 1 }] });
+    else if (last && !last.picture && last.steps.length < 2) last.steps.push({ step, n: i + 1 });
+    else cards.push({ picture: false, steps: [{ step, n: i + 1 }] });
+  });
+  return cards;
+}
+
+const CARD =
+  'flex flex-col overflow-hidden rounded-[20px] bg-card shadow-[0_0_0_1px_rgba(17,17,19,0.05),0_6px_24px_rgba(17,17,19,0.07)] [-webkit-backface-visibility:hidden] [backface-visibility:hidden]';
+
+/**
+ * The steps as cards side by side, swiped through, under a row of the steps that follows them: "Step 1" … with a picture
+ * of each kind of step on a line, the card's steps in ink and the others grey; tapping one brings its card. A step done
+ * with the hands has its own card with room for its picture (empty for now); short steps share a card, one above the
+ * other. Each card says the step, its numbers in a line ("37 °C · 30 min · Covered") and what to do in Chapp's words; a
+ * tap turns the card in view to the manual's own words. Cards beside it are faded. All cards are as tall as the tallest.
+ */
+function StepCards({ steps }: { steps: CardStep[] }) {
+  const cards = cardsOf(steps);
+  const [at, setAt] = useState(0);
+  const row = useRef<HTMLOListElement>(null);
+  const progress = useRef<HTMLOListElement>(null);
+
+  // The card in view is the one whose start is nearest the row's start (where cards snap).
+  const onScroll = () => {
+    const el = row.current;
+    if (!el) return;
+    const items = [...el.children] as HTMLElement[];
+    const base = items[0]?.offsetLeft ?? 0;
+    let best = 0;
+    items.forEach((item, i) => {
+      if (Math.abs(item.offsetLeft - base - el.scrollLeft) < Math.abs((items[best]!.offsetLeft - base) - el.scrollLeft)) best = i;
+    });
+    setAt(best);
+  };
+  // Bring card i to where the first one sits, its outline clear of the row's edge (the padding the cards snap to).
+  const show = (i: number) => {
+    const el = row.current;
+    const item = el?.children[i] as HTMLElement | undefined;
+    if (!el || !item) return;
+    const pad = parseFloat(getComputedStyle(el).paddingLeft);
+    el.scrollTo({ left: item.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft - pad, behavior: 'smooth' });
+  };
+  // Keep the card's steps in view in the progress row.
+  const current = new Set(cards[at]?.steps.map(s => s.n));
+  useEffect(() => {
+    const first = progress.current?.querySelector('[data-current]');
+    first?.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }, [at]);
+
+  return (
+    <div className="-mr-1 -ml-9 flex flex-col gap-5">
+      <ol ref={progress} aria-label="Step by step" className="flex overflow-x-auto pt-1 [scrollbar-width:none]">
+        {steps.map((s, i) => {
+          const on = current.has(i + 1);
+          const card = cards.findIndex(c => c.steps.some(x => x.n === i + 1));
+          return (
+            <li key={i} className="flex shrink-0 flex-col gap-2" data-current={on && !current.has(i) ? '' : undefined}>
+              <button
+                type="button"
+                onClick={() => show(card)}
+                aria-current={on ? 'step' : undefined}
+                className={cn('flex flex-col gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-blue', on ? 'text-ink' : 'text-faint')}
+              >
+                <span className="text-[15px] leading-5 font-semibold tabular-nums">Step {i + 1}</span>
+                <span className="flex items-center">
+                  <StageIcon stage={s.stage} />
+                  {i < steps.length - 1 && <span aria-hidden="true" className="mx-2 h-0.5 w-12 rounded-full bg-line" />}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {/* A little room above and to the left, so the cards' outline and shadow are not cut off by the scrolling row. */}
+      <ol
+        ref={row}
+        onScroll={onScroll}
+        aria-label="Steps"
+        className="flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain px-1.5 pt-2 pb-3 [scrollbar-width:none]"
+      >
+        {cards.map((card, i) => (
+          <li
+            key={card.steps[0]!.n}
+            className="flex w-[72%] shrink-0 scroll-ml-1.5 snap-start [perspective:1200px]"
+          >
+            <StepCard card={card} total={steps.length} inView={i === at} onBring={() => show(i)} />
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function StepCard({ card, total, inView, onBring }: { card: Card; total: number; inView: boolean; onBring: () => void }) {
+  const [turned, setTurned] = useState(false);
+  useEffect(() => {
+    if (!inView) setTurned(false);
+  }, [inView]);
+  const front = (
+    <div className={cn(CARD, 'grow gap-3 p-4')} aria-hidden={turned}>
+      {card.picture && (
+        <div aria-hidden="true" className="flex aspect-square w-[44%] items-center justify-center rounded-[14px] bg-sunken text-faint">
+          <PictureIcon />
+        </div>
+      )}
+      {card.steps.map(({ step, n }, i) => (
+        <div key={n} className={cn('flex flex-col gap-1', i > 0 && 'border-t border-line pt-3')}>
+          {(card.steps.length > 1 || !card.picture) && (
+            <span className="text-[13px] leading-[18px] font-semibold text-text tabular-nums">
+              Step {n} of {total}
+            </span>
+          )}
+          {step.title && <span className="text-[17px] leading-[22px] font-semibold text-ink">{step.title}</span>}
+          {step.facts && step.facts.length > 0 && <span className="text-[14px] leading-[19px] text-ink">{keepUnits(step.facts.join(' · '))}</span>}
+          {/* A card without a picture is the short version: its title and numbers say the step ("Incubate", "37 °C ·
+              30 min · Covered"); the line in Chapp's words shows only when there are no numbers. */}
+          {(card.picture || !step.facts?.length) && <span className="text-[14px] leading-[20px] text-text">{keepUnits(step.text)}</span>}
+        </div>
+      ))}
+    </div>
+  );
+  // A card beside the one in view comes into view when tapped; the one in view turns to the manual's words. Steps with
+  // nothing more to show (the quick read's are already the manual's words) don't turn.
+  const turns = card.steps.some(({ step }) => step.original);
+  return (
+    <button
+      type="button"
+      aria-pressed={turns && inView ? turned : undefined}
+      aria-label={!inView ? `Show step ${card.steps[0]!.n}` : turns ? (turned ? 'Show Chapp\'s words' : 'Show the manual\'s words') : undefined}
+      onClick={() => (!inView ? onBring() : turns && setTurned(t => !t))}
+      className={cn(
+        'grid h-full w-full text-left outline-none [transform-style:preserve-3d] transition-[transform,scale,opacity] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] focus-visible:ring-2 focus-visible:ring-blue',
+        // Cards beside the one in view are faded and a little smaller. On the card, not its slot: the slot's size is
+        // what the row snaps to, and a shrunken slot left the card's edge under the row's edge once it grew back.
+        !inView && 'scale-[0.96] opacity-45',
+      )}
+      style={{ transform: turned ? 'rotateY(180deg)' : 'none' }}
+    >
+      <div className="flex [grid-area:1/1]">{front}</div>
+      {turns && (
+        <div className={cn(CARD, 'gap-3 p-4 [grid-area:1/1] [transform:rotateY(180deg)]')} aria-hidden={!turned}>
+          {card.steps.map(({ step, n }, i) => (
+            <div key={n} className={cn('flex flex-col gap-1', i > 0 && 'border-t border-line pt-3')}>
+              <span className="flex items-center gap-1.5 text-[13px] leading-[18px] font-semibold text-text">
+                <DocumentIcon size={13} />
+                Step {n} · the manual
+              </span>
+              <span className="text-[14px] leading-[21px] text-ink">{step.original ?? step.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </button>
+  );
+}
+
+/** A number and its unit stay on one line ("2 mg/mL", "37 °C", "30 min"): the space between them doesn't break. */
+const keepUnits = (text: string) =>
+  text.replace(/(\d) (?=(?:[pnµum]?(?:L|g|M)\b|[pnµum]?g\/m?L|°C|nm|min|h\b|s\b|%|parts?\b|wells?\b|tubes?\b))/g, '$1\u00a0');
+
+/** Where a step's picture will go. */
+function PictureIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="m21 16-5-5-9 9" />
+    </svg>
   );
 }
 

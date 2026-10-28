@@ -36,6 +36,14 @@
   }
 }
 
+/* On a phone the page itself never scrolls; each screen scrolls its own area (PhoneFrame). */
+html.chapp-phone,
+html.chapp-phone body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* Amounts line up when they use even-width digits. */
 .num {
   font-variant-numeric: tabular-nums;

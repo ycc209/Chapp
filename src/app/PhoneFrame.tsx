@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties 
 import { Outlet } from 'react-router';
 import { Toaster } from '../components/ui/Toaster.tsx';
 import { cn } from '../lib/cn.ts';
+import { DebugPanel, useDebugFlag } from './DebugPanel.tsx';
 import { useVisibleArea } from './keyboard.ts';
 import { useRunComesBack } from './runAside.ts';
 import { ScreenContext, type Screen } from './screen.ts';
@@ -41,6 +42,13 @@ export function PhoneFrame() {
   const scale = useFitScale(framed);
   const visible = useVisibleArea(!framed);
   useRunComesBack();
+  const debug = useDebugFlag();
+  // On a phone only the screens' own areas scroll, never the page: when iPhone Safari gets the page's height wrong (after
+  // the camera), a page that could scroll took the finger's swipe instead of the screen under it.
+  useEffect(() => {
+    document.documentElement.classList.toggle('chapp-phone', !framed);
+    return () => document.documentElement.classList.remove('chapp-phone');
+  }, [framed]);
   const keyboard = Boolean(visible?.keyboard);
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const screen = useMemo<Screen>(() => ({ portal, scale, framed, keyboard }), [portal, scale, framed, keyboard]);
@@ -90,6 +98,7 @@ export function PhoneFrame() {
               <Outlet />
               <div ref={setPortal} data-screen-portal="" />
               <Toaster />
+              {debug && <DebugPanel />}
             </div>
           </ScreenContext>
         </div>

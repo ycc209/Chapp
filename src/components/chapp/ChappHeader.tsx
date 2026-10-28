@@ -76,7 +76,7 @@ export function ChappHeader({ subtitle, onMenu, back, pill }: ChappHeaderProps) 
         ) : (
           <span
             role="status"
-            className="relative -mt-4 flex flex-col items-center rounded-[14px] bg-white/78 px-3 pt-1 pb-[5px] shadow-[0_0_0_1px_rgba(17,17,19,0.05),0_1px_8px_rgba(17,17,19,0.05)] backdrop-blur-[14px]"
+            className="pointer-events-auto relative -mt-4 flex flex-col items-center rounded-[14px] bg-white/78 px-3 pt-1 pb-[5px] shadow-[0_0_0_1px_rgba(17,17,19,0.05),0_1px_8px_rgba(17,17,19,0.05)] backdrop-blur-[14px]"
           >
             <b className="text-[15px] leading-5 font-semibold text-ink">Chapp</b>
             {line && (

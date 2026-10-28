@@ -1,4 +1,4 @@
-import type { Component, Concentration, Note, Procedure, Protocol } from '../../../shared/protocol.ts';
+import type { Component, Concentration, Note, Procedure, Protocol, Step } from '../../../shared/protocol.ts';
 
 /**
  * What the protocol screen says, worded from the protocol document (chapp.protocol/1). Pure functions, so the words
@@ -111,8 +111,44 @@ export function bottleDetail(c: Component): string {
 }
 
 /** The steps as read at the bench, one line each, with where each is written in the source. */
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * A step's numbers in a few words, from what the step does, never from the model's prose: "9 standards", "50 : 1",
+ * "25 µL per well", "37 °C · 30 min · Covered", "562 nm". At most three.
+ */
+export function stepFacts(p: Protocol, s: Step): string[] {
+  const facts: string[] = [];
+  const curve = s.standardCurve && p.standardCurves.find(c => c.id === s.standardCurve);
+  if (curve) facts.push(`${curve.points.length} standards`);
+  const mix = s.mix && p.mixes.find(m => m.id === s.mix);
+  if (mix) facts.push(mix.parts.map(x => x.parts).join(' : '));
+  for (const a of s.add ?? []) facts.push(`${a.volume.value} ${a.volume.unit} per ${a.per}`);
+  if (s.timer) {
+    const t = s.timer.temperature;
+    if (t) facts.push(t.max === undefined ? `${t.value} °C` : `${t.value}–${t.max} °C`);
+    facts.push(`${s.timer.label === 'Incubate' ? '' : `${s.timer.label} `}${s.timer.duration.value} ${s.timer.duration.unit}`);
+    if (s.timer.covered) facts.push('covered');
+  }
+  // A reading's wavelength, from the instrument the step uses ("562 nm").
+  for (const id of s.equipment ?? []) {
+    const setting = p.equipment.find(e => e.id === id)?.setting;
+    if (setting && /\bnm\b/.test(setting) && !facts.includes(setting)) facts.push(setting);
+  }
+  return facts.slice(0, 3).map(capital);
+}
+
 export function stepLines(p: Protocol, procedureId?: string | null) {
-  return procedureFor(p, procedureId).steps.map(s => ({ id: s.id, text: s.key, page: s.cite.page }));
+  return procedureFor(p, procedureId).steps.map(s => ({
+    id: s.id,
+    title: s.title,
+    text: s.key,
+    page: s.cite.page,
+    stage: s.stage,
+    facts: stepFacts(p, s),
+    // The manual's own words for the step, or where they are when it is a table or a figure.
+    original: s.cite.quote ?? `See ${s.cite.table ?? s.cite.figure} in the manual.`,
+  }));
 }
 
 const NOTE_ORDER: Record<Note['kind'], number> = { caution: 0, tip: 1, expected: 2, info: 3 };

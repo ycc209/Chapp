@@ -19,27 +19,35 @@ export function useVisibleArea(enabled: boolean): VisibleArea | null {
     const vv = window.visualViewport;
     if (!enabled || !vv) return;
     let tallest = 0;
+    let keyboardWasUp = false;
     const update = () => {
       tallest = Math.max(tallest, vv.height);
       const next = { height: Math.round(vv.height), top: Math.round(vv.offsetTop), keyboard: vv.height < tallest - KEYBOARD_PX };
       setArea(prev => (prev && prev.height === next.height && prev.top === next.top && prev.keyboard === next.keyboard ? prev : next));
-      // Safari can leave the page scrolled once the keyboard has gone.
-      if (!next.keyboard && window.scrollY) window.scrollTo(0, 0);
+      // Safari can leave the page scrolled once the keyboard has gone: put it back once, as the keyboard closes. Doing it
+      // on every scroll fought the user's own swipes whenever Safari let the page itself scroll (after the camera).
+      if (keyboardWasUp && !next.keyboard && window.scrollY) window.scrollTo(0, 0);
+      keyboardWasUp = next.keyboard;
     };
-    // Turning the phone changes the full height: measure it again.
+    // Turning the phone, or coming back from the camera or another app, can change the full height: measure it again.
     const portrait = window.matchMedia('(orientation: portrait)');
-    const turned = () => {
+    const remeasure = () => {
       tallest = 0;
       requestAnimationFrame(update);
     };
+    const shown = () => document.visibilityState === 'visible' && remeasure();
     update();
     vv.addEventListener('resize', update);
     vv.addEventListener('scroll', update);
-    portrait.addEventListener('change', turned);
+    portrait.addEventListener('change', remeasure);
+    document.addEventListener('visibilitychange', shown);
+    window.addEventListener('pageshow', remeasure);
     return () => {
       vv.removeEventListener('resize', update);
       vv.removeEventListener('scroll', update);
-      portrait.removeEventListener('change', turned);
+      portrait.removeEventListener('change', remeasure);
+      document.removeEventListener('visibilitychange', shown);
+      window.removeEventListener('pageshow', remeasure);
     };
   }, [enabled]);
 

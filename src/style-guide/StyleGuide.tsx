@@ -279,7 +279,7 @@ export function StyleGuide() {
 
           <article className="card wide">
             <p className="eyebrow">BSA standards · {curve.range.min}–{curve.range.max.toLocaleString('en-US')} µg/mL</p>
-            <h3 className="card-title">Make vials A–I</h3>
+            <h3 className="card-title">Make BSA standards A–I</h3>
             <table className="std-table">
               <thead>
                 <tr><th>Vial</th><th>Diluent</th><th>BSA</th><th>Makes</th></tr>

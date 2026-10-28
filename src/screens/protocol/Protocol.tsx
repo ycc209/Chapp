@@ -95,6 +95,16 @@ export function ProtocolScreen() {
   const [typing, setTyping] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  // A section opens or closes in place (0.2 s). Once a closing one is gone, bring the scroll back inside the shorter page.
+  const openSection = (section: Section | '') => {
+    setOpen(section);
+    window.setTimeout(() => {
+      const el = scroller.current;
+      if (!el) return;
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (el.scrollTop > max) el.scrollTop = max;
+    }, 260);
+  };
   const { turn, send, newConversation } = useConverse('protocol');
 
   // A found manual for another kit becomes the run's protocol, so Plan and Start run what the Overview shows.
@@ -136,7 +146,7 @@ export function ProtocolScreen() {
     const kit = el?.querySelector('[data-kit]');
     if (!done || !fromKit || !el || !kit) return;
     const offset = (kit.getBoundingClientRect().top - el.getBoundingClientRect().top) / scale + el.scrollTop;
-    el.scrollTop = Math.max(0, offset - (KIT_TOP - 196 + parseFloat(getComputedStyle(el).paddingTop)));
+    el.scrollTop = Math.max(0, offset - (KIT_TOP - 196 + parseFloat(getComputedStyle(el.firstElementChild ?? el).paddingTop)));
   }, [done, fromKit]);
   const overview = ask !== null || importing !== null;
   // A manual new to Chapp: what it read of it first (the intro), until the protocol it becomes is on screen.
@@ -154,72 +164,73 @@ export function ProtocolScreen() {
         sidebar && 'translate-x-[318px] rounded-[44px]',
       )}
     >
-      <div
-        ref={scroller}
-        className="flex h-full flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(168px+var(--screen-bottom))] [scrollbar-width:none]"
-      >
-        {overview && <Bubble>{importing?.name ?? ask ?? ''}</Bubble>}
-        {/* How Chapp found the manual, until what it read comes in: then the kit, its glance and steps take the screen. */}
-        {overview && stage < 3 && !intro && finding.progress.length > 0 && <Progress lines={finding.progress} searching={stage === 0} />}
-        {finding.notFound && (
-          <p aria-label="Chapp's answer" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
-            {finding.notFound}
-          </p>
-        )}
-        {finding.notFound && finding.manual && (
-          <a
-            href={finding.manual}
-            target="_blank"
-            rel="noreferrer"
-            className="mb-6 flex min-h-11 shrink-0 items-center gap-2 self-start px-1 text-[15px] leading-5 font-semibold text-blue no-underline"
-          >
-            <DocumentIcon />
-            Open the manual
-          </a>
-        )}
-        {error && !finding.notFound && stage >= 1 && (
-          <p role="alert" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
-            {error}
-          </p>
-        )}
-        {intro ? <Answer protocol={intro} /> : protocol && !finding.notFound && stage >= 1 && <Answer protocol={protocol} />}
-        {intro ? <Glance protocol={intro} /> : protocol && !finding.notFound && stage >= 2 && <Glance protocol={protocol} />}
-        {intro && intro.procedure.steps.length > 0 && <QuickSections intro={intro} open={open} onOpen={setOpen} />}
-        {intro && (
-          <Progress lines={[intro.procedure.steps.length ? STILL_CHECKING : STILL_READING]} searching label="What Chapp is reading now" className="mt-4" />
-        )}
-        {done && (
-          <Sections
-            protocol={protocol}
-            procedure={procedure}
-            photos={photos}
-            open={review === 'full' ? 'all' : open}
-            onOpen={setOpen}
-            sample={sample}
-          />
-        )}
-        {done && overview && (
-          <div className="mt-[18px] flex shrink-0 gap-2 px-1">
-            <Link to="/library" className={cn(PILL, WHITE_PILL, 'gap-1.5 px-3.5')}>
-              <BookmarkIcon />
-              Save to library
-            </Link>
-          </div>
-        )}
-        {done && fromKit && matched && (
-          <p aria-label="Chapp's answer" className="mt-[22px] shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
-            All <b className="font-bold">{all.length} bottles</b> are matched. Plan the run, or start now.
-          </p>
-        )}
-        {turn && (
-          <div className="mt-6 flex shrink-0 flex-col">
-            <Bubble>{turn.text}</Bubble>
-            {/* Always mounted, so screen readers announce each answer as it arrives. */}
-            <p aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
-              {turn.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
+      {/* The scroller only scrolls; the column inside it lays the page out. A flex column that also scrolled could get
+          stuck on iPhone Safari (it measured the page as fitting and would not scroll). */}
+      <div ref={scroller} className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [-webkit-overflow-scrolling:touch]">
+        <div className="flex min-h-full flex-col px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(168px+var(--screen-bottom))]">
+          {overview && <Bubble>{importing?.name ?? ask ?? ''}</Bubble>}
+          {/* How Chapp found the manual, until what it read comes in: then the kit, its glance and steps take the screen. */}
+          {overview && stage < 3 && !intro && finding.progress.length > 0 && <Progress lines={finding.progress} searching={stage === 0} />}
+          {finding.notFound && (
+            <p aria-label="Chapp's answer" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
+              {finding.notFound}
             </p>
-          </div>
-        )}
+          )}
+          {finding.notFound && finding.manual && (
+            <a
+              href={finding.manual}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-6 flex min-h-11 shrink-0 items-center gap-2 self-start px-1 text-[15px] leading-5 font-semibold text-blue no-underline"
+            >
+              <DocumentIcon />
+              Open the manual
+            </a>
+          )}
+          {error && !finding.notFound && stage >= 1 && (
+            <p role="alert" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
+              {error}
+            </p>
+          )}
+          {intro ? <Answer protocol={intro} /> : protocol && !finding.notFound && stage >= 1 && <Answer protocol={protocol} />}
+          {intro ? <Glance protocol={intro} /> : protocol && !finding.notFound && stage >= 2 && <Glance protocol={protocol} />}
+          {intro && intro.procedure.steps.length > 0 && <QuickSections intro={intro} open={open} onOpen={openSection} />}
+          {intro && (
+            <Progress lines={[intro.procedure.steps.length ? STILL_CHECKING : STILL_READING]} searching label="What Chapp is reading now" className="mt-4" />
+          )}
+          {done && (
+            <Sections
+              protocol={protocol}
+              procedure={procedure}
+              photos={photos}
+              open={review === 'full' ? 'all' : open}
+              onOpen={openSection}
+              sample={sample}
+            />
+          )}
+          {done && overview && (
+            <div className="mt-[18px] flex shrink-0 gap-2 px-1">
+              <Link to="/library" className={cn(PILL, WHITE_PILL, 'gap-1.5 px-3.5')}>
+                <BookmarkIcon />
+                Save to library
+              </Link>
+            </div>
+          )}
+          {done && fromKit && matched && (
+            <p aria-label="Chapp's answer" className="mt-[22px] shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
+              All <b className="font-bold">{all.length} bottles</b> are matched. Plan the run, or start now.
+            </p>
+          )}
+          {turn && (
+            <div className="mt-6 flex shrink-0 flex-col">
+              <Bubble>{turn.text}</Bubble>
+              {/* Always mounted, so screen readers announce each answer as it arrives. */}
+              <p aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
+                {turn.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
