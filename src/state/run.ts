@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { NO_EDITS, type PlateEdits } from '../components/lab/model.ts';
+import { bringIn, kitPhotos, markUsed, rememberKit } from './library.ts';
 
 /**
  * This run of a kit: the protocol, the plan, how far along it is and what was measured. Kept on the phone, so a
@@ -22,7 +23,7 @@ export type RunState = {
   done: Record<string, boolean>;
   /** Running timers, by id, as the time they end (ms since epoch). */
   timers: Record<string, number>;
-  /** The user's photo of each component, by component id. */
+  /** The user's photo of each component, by component id: this protocol's kit (state/library.ts keeps it per kit). */
   photos: Record<string, string>;
   /** Plate-reader values, by well id (wells as plateMap() in src/components/lab/model.ts lays them out). */
   readings: Record<string, number>;
@@ -81,7 +82,17 @@ export const useRun = create<RunState & RunActions>()(
   persist(
     set => ({
       ...fresh,
-      setProtocol: protocolId => set({ protocolId, step: 0, done: {}, timers: {}, aside: false, edits: NO_EDITS }),
+      // Another kit brings its own photos back (or none), never the last kit's.
+      setProtocol: protocolId =>
+        set(s => ({
+          protocolId,
+          step: 0,
+          done: {},
+          timers: {},
+          aside: false,
+          edits: NO_EDITS,
+          photos: protocolId === s.protocolId ? s.photos : protocolId ? kitPhotos(protocolId) : {},
+        })),
       setPlan: plan => set(plan),
       goTo: step => set({ step: Math.max(0, step) }),
       next: () => set(s => ({ step: s.step + 1 })),
@@ -106,3 +117,15 @@ export const useRun = create<RunState & RunActions>()(
     { name: 'chapp.run' },
   ),
 );
+
+/** The run has begun: a step past the first, or anything ticked, timed, read or changed on the plate. */
+export const runStarted = (s: RunState) =>
+  s.step > 0 || [s.done, s.timers, s.readings, s.edits.moved].some(r => Object.keys(r).length > 0) || s.edits.added.length > 0;
+
+// The library follows the run: every protocol it runs is this phone's, and its photos are that protocol's kit.
+bringIn(useRun.getState());
+useRun.subscribe((s, prev) => {
+  if (!s.protocolId) return;
+  if (s.protocolId !== prev.protocolId) markUsed(s.protocolId);
+  if (s.photos !== prev.photos || s.protocolId !== prev.protocolId) rememberKit(s.protocolId, s.photos);
+});

@@ -95,15 +95,15 @@ function PlanBody({ review }: { review: Review | null }) {
         <p className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
           {unworkable ? (
             <>
-              I can’t work out <b className="font-bold">{shortName(protocol)}</b>’s amounts: {unworkable}. Its steps are on the protocol, as printed.
+              I can’t work out <b className="font-bold">{shortName(protocol)}</b>’s amounts: {unworkable}. Start follows its steps as printed, one at a time.
             </>
           ) : proc?.standardCurve ? (
             <>
-              I can’t plan <b className="font-bold">{shortName(protocol)}</b> here: planning works for plate assays with one reagent, like BCA. Its steps are on the protocol.
+              I can’t plan <b className="font-bold">{shortName(protocol)}</b> here: planning works for plate assays with one reagent, like BCA. Start follows its steps one at a time.
             </>
           ) : (
             <>
-              <b className="font-bold">{shortName(protocol)}</b> has no standards or plate to plan. Its steps are on the protocol.
+              <b className="font-bold">{shortName(protocol)}</b> has no standards or plate to plan. Start follows its steps one at a time.
             </>
           )}
         </p>

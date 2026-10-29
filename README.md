@@ -13,17 +13,51 @@ Everything in this repository was written during the hackathon, starting October
 
 ## Status
 
-Phase 1 of 5: project setup, the protocol format, the first real protocol (Pierce BCA Protein Assay) and the interface
-style.
+The whole story runs end to end on Meta's models: find a kit's manual, read it, recognize the kit, plan the plate, run
+it hands-free, read the plate, see the results, share by QR. Still to do before submission: hosting, a usage cap,
+testing on iPhones and the demo video.
+
+## What it does
+
+- **Find the protocol.** Say the kit ("Pierce BCA"). Chapp finds the vendor's manual on the web and reads it into a
+  protocol, steps first.
+- **Know your kit.** One photo of the bottles: SAM 3.1 cuts out each bottle and Muse Spark reads the labels. A bottle it
+  could not read is a guess the user confirms, never assumed.
+- **Plan the plate.** The number of samples and replicates sets the standards, the working reagent and the plate layout.
+  The app computes them; a model never does.
+- **Run it hands-free.** One step at a time with the bottle, the volume and the timer on screen. Gloves mode keeps
+  listening and shows the instruction large enough to read from arm's length. A timer that ends reaches the lock screen.
+- **Change the run by voice.** "A B C D ok" ticks several vials at once, and "1 to 5 loaded" several tubes. "Redo B"
+  also redoes the vials made from B. "B3 has a bubble, use H12" moves a well, or Chapp picks the next free one. "Add a
+  well for a positive control" and "add a heat shock condition" add wells. Plan, Run, Results and Share all follow the
+  changes, and a bad well is never read.
+- **Read the plate.** A plate reader's export (Gen5, SoftMax Pro, Tecan, BMG) is parsed without a model. A photo of the
+  reader's screen goes to Muse Spark, and the user confirms what it read.
+- **Results.** The app subtracts the blank, fits the standard curve and reads each sample off it (`shared/fit.ts`).
+- **Share.** The protocol, the plan, the plate changes and, if you choose, the results travel in a QR code. A labmate
+  scans it and has the same run.
+- **Ask any time.** Chapp answers with the manual's page and draws cards ([A2UI](https://github.com/google/A2UI)) where
+  a card is clearer: reagents, the plate, standards, steps, timers, "is 10 mL enough?". Chapp listens but stays silent:
+  every answer is on screen.
+
+## Keeping the model to what the user said
+
+- Every model reply is checked against a strict schema (Zod) before the app uses it.
+- Each change the model asks for is checked against the user's own words (`server/ai/authorize.ts`). It is made when
+  the user asked for it, shown as a button when the user only asked a question, and dropped otherwise.
+- Timer lengths come from the step, the run or the user, never from the model. A sentence that claims a change the app
+  did not make is removed.
+- Wells, volumes and concentrations come from the app. The model only says what to do.
+- Common bench phrases ("A to D done", "redo B", "B3 is bad, use H12") are matched on the phone without calling a model.
 
 ## Meta models
 
 | Model | What Chapp uses it for |
 |---|---|
-| Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, answering questions with citations, composing screens |
+| Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards) |
 | SAM 3.1 | Segmenting every bottle in one photo of the kit |
-| Muse Voice Transcribe | Hands-free commands at the bench |
-| Muse Image | One consistent set of equipment icons |
+| Muse Voice Transcribe | Speech to text at the bench, with lab words fixed afterwards (`?voice=server`; phones use the browser's own recognizer by default) |
+| Muse Image | Planned for a consistent set of equipment icons; not in the app yet (`npm run smoke` checks it) |
 
 ## How Chapp asks Muse Spark to read a manual
 
@@ -64,9 +98,13 @@ npm install
 cp .env.example .env    # then put your Meta Model API key in MODEL_API_KEY
 npm start               # API on http://127.0.0.1:3003
 npm run dev             # app on http://localhost:5175 (forwards /api to the server)
-npm test                # protocol checks
+npm run dev:phone       # the same over HTTPS: phones open the microphone and camera only on HTTPS
+npm test                # every check, with no network and no cost
+npm run build           # type check and production build
 npm run smoke           # one real call to each Meta model
 ```
+
+Without a key, or with `AI_PROVIDER=mock` in `.env`, the server answers from fixed BCA data: no network and no cost.
 
 ## Data and rights
 
@@ -77,9 +115,20 @@ from, and the tests check that every quoted sentence appears word for word on th
 ## Layout
 
 - `shared/protocol.ts`: the protocol format (`chapp.protocol/1`) and its consistency checks
-- `shared/calc.ts`: run-dependent numbers (working reagent, standards sized to the plate, plate layout); never left to a model
-- `server/`: the API and the built app
-- `src/`: the app; for now the interface style guide
-- `public/chapp/`: the Chapp character (`chapp.glb`, with breathe and blink animations) and its renders; `npm run model` rebuilds the model from `scripts/chapp-model/`
-- `scripts/smoke-meta.ts`: checks each Meta model Chapp depends on
-- `tests/`: format, data and calculation checks
+- `shared/calc.ts`, `shared/units.ts`, `shared/fit.ts`: the numbers (working reagent, standards sized to the plate, unit
+  conversion, the standard curve); never left to a model
+- `shared/a2ui.ts`: the cards Chapp may draw and how each is checked
+- `shared/share.ts`: what a QR code carries
+- `server/`: the API and the built app; `server/ai/` talks to the Meta models (`meta.ts`), checks each change against
+  the user's words (`authorize.ts`) and answers without a network in mock mode (`mock.ts`)
+- `src/screens/`: one folder per screen (home, chat, protocol, kit, plan, run, results, share, library, intro)
+- `src/state/`: the run (plan, progress, timers, plate changes) and the changes Chapp makes to it
+- `src/voice/`: listening (the browser's recognizer or Muse Voice Transcribe), hold to talk, lab-word fixes
+- `src/style-guide/`: the interface style guide (`/style`)
+- `public/chapp/`: the Chapp character (`chapp.glb`: the 24 subunits of Hsp16.5, PDB 1SHS, rounded into a ball and
+  wearing a face, one animation per expression) and its stills; with Vite running, `node scripts/chapp-model/stills.ts`
+  renders the stills again from the app's own 3D scene
+- `scripts/smoke-meta.ts`: checks each Meta model Chapp depends on; the other scripts try one feature against the real
+  models (finding, importing, kit photos, voice, conversation), and `scripts/bench/` compares models at reading manuals
+- `tests/`: the protocol format, the numbers, model replies (recorded, replayed without a network), voice, the cards and
+  the screens

@@ -4,8 +4,8 @@ import type { Action } from '../../../shared/ai.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
 import { decodeText, fitToPlan, parsePlateText } from '../../../shared/plate.ts';
 import { api } from '../../api/client.ts';
-import { analysisOf, isAssay, type Protocol } from '../../../shared/protocol.ts';
-import { unitsProblem } from '../../../shared/calc.ts';
+import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
+import { isPlannable } from '../../../shared/calc.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { DotLabel, StepPill, amountText, clockText, countdownText, lengthText, useNow, wellRoles } from '../../components/lab/index.ts';
 import { toast } from '../../components/ui/Toaster.tsx';
@@ -23,6 +23,7 @@ import { TypingBar } from '../home/TypingBar.tsx';
 import { acknowledge, converseContext } from '../home/useConverse.ts';
 import { procedureFor, shortName } from '../protocol/content.ts';
 import { useBench } from './bench.ts';
+import { FollowScreen, PrepScreen } from './Follow.tsx';
 import { GlovesAdd, GlovesBar, GlovesIncubate, GlovesLoad, GlovesMix, GlovesRead, GlovesStandards, GlovesToggle } from './Gloves.tsx';
 import {
   benchFor,
@@ -72,6 +73,7 @@ const TIMER_STATES = ['choose', 'timer', 'running', 'stopped', 'confirm', 'done'
  * stopped | confirm | done | timeup, /run/6?state=photo | taken, each with &gloves=1 for the gloves layout.
  */
 export function RunScreen() {
+  const { step: param } = useParams();
   const protocolId = useRun(s => s.protocolId) ?? 'pierce-bca';
   const procedure = useRun(s => s.procedure);
   const samples = useRun(s => s.samples);
@@ -89,6 +91,12 @@ export function RunScreen() {
     }
   }, [protocol, procedure, samples, replicates, standardReplicates, standards, edits]);
 
+  // A protocol Chapp cannot plan (cells, or amounts it cannot convert) is followed step by step instead.
+  const proc = protocol && procedureFor(protocol, procedure);
+  // Reagent prep comes before step 1, whichever way the run is followed.
+  if (protocol && proc && param === 'prep' && (proc.prep ?? []).length) return <PrepScreen p={protocol} proc={proc} />;
+  if (protocol && proc && !isPlannable(protocol, proc)) return <FollowScreen p={protocol} proc={proc} />;
+
   if (!protocol || !bench) {
     return (
       <div className="relative h-full overflow-hidden bg-bg">
@@ -96,8 +104,6 @@ export function RunScreen() {
           {error ??
             (!protocol ? 'Opening the protocol…'
             : !protocol.analysis ? 'This kit has no plate to run here. Its steps are on the protocol.'
-            : unitsProblem(protocol, procedureFor(protocol, procedure)) ? `I can’t work out this kit’s amounts: ${unitsProblem(protocol, procedureFor(protocol, procedure))}. Its steps are on the protocol, as printed.`
-            : !isAssay(procedureFor(protocol, procedure)) ? 'I can’t run this kit here: following along works for plate assays with one reagent, like BCA. Its steps are on the protocol.'
             : 'This plan does not fit the protocol’s steps. Check the plan first.')}
         </p>
         <ChappHeader back={{ to: '/protocol', label: 'Back to the conversation' }} />
@@ -800,7 +806,9 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   const backTo = list
     ? { to: `/run/${at + 1}`, label: 'Back to the current step' }
     : at === 0
-      ? { to: '/protocol', label: 'Back to the conversation' }
+      ? (procedureFor(p, run.procedure).prep ?? []).length
+        ? { to: '/run/prep', label: 'Back to reagent prep' }
+        : { to: '/protocol', label: 'Back to the conversation' }
       : { to: `/run/${at}${keep}`, label: backLabel(at - 1) };
 
   const stage = step.stage;

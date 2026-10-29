@@ -29,6 +29,14 @@ export const CameraIcon = ({ size = 16 }: { size?: number }) => (
   </Icon>
 );
 
+/** What the user should see when a step works: an eye. */
+export const EyeIcon = ({ size = 14 }: { size?: number }) => (
+  <Icon size={size}>
+    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+    <circle cx="12" cy="12" r="3" />
+  </Icon>
+);
+
 /** The chevron on the camera tab, nudging right every 1.2 s (Overview.dc.html's animateTransform). */
 export const NudgeIcon = () => (
   <Icon size={10} width={3}>
@@ -55,6 +63,14 @@ export const StepsIcon = () => (
   <Icon size={20} color="#55555c">
     <path d="M10 6h11M10 12h11M10 18h11" />
     <path d="M4 6h1M4 12h1M4 18h1" />
+  </Icon>
+);
+
+/** Reagent prep: a flask. */
+export const FlaskIcon = () => (
+  <Icon size={20} color="#55555c">
+    <path d="M9 3h6M10 3v6.5L4.6 18.4A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.4-2.6L14 9.5V3" />
+    <path d="M7.5 15h9" />
   </Icon>
 );
 

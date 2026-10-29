@@ -182,7 +182,7 @@ export type ImportedProtocol = { protocol: Protocol; problems: string[]; sources
 export type ProtocolIntro = Pick<Protocol, 'title' | 'summary'> & {
   kit: { name: string; vendor: string; catalogs: string[] };
   source: Pick<Protocol['source'], 'title' | 'publisher' | 'docId' | 'revision' | 'url'>;
-  overview: Pick<Protocol['overview'], 'steps' | 'cite'>;
+  overview: Pick<Protocol['overview'], 'steps' | 'expected' | 'cite'>;
   /**
    * The main procedure's steps as the manual words them, with their pages, for the Overview's Steps until the checked
    * steps are read; `others` names the kit's other procedures. Empty when the intro could not list them.

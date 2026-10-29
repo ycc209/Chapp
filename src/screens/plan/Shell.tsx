@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link } from 'react-router';
+import { useBottomWhileTyping } from '../../app/keyboard.ts';
+import { useScreen } from '../../app/screen.ts';
 import type { Expression } from '../../../shared/ai.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
@@ -36,10 +38,13 @@ export function Shell({ subtitle, next, onUtterance, scroller, className, childr
   const [plus, setPlus] = useState(false);
   const [typing, setTyping] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
+  const own = useRef<HTMLDivElement>(null);
+  const page = scroller ?? own;
+  useBottomWhileTyping(page, typing, useScreen().keyboard);
   return (
     <div className={cn('relative h-full overflow-hidden bg-bg', className)}>
       <div
-        ref={scroller}
+        ref={page}
         className="flex h-full flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(168px+var(--screen-bottom))] [scrollbar-width:none]"
       >
         {children}

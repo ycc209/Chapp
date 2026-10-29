@@ -4,11 +4,11 @@ import { Link } from 'react-router';
 import type { ProtocolIntro } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
-import { answer, bottles, bottleDetail, kitContents, precautions, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
-import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
+import { answer, bottles, bottleDetail, kitContents, precautions, prepLines, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
+import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, EyeIcon, FlaskIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
 
-export type Section = 'kit' | 'steps' | 'principle' | 'precautions';
-export const SECTIONS: Section[] = ['kit', 'steps', 'principle', 'precautions'];
+export type Section = 'kit' | 'prep' | 'steps' | 'principle' | 'precautions';
+export const SECTIONS: Section[] = ['kit', 'prep', 'steps', 'principle', 'precautions'];
 
 /** Chapp's answer about the kit (Overview.dc.html, Protocol.dc.html): what it is and what happens in the well. */
 export function Answer({ protocol }: { protocol: Pick<Protocol, 'title' | 'summary'> }) {
@@ -39,8 +39,12 @@ export function SourceLink({ protocol, page, className }: { protocol: Pick<Previ
   );
 }
 
-/** "At a glance": the source's own four-step summary, numbered on yellow. */
+/**
+ * "At a glance": the source's own four-step summary, numbered on yellow; what it says the user will see comes after,
+ * apart from the steps.
+ */
 export function Glance({ protocol }: { protocol: Preview }) {
+  const expected = protocol.overview.expected ?? [];
   return (
     <section aria-label="At a glance" className="mb-7 flex shrink-0 flex-col gap-2.5 px-1 animate-in fade-in duration-300">
       {/* The summary is the source's own (its Fig. 1): the heading says whose, and opens that page. */}
@@ -56,7 +60,25 @@ export function Glance({ protocol }: { protocol: Preview }) {
           </li>
         ))}
       </ol>
+      {expected.length > 0 && <Expected lines={expected} className="mt-1" />}
     </section>
+  );
+}
+
+/** What the user should see when it works: a result to look for, set apart from the steps. */
+export function Expected({ lines, className }: { lines: string[]; className?: string }) {
+  return (
+    <div role="note" aria-label="What you should see" className={cn('flex flex-col gap-1 rounded-[14px] bg-sunken px-3 py-2.5', className)}>
+      <span className="flex items-center gap-1.5 text-[13px] leading-[18px] font-semibold text-text">
+        <EyeIcon size={14} />
+        What you should see
+      </span>
+      {lines.map((line, i) => (
+        <p key={i} className="m-0 text-[16px] leading-[22px] font-medium text-ink">
+          {line}
+        </p>
+      ))}
+    </div>
   );
 }
 
@@ -73,12 +95,14 @@ type SectionsProps = {
 };
 
 /**
- * In the kit, Steps, Principle, Precautions: rows that open in place, a + turning into × (Overview.dc.html). The
- * black tab on "In the kit" goes to the camera; once the bottles are photographed the row shows them.
+ * In the kit, Reagent prep (when the manual has some), Steps, Principle, Precautions: rows that open in place, a +
+ * turning into × (Overview.dc.html). The black tab on "In the kit" goes to the camera; once the bottles are
+ * photographed the row shows them. Steps are the experiment itself; getting the reagents ready comes before it.
  */
 export function Sections({ protocol, procedure, photos, open, onOpen, sample }: SectionsProps) {
   const kit = kitContents(protocol, procedure);
   const steps = stepLines(protocol, procedure);
+  const prep = prepLines(protocol, procedure);
   const why = principle(protocol);
   const care = precautions(protocol);
   const all = bottles(protocol);
@@ -148,6 +172,27 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
           )}
         </Content>
       </AccordionPrimitive.Item>
+
+      {prep.length > 0 && (
+        <AccordionPrimitive.Item value="prep">
+          <AccordionPrimitive.Header className="flex flex-col">
+            <Trigger icon={<FlaskIcon />} title="Reagent prep" aside={<Aside>{prep.length}</Aside>} />
+          </AccordionPrimitive.Header>
+          <Content>
+            <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
+              <p className="m-0 text-[15px] leading-[22px] text-text">Before the experiment. Some of it keeps, so you may have done it already.</p>
+              <ol aria-label="Reagent prep" className="m-0 flex list-none flex-col gap-3 p-0">
+                {prep.map(item => (
+                  <li key={item.id} className="flex flex-col gap-0.5">
+                    <span className="text-[16px] leading-[21px] font-semibold text-ink">{item.title}</span>
+                    <span className="text-[14px] leading-[20px] text-text">{keepUnits(item.text)}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </Content>
+        </AccordionPrimitive.Item>
+      )}
 
       <AccordionPrimitive.Item value="steps">
         <AccordionPrimitive.Header className="flex flex-col">
@@ -280,7 +325,7 @@ export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
   );
 }
 
-type CardStep = { id?: string; title?: string; text: string; stage?: string; facts?: string[]; original?: string };
+type CardStep = { id?: string; title?: string; text: string; stage?: string; facts?: string[]; original?: string; expected?: string[] };
 
 // Steps done with the hands (making, mixing, loading, washing) get a picture; waiting, reading and working out the
 // result are said in a line. A step without a stage (the quick read's) is judged by its words.
@@ -413,6 +458,15 @@ function StepCard({ card, total, inView, onBring }: { card: Card; total: number;
           {/* A card without a picture is the short version: its title and numbers say the step ("Incubate", "37 °C ·
               30 min · Covered"); the line in Chapp's words shows only when there are no numbers. */}
           {(card.picture || !step.facts?.length) && <span className="text-[14px] leading-[20px] text-text">{keepUnits(step.text)}</span>}
+          {/* What to look for after the step: not part of what to do. */}
+          {step.expected?.map((line, j) => (
+            <span key={j} aria-label={`What you should see: ${line}`} className="flex items-start gap-1.5 text-[14px] leading-[20px] text-text">
+              <span className="mt-[3px] shrink-0">
+                <EyeIcon size={14} />
+              </span>
+              {keepUnits(line)}
+            </span>
+          ))}
         </div>
       ))}
     </div>

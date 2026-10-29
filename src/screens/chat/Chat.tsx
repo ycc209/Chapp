@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router';
+import { useBottomWhileTyping } from '../../app/keyboard.ts';
+import { useScreen } from '../../app/screen.ts';
 import { A2uiSurface } from '../../components/a2ui/Surface.tsx';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
@@ -43,6 +45,7 @@ export function ChatScreen() {
   const [plus, setPlus] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  useBottomWhileTyping(scroller, typing, useScreen().keyboard);
   // Paused by the user: opening again (or the bar) does not start listening by itself.
   const paused = useRef(false);
 

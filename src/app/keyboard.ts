@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 
 /** The part of the page the user can see right now: shorter than the screen while the on-screen keyboard is up. */
 export type VisibleArea = { height: number; top: number; keyboard: boolean };
@@ -52,4 +52,20 @@ export function useVisibleArea(enabled: boolean): VisibleArea | null {
   }, [enabled]);
 
   return enabled ? area : null;
+}
+
+/**
+ * While the user types, the conversation at the bottom of the page stays in view above the message box: the page
+ * scrolls to its end when the box opens, and again once the keyboard is up and the screen has shrunk above it.
+ */
+export function useBottomWhileTyping(scroller: RefObject<HTMLElement | null>, typing: boolean, keyboard: boolean) {
+  useEffect(() => {
+    if (!typing) return;
+    // Once the layout has settled: the box mounted, or the screen shrunk for the keys.
+    const t = window.setTimeout(() => {
+      const el = scroller.current;
+      el?.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [typing, keyboard]);
 }

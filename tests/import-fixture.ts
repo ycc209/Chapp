@@ -29,10 +29,11 @@ export const parts = (): Parts => ({
   },
   steps: {
     steps: [
-      { procedureId: 'plate', stepId: 'p-standards', stage: 'standards', title: 'Make the standards', key: 'Vials A–C', makes: 'curve', equipment: [], cite: 'p1: Dilute the standard.' },
-      { procedureId: 'plate', stepId: 'p-load', stage: 'load', title: 'Load', key: '20 µL per well', makes: '', equipment: [], cite: 'p2: Add 20 µL.' },
-      { procedureId: 'Microplate', stepId: 'p-incubate', stage: 'incubate', title: 'Incubate', key: '37 °C · 30 min', makes: '', equipment: [], cite: 'p2: Incubate at 37°C for 30 minutes.' },
-      { procedureId: 'plate', stepId: 'p-read', stage: 'read', title: 'Read', key: 'Read at 450 nm', makes: '', equipment: ['Reader'], cite: 'p2: Read at 450 nm.' },
+      { procedureId: 'plate', stepId: 'p-warm', before: true, stage: 'prepare', title: 'Warm the reagents', key: 'Bring Reagents A and B to room temperature', makes: '', equipment: [], cite: 'p1: Bring the reagents to room temperature.' },
+      { procedureId: 'plate', stepId: 'p-standards', before: false, stage: 'standards', title: 'Make the standards', key: 'Vials A–C', makes: 'curve', equipment: [], cite: 'p1: Dilute the standard.' },
+      { procedureId: 'plate', stepId: 'p-load', before: false, stage: 'load', title: 'Load', key: '20 µL per well', makes: '', equipment: [], cite: 'p2: Add 20 µL.' },
+      { procedureId: 'Microplate', stepId: 'p-incubate', before: false, stage: 'incubate', title: 'Incubate', key: '37 °C · 30 min', makes: '', equipment: [], cite: 'p2: Incubate at 37°C for 30 minutes.' },
+      { procedureId: 'plate', stepId: 'p-read', before: false, stage: 'read', title: 'Read', key: 'Read at 450 nm', makes: '', equipment: ['Reader'], cite: 'p2: Read at 450 nm.' },
     ],
     timers: [{ stepId: 'p-incubate', label: 'Incubate', time: '30 min', temperature: '37', covered: true }],
     additions: [
@@ -54,7 +55,7 @@ export const parts = (): Parts => ({
   },
   notes: {
     title: 'Demo™ Assay Kit', summary: 'Colorimetric demo assay: it turns yellow. Range 10–1,000 µg/mL.',
-    overviewProcedure: 'plate', overviewSteps: ['Mix A and B 10:1', 'Incubate 30 min at 37°C'], overviewCite: 'p1 figure: Fig. 1',
+    overviewProcedure: 'plate', overviewSteps: ['Mix A and B 10:1', 'Incubate 30 min at 37°C'], overviewExpected: [], overviewCite: 'p1 figure: Fig. 1',
     hasAnalysis: true, readout: 450, acceptableMin: 0, acceptableMax: 0, fitPreferred: [], fitByHand: '', fitAvoid: ['linear'], analysisCite: 'p2: Plot the standards.',
     notes: [
       { on: 'wr', kind: 'expected', text: 'It turns green.', cite: 'p1: The WR is green.' },
@@ -70,6 +71,7 @@ export const intro = (): Intro => ({
   kitName: 'Demo Assay Kit', vendor: 'Demo Bio', catalogs: ['D100'], docTitle: 'Demo Assay Kit Manual', publisher: 'Demo Bio', docId: 'DM-1', revision: '2',
   title: 'Demo Assay', summary: 'Colorimetric demo assay: samples turn yellow with the working reagent; read at 450 nm. Range 10–1,000 µg/mL.',
   overviewSteps: ['Mix A and B 10:1', '20 µL sample + 200 µL WR', 'Incubate 30 min at 37°C', 'Read at 450 nm'],
+  overviewExpected: ['Wells turn yellow'],
   overviewCite: 'p1 figure: Fig. 1 Procedure summary',
   procedureName: 'Microplate', otherProcedures: [],
   steps: [{ text: 'Dilute the standard into vials A–C', page: 1 }, { text: 'Add 20 µL of each to a well', page: 2 }, { text: 'Incubate at 37°C for 30 minutes', page: 2 }, { text: 'Read at 450 nm', page: 2 }],

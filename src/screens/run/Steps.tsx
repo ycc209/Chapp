@@ -408,8 +408,7 @@ export function ReadStep({ v }: { v: View }) {
  * Run-Timer's promise, "I will ping your lock screen when it is done", kept only where this browser can: otherwise one
  * short line says why not, in the step's own words, and where a tap can still allow it, a pill asks.
  */
-function LockScreenLine({ push }: { push: View['push'] }) {
-  const after = ' Cool the plate to room temperature before you read it.';
+export function LockScreenLine({ push, after = ' Cool the plate to room temperature before you read it.' }: { push: View['push']; after?: string }) {
   const line: Record<View['push']['state'], string> = {
     ready: 'I will ping your lock screen when it is done.',
     ask: 'Allow notifications and I will ping your lock screen when it is done.',

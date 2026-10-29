@@ -3,12 +3,11 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../components/ui/Sheet.tsx';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
-import { useRun } from '../../state/run.ts';
+import { useProtocol } from '../../state/protocol.ts';
+import { runStarted, useRun } from '../../state/run.ts';
+import { shortName } from '../protocol/content.ts';
 import { GLASS_BUTTON, GLASS_FIELD } from './bar.ts';
 import { GlobeIcon, HomeIcon, LibraryIcon, PencilIcon, PeopleIcon, SearchIcon, SettingsIcon } from './icons.tsx';
-
-// Names for the protocols the app knows; only the BCA kit so far.
-const PROTOCOL_NAMES: Record<string, string> = { 'pierce-bca': 'Pierce BCA' };
 
 type SidebarProps = {
   open: boolean;
@@ -156,12 +155,11 @@ function Experiments({ query, onPick }: { query: string; onPick: () => void }) {
   const samples = useRun(s => s.samples);
   const replicates = useRun(s => s.replicates);
   const step = useRun(s => s.step);
-  const started = useRun(
-    s => s.step > 0 || [s.done, s.timers, s.readings].some(record => Object.keys(record).length > 0),
-  );
+  const started = useRun(runStarted);
+  const { protocol } = useProtocol(protocolId);
 
   const runs = protocolId
-    ? [{ id: protocolId, name: `${PROTOCOL_NAMES[protocolId] ?? protocolId} · ${samples} × ${replicates}` }]
+    ? [{ id: protocolId, name: `${protocol ? shortName(protocol) : protocolId} · ${samples} × ${replicates}` }]
     : [];
   const shown = runs.filter(r => r.name.toLowerCase().includes(query.trim().toLowerCase()));
 

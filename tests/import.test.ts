@@ -58,6 +58,9 @@ describe('assembling the wire rows into a protocol', () => {
     expect(p.mixes[0]!.notes.map(n => n.text)).toEqual(['It turns green.']);
     expect(p.notes.map(n => n.text)).toEqual(['Research use only.', 'Wear gloves.']);
     expect(p.procedures[0]!.steps.find(s => s.id === 'p-load')!.notes!.map(n => n.text)).toEqual(['Pipette slowly.']);
+    // Reagent prep is kept apart from the experiment's steps.
+    expect(p.procedures[0]!.prep!.map(s => [s.id, s.key])).toEqual([['p-warm', 'Bring Reagents A and B to room temperature']]);
+    expect(p.procedures[0]!.steps.map(s => s.id)).toEqual(['p-standards', 'p-load', 'p-incubate', 'p-read']);
     expect(found).toEqual(expect.arrayContaining([
       'mix lonely: fewer than two parts',
       'step p-load: a mix addition without what it adds',
@@ -87,6 +90,15 @@ describe('assembling the wire rows into a protocol', () => {
     expect(isAssay(protocol.procedures[0]!)).toBe(false);
     expect(protocol.procedures[0]!.steps.map(s => s.stage)).toEqual(['load', 'incubate', 'observe']);
     expect(problems(protocol)).toEqual([]);
+  });
+
+  it('keeps a procedure read as nothing but reagent prep as its steps, and says so', () => {
+    const all = parts();
+    all.steps.steps = all.steps.steps.map(s => ({ ...s, before: true }));
+    const { protocol, problems } = assemble(all, meta);
+    expect(protocol.procedures[0]!.steps).toHaveLength(5);
+    expect(protocol.procedures[0]!.prep).toBeUndefined();
+    expect(problems).toContain('procedure plate: every step was reagent prep; kept as its steps');
   });
 
   it('refuses a manual with no steps at all', () => {
@@ -160,7 +172,8 @@ describe('the wire format', () => {
       notes: [],
     };
     expect(readWire(STEPS, renameLegacy('steps', old))).toEqual({
-      steps: [{ procedureId: 'plate', stepId: 'p-inc', stage: 'incubate', title: 'Incubate', key: '37 °C', makes: 'wr', equipment: [], cite: 'p2: Incubate at 37°C.' }],
+      // Read before reagent prep was asked for: every row is a step of the experiment.
+      steps: [{ procedureId: 'plate', stepId: 'p-inc', before: false, stage: 'incubate', title: 'Incubate', key: '37 °C', makes: 'wr', equipment: [], cite: 'p2: Incubate at 37°C.' }],
       timers: [{ stepId: 'p-inc', label: 'Incubate', time: '30 min', temperature: '37', covered: true }],
       additions: [{ stepId: 'p-inc', what: 'mix', ref: 'wr', volume: '200 uL', per: 'well' }],
       alternatives: [{ stepId: 'p-inc', label: 'Longer', time: '2 h', temperature: '37', range: '', curve: '', cite: 'p2 table: Table 2' }],
@@ -229,8 +242,14 @@ describe('importProtocol', () => {
     // What the kit is was heard first, and is what the protocol says: the Overview's words do not change.
     expect(heard).toHaveLength(1);
     expect(heard[0]).toMatchObject({ title: 'Demo Assay', kit: { catalogs: ['D100'] }, source: { url: 'https://demo.example/m.pdf', publisher: 'Demo Bio' } });
-    expect(heard[0]!.overview).toEqual({ steps: intro().overviewSteps, cite: { page: 1, figure: 'Fig. 1 Procedure summary' } });
-    expect([out.protocol.title, out.protocol.summary, out.protocol.overview.steps]).toEqual([heard[0]!.title, heard[0]!.summary, heard[0]!.overview.steps]);
+    // What the summary says the user will see stays apart from its steps.
+    expect(heard[0]!.overview).toEqual({ steps: intro().overviewSteps, expected: ['Wells turn yellow'], cite: { page: 1, figure: 'Fig. 1 Procedure summary' } });
+    expect([out.protocol.title, out.protocol.summary, out.protocol.overview.steps, out.protocol.overview.expected]).toEqual([
+      heard[0]!.title,
+      heard[0]!.summary,
+      heard[0]!.overview.steps,
+      heard[0]!.overview.expected,
+    ]);
     // Timings only: nothing from the manual or the key in the log.
     expect(logs.join('\n')).not.toMatch(/sk-test|Reagent|Demo/);
   });
@@ -255,6 +274,8 @@ describe('importProtocol', () => {
     expect(heard).toEqual([]);
     expect(out.protocol.summary).toBe(p.notes.summary);
     expect(out.protocol.overview.steps).toEqual(p.notes.overviewSteps);
+    // The deep read gave no expected results: none, rather than an empty list.
+    expect(out.protocol.overview).not.toHaveProperty('expected');
   });
 
   it('skips the dilution call for a kit without standards', async () => {

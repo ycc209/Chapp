@@ -154,6 +154,9 @@ describe('importing', () => {
     expect(importPatch(stored(buildShare('noresults', storyRun(), bca, {}, { photos: false })), other).photos).toEqual({});
     const withPhoto = stored({ ...buildShare('noresults', storyRun(), bca), kit: [{ id: 'bsa', label: 'BSA', photo: 'data:image/jpeg;base64,CCCC' }] });
     expect(importPatch(withPhoto, other).photos).toEqual({ bsa: 'data:image/jpeg;base64,CCCC' });
+    // Photos the labmate took of this kit before come back; the share's fill the rest.
+    const theirs = { bsa: 'data:image/jpeg;base64,MINE', 'reagent-a': 'data:image/jpeg;base64,AAAA' };
+    expect(importPatch(withPhoto, other, theirs).photos).toEqual(theirs);
   });
 });
 

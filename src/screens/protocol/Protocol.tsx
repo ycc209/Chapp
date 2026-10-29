@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { useBottomWhileTyping } from '../../app/keyboard.ts';
 import { useScreen } from '../../app/screen.ts';
 import { A2uiSurface } from '../../components/a2ui/Surface.tsx';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SHEET_DURATION, SHEET_EASE } from '../../components/ui/Sheet.tsx';
+import { toast } from '../../components/ui/Toaster.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { isPlannable } from '../../../shared/calc.ts';
+import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
+import { saveProtocol, useKits, useMine } from '../../state/library.ts';
 import { useProtocol } from '../../state/protocol.ts';
-import { useRun } from '../../state/run.ts';
+import { runStarted, useRun } from '../../state/run.ts';
 import { useSession } from '../../state/session.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { PlusMenu } from '../home/PlusMenu.tsx';
@@ -18,7 +22,7 @@ import { TypingBar } from '../home/TypingBar.tsx';
 import { useConverse } from '../home/useConverse.ts';
 import { samplePhotos } from '../kit/sample.ts';
 import { Answer, Glance, QuickSections, Sections, type Section } from './Body.tsx';
-import { bottles, procedureFor, shortName } from './content.ts';
+import { bottles, procedureFor, shortName, startPath } from './content.ts';
 import { BookmarkIcon, CheckIcon, DocumentIcon, PlayIcon } from './icons.tsx';
 import { useFinding, wasShown, type Stage } from './useFinding.ts';
 import { useImporting } from './useImporting.ts';
@@ -79,6 +83,7 @@ export function ProtocolScreen() {
   const protocolId = finding.protocolId ?? runProtocolId ?? 'pierce-bca';
   const procedure = useRun(s => s.procedure);
   const runPhotos = useRun(s => s.photos);
+  const started = useRun(runStarted);
   const { protocol, error } = useProtocol(protocolId);
 
   const all = protocol ? bottles(protocol) : [];
@@ -142,7 +147,8 @@ export function ProtocolScreen() {
   const done = stage === 3 && protocol !== null && !finding.notFound;
 
   // Back from the camera, "In the kit" sits where Protocol-Kit.dc.html has it (474 px down), its photos in view.
-  const { scale } = useScreen();
+  const { scale, keyboard } = useScreen();
+  useBottomWhileTyping(scroller, typing, keyboard);
   useEffect(() => {
     const el = scroller.current;
     const kit = el?.querySelector('[data-kit]');
@@ -153,8 +159,9 @@ export function ProtocolScreen() {
   const overview = ask !== null || importing !== null;
   // A manual new to Chapp: what it read of it first (the intro), until the protocol it becomes is on screen.
   const intro = !finding.notFound && finding.intro && !(protocol && protocol.id === finding.protocolId && stage >= 1) ? finding.intro : null;
-  // Plan and Start are for a run with standards and a plate; a cell protocol shows its steps without them.
-  const runnable = protocol !== null && isPlannable(protocol, procedureFor(protocol, procedure));
+  // Plan is for a run with standards and a plate Chapp can work out; any protocol can be started and followed step by
+  // step (a cell protocol, or amounts Chapp cannot convert: run/Follow.tsx).
+  const plannable = protocol !== null && isPlannable(protocol, procedureFor(protocol, procedure));
   const answer = turn?.phase === 'reply' ? turn.say : turn?.phase === 'error' ? ERROR_LINE : '';
 
   return (
@@ -211,19 +218,12 @@ export function ProtocolScreen() {
               sample={sample}
             />
           )}
-          {done && overview && (
-            <div className="mt-[18px] flex shrink-0 gap-2 px-1">
-              <Link to="/library" className={cn(PILL, WHITE_PILL, 'gap-1.5 px-3.5')}>
-                <BookmarkIcon />
-                Save to library
-              </Link>
-            </div>
-          )}
           {done && fromKit && matched && (
             <p aria-label="Chapp's answer" className="mt-[22px] shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
               All <b className="font-bold">{all.length} bottles</b> are matched. Plan the run, or start now.
             </p>
           )}
+          {done && protocol && !sample && <SaveToLibrary protocol={protocol} />}
           {turn && (
             <div className="mt-6 flex shrink-0 flex-col">
               <Bubble>{turn.text}</Bubble>
@@ -239,12 +239,14 @@ export function ProtocolScreen() {
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
-        {done && runnable && voice !== 'talking' && (
+        {done && voice !== 'talking' && (
           <div aria-label="Next" className="pointer-events-none relative flex shrink-0 justify-center gap-2 px-5 pt-2 [&>*]:pointer-events-auto">
-            <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-[18px]')}>
-              Plan
-            </Link>
-            <Link to="/run/1" className={cn(PILL, 'gap-[7px] bg-ink pr-[18px] pl-[15px] text-white')}>
+            {plannable && (
+              <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-[18px]')}>
+                Plan
+              </Link>
+            )}
+            <Link to={protocol ? startPath(protocol, procedure, started) : '/run/1'} className={cn(PILL, 'gap-[7px] bg-ink pr-[18px] pl-[15px] text-white')}>
               <PlayIcon />
               Start
             </Link>
@@ -268,7 +270,7 @@ export function ProtocolScreen() {
         </div>
       </div>
 
-      {done && runnable && (
+      {done && plannable && (
         // The handle on the right edge: start or plan the run (Run-Choose).
         <Link
           to="/plan?state=choose"
@@ -289,6 +291,35 @@ export function ProtocolScreen() {
           navigate('/');
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * Save to library: puts the protocol in Library's Saved. The user's kit photos are kept with it either way
+ * (state/library.ts); the toast says how many there are. Once saved, it says so and opens Library.
+ */
+function SaveToLibrary({ protocol }: { protocol: Protocol }) {
+  const navigate = useNavigate();
+  const saved = useMine(s => (s.protocols[protocol.id]?.savedAt ?? null) !== null);
+  const photos = useKits(s => Object.keys(s.kits[protocol.id] ?? {}).length);
+  const save = () => {
+    if (!saveProtocol(protocol.id, { title: protocol.title })) return toast('This phone has no room left to save it.');
+    toast(photos ? `Saved, with your ${photos} kit ${photos === 1 ? 'photo' : 'photos'}` : 'Saved to your library', { action: { label: 'Open library', onClick: () => navigate('/library') } });
+  };
+  return (
+    <div className="mt-[18px] flex shrink-0 gap-2 px-1">
+      {saved ? (
+        <Link to="/library" className={cn(PILL, WHITE_PILL, 'gap-1.5 px-3.5')}>
+          <CheckIcon size={14} width={3} />
+          In your library
+        </Link>
+      ) : (
+        <button type="button" onClick={save} className={cn(PILL, WHITE_PILL, 'gap-1.5 px-3.5')}>
+          <BookmarkIcon />
+          Save to library
+        </button>
+      )}
     </div>
   );
 }

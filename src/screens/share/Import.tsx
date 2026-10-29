@@ -5,6 +5,7 @@ import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SampleDataTag } from '../../components/lab/index.ts';
 import { cn } from '../../lib/cn.ts';
 import { useProtocol } from '../../state/protocol.ts';
+import { kitPhotos } from '../../state/library.ts';
 import { useRun } from '../../state/run.ts';
 import { matchCommand } from '../../voice/commands.ts';
 import { speak } from '../../voice/speak.ts';
@@ -76,7 +77,7 @@ function Received({ id }: { id: string }) {
 
   const use = () => {
     if (!pending) return;
-    useRun.setState(importPatch(pending, useRun.getState()));
+    useRun.setState(importPatch(pending, useRun.getState(), kitPhotos(pending.protocolId)));
     navigate('/protocol');
   };
 

@@ -12,6 +12,7 @@ import { createImportHandler, findAndImport } from './imports.ts';
 import { createKitHandler } from './kit.ts';
 import { streamFindProtocol, wantsEvents } from './events.ts';
 import { createPlateHandler } from './ai/plate.ts';
+import { protocolList } from './ai/protocols.ts';
 import { createPushHandler, type PushOptions } from './push.ts';
 
 /**
@@ -19,6 +20,7 @@ import { createPushHandler, type PushOptions } from './push.ts';
  * an ephemeral port with whichever provider they need.
  *
  *   GET  /api/health          → Health
+ *   GET  /api/protocols       → ProtocolSummary[]: every protocol in data/protocols/, the newest first (Library)
  *   GET  /api/protocols/:id   → a chapp.protocol/1 document from data/protocols/
  *   POST /api/voice           audio/wav (≤ 10 MB) → Transcript
  *   POST /api/converse        ConverseRequest (≤ 100 KB) → ConverseReply
@@ -161,6 +163,7 @@ export function createHandler(options: AppOptions) {
       if (path.startsWith('/api/push/')) return await push(req, res, path);
       if (await imports(req, res, path)) return;
 
+      if (path === '/api/protocols') return json(res, 200, protocolList(protocols));
       const id = /^\/api\/protocols\/([a-z0-9-]+)$/.exec(path)?.[1];
       if (id) {
         const raw = await readFile(resolve(protocols, `${id}.json`), 'utf8').catch(() => null);

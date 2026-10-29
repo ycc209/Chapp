@@ -12,6 +12,7 @@ import { createMockProvider } from '../server/ai/mock.ts';
 import { knownProtocols, localProtocolId, protocolBySha } from '../server/ai/protocols.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { downloadPdf, findAndImport, READING_LINE } from '../server/imports.ts';
+import type { ProtocolSummary } from '../shared/protocol.ts';
 import { intro, parts } from './import-fixture.ts';
 
 // The import routes on an ephemeral port, saving into temporary folders, with a provider that "reads" any PDF as the
@@ -67,6 +68,9 @@ describe('POST /api/import-protocol', () => {
     const served = await fetch(`${base}/api/protocols/demo-assay`);
     expect(served.status).toBe(200);
     expect(((await served.json()) as { title: string }).title).toBe('Demo Assay');
+    // Library lists it with every other protocol on this computer.
+    const list = (await (await fetch(`${base}/api/protocols`)).json()) as ProtocolSummary[];
+    expect(list.find(p => p.id === 'demo-assay')).toMatchObject({ title: 'Demo Assay', kit: expect.any(String), steps: expect.any(Number) });
     const manual = await fetch(`${base}${body.protocol.source.url}`);
     expect(manual.headers.get('content-type')).toBe('application/pdf');
     expect(new Uint8Array(await manual.arrayBuffer())).toEqual(pdf());

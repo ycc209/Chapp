@@ -11,7 +11,7 @@ import type { Component, Concentration, Note, Procedure, Protocol, Step } from '
  */
 export type Preview = Pick<Protocol, 'title' | 'summary'> & {
   source: Pick<Protocol['source'], 'title' | 'publisher' | 'docId' | 'revision' | 'url'>;
-  overview: Pick<Protocol['overview'], 'steps' | 'cite'>;
+  overview: Pick<Protocol['overview'], 'steps' | 'expected' | 'cite'>;
 };
 
 /** "Pierce BCA Protein Assay" → "Pierce BCA": the name Chapp uses in its status line and answers. */
@@ -86,7 +86,7 @@ export function kitContents(p: Protocol, procedureId?: string | null) {
  */
 export function alsoNeed(p: Protocol, procedureId: string | null | undefined, photographed: boolean): string {
   const proc = procedureFor(p, procedureId);
-  const ids = [...new Set(proc.steps.flatMap(s => s.equipment ?? []))];
+  const ids = [...new Set([...(proc.prep ?? []), ...proc.steps].flatMap(s => s.equipment ?? []))];
   const gear = ids
     .map(id => p.equipment.find(e => e.id === id))
     .filter(e => e !== undefined && e.icon !== 'pipette')
@@ -148,7 +148,18 @@ export function stepLines(p: Protocol, procedureId?: string | null) {
     facts: stepFacts(p, s),
     // The manual's own words for the step, or where they are when it is a table or a figure.
     original: s.cite.quote ?? `See ${s.cite.table ?? s.cite.figure} in the manual.`,
+    // What the user should see when it works: shown with the step, apart from what to do.
+    expected: (s.notes ?? []).filter(n => n.kind === 'expected').map(n => n.text),
   }));
+}
+
+/** Where Start goes: reagent prep first when the procedure has some and the run has not begun, else step 1. */
+export const startPath = (p: Protocol, procedureId: string | null | undefined, started: boolean) =>
+  !started && (procedureFor(p, procedureId).prep ?? []).length > 0 ? '/run/prep' : '/run/1';
+
+/** Reagent prep: what to get ready before the experiment, in the step cards' words and numbers. */
+export function prepLines(p: Protocol, procedureId?: string | null) {
+  return (procedureFor(p, procedureId).prep ?? []).map(s => ({ id: s.id, title: s.title, text: s.key, page: s.cite.page, facts: stepFacts(p, s) }));
 }
 
 const NOTE_ORDER: Record<Note['kind'], number> = { caution: 0, tip: 1, expected: 2, info: 3 };

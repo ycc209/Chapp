@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAssay, Protocol } from '../../shared/protocol.ts';
+import { isAssay, Protocol, type ProtocolSummary } from '../../shared/protocol.ts';
 import { formatVolume, isPlannable, unitsProblem } from '../../shared/calc.ts';
 import { runSetup } from '../../src/components/lab/model.ts';
 import type { ConverseContext, Expression, FoundProtocol, Source } from '../../shared/ai.ts';
@@ -46,6 +46,25 @@ export function knownProtocols(dir = PROTOCOLS_DIR): Protocol[] {
     // No data/ on a clean checkout.
   }
   return files.map(f => loadProtocol(f.slice(0, -5), dir)).filter((p): p is Protocol => p !== null);
+}
+
+/** Every protocol on this machine as Library lists it (GET /api/protocols), the one read or changed last first. */
+export function protocolList(dir = PROTOCOLS_DIR): ProtocolSummary[] {
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir).filter(f => f.endsWith('.json'));
+  } catch {
+    // No data/ on a clean checkout.
+  }
+  const list: ProtocolSummary[] = [];
+  for (const f of files) {
+    const id = f.slice(0, -5);
+    const p = loadProtocol(id, dir);
+    if (!p) continue;
+    const procedure = p.procedures.find(x => x.id === p.defaults.procedure) ?? p.procedures[0]!;
+    list.push({ id, title: p.title, kit: p.kit.name, catalogs: p.kit.variants.map(v => v.catalog), procedure: procedure.name, steps: procedure.steps.length, updated: statSync(join(dir, f)).mtimeMs });
+  }
+  return list.sort((a, b) => b.updated - a.updated);
 }
 
 /** The protocol read from exactly this file (same SHA-256), so the same manual is never read twice. */
@@ -202,6 +221,12 @@ export function protocolBrief(protocol: Protocol, context: ConverseContext): str
     isAssay(procedure)
       ? `${procedure.name} procedure: ${v(procedure.sample)} sample or standard + ${v(procedure.mixPerSample)} working reagent per well (${procedure.ratio}); range ${procedure.range.min}–${procedure.range.max} ${procedure.range.unit}.`
       : `${procedure.name} procedure (${procedure.format}): no standards, plate or reagent amounts to plan.`,
+    ...((procedure.prep ?? []).length
+      ? [
+          'Reagent prep, done before the experiment and not one of its steps (id, title, what to do, page):',
+          ...procedure.prep!.map(step => `- ${step.id}, ${step.title}: ${step.key} (p.${step.cite.page})`),
+        ]
+      : []),
     'Steps (index: id, title, what to do, page):',
     ...procedure.steps.map((step, i) => {
       const timer = step.timer ? `; timer ${step.timer.label} ${v(step.timer.duration)}${step.timer.temperature ? ` at ${step.timer.temperature.value} °C` : ''}` : '';
@@ -216,14 +241,17 @@ export function protocolBrief(protocol: Protocol, context: ConverseContext): str
   if (curve) lines.push(`Standards ${curve.points.map(p => `${p.id} ${p.concentration.value}`).join(', ')} ${curve.points[0].concentration.unit} (I is the blank; p.${curve.cite.page}).`);
   if (protocol.analysis) lines.push(`Read at ${protocol.analysis.readout.value} nm.`);
   const notes = [
-    ...procedure.steps.flatMap(step => (step.notes ?? []).map(n => ({ ...n, at: step.id }))),
+    ...[...(procedure.prep ?? []), ...procedure.steps].flatMap(step => (step.notes ?? []).map(n => ({ ...n, at: step.id }))),
     ...protocol.mixes.flatMap(m => m.notes.map(n => ({ ...n, at: m.id }))),
     ...protocol.components.flatMap(c => (c.notes ?? []).map(n => ({ ...n, at: c.id }))),
     ...(protocol.analysis?.notes ?? []).map(n => ({ ...n, at: 'analysis' })),
     ...protocol.notes.map(n => ({ ...n, at: 'general' })),
   ];
-  lines.push('Notes:', ...notes.map(n => `- ${n.at}, p.${n.cite.page}: ${n.text}`));
+  // What the user should see is a result to look for, not a step.
+  lines.push('Notes:', ...notes.map(n => `- ${n.at}${n.kind === 'expected' ? ' (what the user should see)' : ''}, p.${n.cite.page}: ${n.text}`));
+  if (protocol.overview.expected?.length) lines.push(`Expected result (not a step): ${protocol.overview.expected.join('; ')} (p.${protocol.overview.cite.page}).`);
 
+  if (context.screen === 'run-prep') lines.push('The user is on reagent prep, getting the reagents ready before step 1.');
   if (context.step !== undefined) {
     // The run screen's steps are the procedure's without the analysis, so the index is the same; its title is shorter.
     const step = procedure.steps[context.step];
@@ -301,8 +329,9 @@ export function answerFromManual(protocol: Protocol, question: string, opts: { p
   const procedure = protocol.procedures.find(p => p.id === opts.procedureId) ?? protocol.procedures.find(p => p.id === protocol.defaults.procedure) ?? protocol.procedures[0];
   const { url, title } = protocol.source;
   // Each note with what it is about, so "how long does the working reagent keep?" finds the working reagent's note.
+  const all = [...(procedure.prep ?? []), ...procedure.steps];
   const notes = [
-    ...procedure.steps.flatMap(step => (step.notes ?? []).map(n => ({ n, about: step.title }))),
+    ...all.flatMap(step => (step.notes ?? []).map(n => ({ n, about: step.title }))),
     ...protocol.mixes.flatMap(m => m.notes.map(n => ({ n, about: m.name }))),
     ...protocol.components.flatMap(c => (c.notes ?? []).map(n => ({ n, about: c.name }))),
     ...(protocol.analysis?.notes ?? []).map(n => ({ n, about: '' })),
@@ -311,7 +340,7 @@ export function answerFromManual(protocol: Protocol, question: string, opts: { p
   const FACE: Record<string, Expression> = { expected: 'happy', caution: 'thinking' };
   const candidates = [
     ...notes.map(({ n, about }) => ({ words: `${about} ${n.text} ${n.cite.quote ?? ''}`, say: n.text, cite: n.cite, expression: FACE[n.kind] ?? 'neutral' })),
-    ...procedure.steps.map(step => ({
+    ...all.map(step => ({
       words: `${step.title} ${step.key} ${step.cite.quote ?? ''}`,
       say: step.cite.quote && step.cite.quote.length <= 140 ? step.cite.quote : `${step.title}: ${step.key}.`,
       cite: step.cite,

@@ -174,7 +174,7 @@ export const INVENTORY = {
 
 export const STEPS = {
   steps: {
-    rows: { procedureId: 'string', stepId: 'string', stage: STAGES, title: 'string', key: 'string', makes: 'string', equipment: 'strings', cite: 'string' },
+    rows: { procedureId: 'string', stepId: 'string', before: 'boolean', stage: STAGES, title: 'string', key: 'string', makes: 'string', equipment: 'strings', cite: 'string' },
   },
   timers: { rows: { stepId: 'string', label: 'string', time: 'string', temperature: 'string', covered: 'boolean' } },
   additions: { rows: { stepId: 'string', what: ['standards-and-samples', 'mix', 'component'], ref: 'string', volume: 'string', per: ['well', 'tube'] } },
@@ -188,7 +188,7 @@ export const CURVES = {
 
 export const NOTES = {
   title: 'string', summary: 'string',
-  overviewProcedure: 'string', overviewSteps: 'strings', overviewCite: 'string',
+  overviewProcedure: 'string', overviewSteps: 'strings', overviewExpected: 'strings', overviewCite: 'string',
   hasAnalysis: 'boolean', readout: 'number', acceptableMin: 'number', acceptableMax: 'number',
   fitPreferred: { many: ['4pl', 'best-fit'] }, fitByHand: ['', 'point-to-point'], fitAvoid: { many: ['linear'] }, analysisCite: 'string',
   notes: { rows: { on: 'string', kind: ['info', 'expected', 'tip', 'caution'], text: 'string', cite: 'string' } },
@@ -198,7 +198,7 @@ export const NOTES = {
 /** The intro: what the Overview's top needs, read fast. */
 export const INTRO = {
   kitName: 'string', vendor: 'string', catalogs: 'strings', docTitle: 'string', publisher: 'string', docId: 'string', revision: 'string',
-  title: 'string', summary: 'string', overviewSteps: 'strings', overviewCite: 'string',
+  title: 'string', summary: 'string', overviewSteps: 'strings', overviewExpected: 'strings', overviewCite: 'string',
   procedureName: 'string', steps: { rows: { text: 'string', page: 'integer' } }, otherProcedures: 'strings',
   contents: { rows: { name: 'string', amount: 'string' } },
 } as const satisfies Spec;
@@ -386,12 +386,21 @@ export const RULES = `You read a lab kit's manual (attached) into Chapp's protoc
 - ids are lower-case words joined by hyphens ("reagent-a", "bsa", "microplate"), unique within their list.
 - Fill every field: unused text "", unused numbers 0, unused lists [].`;
 
+/** The at-a-glance summary is what the user does; what it says they will see or get is shown apart from it. */
+const ONLY_DOING = `Only what the user does: a line that says what they will see or get ("Visible lipid droplets 7-10 days after differentiation medium", "Turns purple") goes in overviewExpected instead, as printed; [] when there is none.`;
+
+/** Reagent prep, listed apart from the experiment's steps (shared/protocol.ts Procedure.prep). */
+const BEFORE = `true for getting the kit's reagents ready ahead of the experiment, the manual's reagent preparation: reconstituting or dissolving a vial, warming or equilibrating reagents, making a working buffer or stock from a concentrate ("1X Wash Buffer from the 25X concentrate"), spinning tubes before opening. Chapp lists these apart as reagent prep. false for the experiment itself: the cells, the samples, the standards, and the mixes made for this run (working reagent, reaction mix)`;
+
+/** What each kind of note is for: "expected" is a result to look for, not a rule. */
+const KINDS = `"expected" only for what the user should see or get when it works ("the solution turns purple"); a rule about using, keeping or discarding something is a "caution" or "tip"`;
+
 export const INTRO_TASK = `Say quickly what this kit is, for the first screen the scientist sees. Fill:
 - kitName, vendor and its catalog numbers as printed; the document's title, publisher (the company), document id ("MAN0011430"; the catalog number when it has none) and revision or version.
 - title: the assay's name as Chapp would say it ("Pierce BCA Protein Assay", "3T3-L1 Adipocyte Differentiation"), without "Kit" or trademark signs.
 - summary: two or three sentences in Chapp's own words, as "<kind of method>: <what it measures and how it works>. <its readout, range or result>." For example "Colorimetric total-protein assay: standards and samples react with a green working reagent and turn purple; read at 562 nm. Working range 20–2,000 µg/mL."
-- overviewSteps: the manual's own at-a-glance summary of its main procedure (a procedure-summary figure or box), its lines as printed, and overviewCite: that figure or box; if it has none, the main steps in a few words each, citing the page they start on.
-- steps: that main procedure's steps in order (with a microplate and a test-tube procedure, the microplate one), each one short line in the manual's own words with its numbers, and its page. procedureName: that procedure's name; otherProcedures: the names of the others.
+- overviewSteps: the manual's own at-a-glance summary of its main procedure (a procedure-summary figure or box), its lines as printed, and overviewCite: that figure or box; if it has none, the main steps in a few words each, citing the page they start on. ${ONLY_DOING}
+- steps: that main procedure's steps in order (with a microplate and a test-tube procedure, the microplate one), each one short line in the manual's own words with its numbers, and its page. Only what the user does: leave out what the manual says they will see, and getting the reagents ready beforehand (reconstituting, warming, making buffers), which Chapp lists apart. procedureName: that procedure's name; otherProcedures: the names of the others.
 - contents: what the kit holds, one row per bottle: its name and its amount as printed ("2 x 500 mL", "1 vial"); for several kit sizes, the first.`;
 
 export const INVENTORY_TASK = `Fill the inventory: everything the protocol's steps will point at.
@@ -404,21 +413,22 @@ export const INVENTORY_TASK = `Fill the inventory: everything the protocol's ste
 - procedures: each way to run the kit (a microplate and a test-tube version are two). Variants that change only the incubation (its time or temperature, and with it the working range or the standard table) are one procedure: they become alternatives of its incubation step. A smaller-sample option is a tip on its loading step, not a procedure. Phases done one after another (getting the cells ready, induction, maintenance) are steps of one procedure, not procedures of their own. format "microplate", "tube" or "cells" (cell culture). For an assay read against a standard curve, its ratio as printed ("1:8"), the sample and the mix per well or tube ("25 uL", "200 uL"), the mix id, the curve id and the working range ("20-2000 ug/mL"); for cells leave those "".`;
 
 export const STEPS_TASK = `List every step of every procedure, in order, as rows. Use exactly the ids in the inventory below.
-- steps: procedureId (the inventory's id of its procedure); stepId, unique across procedures (prefix it, "m-load", "t-load"); stage; title (Chapp's own short title); key (the one line said at the bench, in Chapp's own words, with the step's numbers; it is also shown alone in the step list, so it says what is done to what: "Make BSA standards A–I from the 2 mg/mL stock", never just "Make vials A–I"); makes (the curve id when the step makes the standards, the mix id when it makes a mix, else ""); equipment ids; cite.
-- stage is one of: standards (make the standard dilutions), prepare (grow or ready the cells, reconstitute or warm reagents), mix (make a mix), load (put standards, samples or a reagent into wells or tubes), treat (add or replace medium or a treatment on cells), incubate (wait a set time at a temperature), wash, read (measure on an instrument; letting the plate or tubes reach room temperature first is part of it), observe (look, e.g. under a microscope), analyze (work out the result: one step).
+- A step is something the user does. What the manual says will happen or be seen ("the solution begins to turn blue", "lipid droplets will be visible 7-10 days after…") is never a step and never part of a key: it is a note of kind "expected" on the step whose result it is.
+- steps: procedureId (the inventory's id of its procedure); stepId, unique across procedures (prefix it, "m-load", "t-load"); before (${BEFORE}); stage; title (Chapp's own short title); key (the one line said at the bench, in Chapp's own words, with the step's numbers; it is also shown alone in the step list, so it says what is done to what: "Make BSA standards A–I from the 2 mg/mL stock", never just "Make vials A–I"); makes (the curve id when the step makes the standards, the mix id when it makes a mix, else ""); equipment ids; cite.
+- stage is one of: standards (make the standard dilutions), prepare (grow or ready the cells, reconstitute or warm reagents), mix (make a mix), load (put standards, samples or a reagent into wells or tubes), treat (add or replace medium or a treatment on cells), incubate (wait a set time at a temperature), wash, read (measure on an instrument; letting the plate or tubes reach room temperature first is part of it), observe (the manual tells the user to look, e.g. "examine the cells under a microscope"; a result it only says will be visible is an expected note, not a step), analyze (work out the result: one step).
 - timers: one row per step that waits a set time: its stepId, label ("Incubate", "Shake"), time ("30 min", "30 s"), temperature in °C as printed ("37", "15-30"; "" if none), covered when the manual says to cover. A time limit ("read within 10 minutes") is not a timer: it belongs in the key.
 - additions: what a step adds to each well or tube: "standards-and-samples" (ref ""), "mix" (ref: the mix id) or "component" (ref: the component id), with the volume as printed ("25 uL"). Leave a step out when the manual gives no volume.
 - alternatives: the manual's other documented timings for a timed step ("2 hours for a stronger signal", "60°C for the enhanced range"), with their time and temperature, and the working range and curve id when they change those ("" otherwise), and a cite. They also hold the variants the inventory folded into one procedure ("Enhanced: 60°C for 30 minutes, working range 5–250 µg/mL" with that range and its standard table's curve id).
-- notes: short lines shown next to a step. kind "expected" (what the user should see), "tip", "caution" or "info"; text: one sentence in Chapp's own words; cite keeps the manual's words.`;
+- notes: short lines shown next to a step. kind "expected", "tip", "caution" or "info" (${KINDS}); text: one sentence in Chapp's own words; cite keeps the manual's words.`;
 
 export const CURVES_TASK = `For each standard curve below, list every vial of its dilution table in order: the curve id, the vial's letter alone ("A", "B", … as printed), the diluent volume ("125 uL"), where its standard comes from ("stock", the letter of an earlier vial, or "" for the blank), the volume taken ("375 uL"), the final concentration ("1500 ug/mL", "500 pg/mL"), and blank true for the vial with no standard. Every volume and concentration exactly as the table prints it, with its unit.`;
 
 export const NOTES_TASK = `Using the inventory below, fill:
 - title: the assay's name as Chapp would say it ("Pierce BCA Protein Assay", "3T3-L1 Adipocyte Differentiation"), without "Kit" or trademark signs.
 - summary: two or three sentences in Chapp's own words, as "<kind of method>: <what happens>. <its range or result>." For example "Colorimetric total-protein assay: standards and samples react with a green working reagent and turn purple; read at 562 nm. Working range 20–2,000 µg/mL."
-- overviewSteps: the manual's own at-a-glance summary of one procedure (a procedure-summary figure or box), its lines as printed, with overviewCite; if it has none, the default procedure's main steps in a few words each. overviewProcedure: that procedure's id.
+- overviewSteps: the manual's own at-a-glance summary of one procedure (a procedure-summary figure or box), its lines as printed, with overviewCite; if it has none, the default procedure's main steps in a few words each. overviewProcedure: that procedure's id. ${ONLY_DOING}
 - analysis, when the kit is read on an instrument (hasAnalysis true): the readout wavelength in nm, the acceptable range if printed (0 and 0 if not), the curve fits the manual prefers ("4pl" for four-parameter, "best-fit"), "point-to-point" if it describes plotting by hand, "linear" in fitAvoid if it says a linear fit is less accurate, and analysisCite. A kit with nothing to read has hasAnalysis false.
-- notes: the manual's notes worth hearing at the bench, each on what it is about: "general" (intended use, interfering substances, handling), "analysis" (how readings become results), or the id of the component or mix it is about (how to make, store or recognize it). kind "expected", "tip", "caution" or "info"; text: one sentence in Chapp's own words; cite keeps the manual's words. Leave out notes about a single step.
+- notes: the manual's notes worth hearing at the bench, each on what it is about: "general" (intended use, interfering substances, handling), "analysis" (how readings become results), or the id of the component or mix it is about (how to make, store or recognize it). kind "expected", "tip", "caution" or "info" (${KINDS}); text: one sentence in Chapp's own words; cite keeps the manual's words. Leave out notes about a single step.
 - defaults: the procedure to start with (the overview's), and the number of unknown samples (not counting the standards or blanks) and of replicates when the manual works an example run (0 if not), with defaultsCite: that example.`;
 
 /** The inventory's ids and names, for the calls that point at them. */
@@ -493,6 +503,9 @@ const cleanTitle = (title: string) => title.replace(/[™®]/g, '').replace(/\s+
 /** An intro worth showing: a name, what the kit is for and at least one at-a-glance line. */
 const usable = (intro: Intro | null | undefined): intro is Intro => Boolean(intro && cleanTitle(intro.title || intro.kitName) && intro.summary && intro.overviewSteps.length);
 
+/** The at-a-glance summary's expected results, when it gives some. */
+const expectedOf = (lines: string[]) => (lines.length ? { expected: lines.map(micro) } : {});
+
 /**
  * The intro → what the Overview shows first (shared/ai.ts ProtocolIntro), or null when it says too little. `url` is
  * the manual's address on the web; an upload has none until it is saved, so its source links nowhere yet.
@@ -510,7 +523,7 @@ export function introOf(intro: Intro, url = ''): ProtocolIntro | null {
     summary: micro(intro.summary),
     kit: { name: intro.kitName, vendor: intro.vendor, catalogs: intro.catalogs },
     source: { title: intro.docTitle || intro.kitName, publisher: intro.publisher || intro.vendor, docId: intro.docId, revision: intro.revision.replace(/^rev(?:ision)?\.?\s*/i, ''), url },
-    overview: { steps: intro.overviewSteps.map(micro), cite },
+    overview: { steps: intro.overviewSteps.map(micro), ...expectedOf(intro.overviewExpected), cite },
     procedure: { name: intro.procedureName, steps: intro.steps.filter(x => x.text).map(x => ({ text: micro(x.text), page: Math.max(1, x.page || 1) })), others: intro.otherProcedures },
     contents: intro.contents.filter(x => x.name).map(x => ({ name: x.name, amount: micro(x.amount) })),
   };
@@ -684,7 +697,8 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
   }
   const procedures = unique(
     procedureRows.flatMap(p => {
-      const steps = stepRows.filter(s => s.procedure === p.id).map(s => {
+      const rows = stepRows.filter(s => s.procedure === p.id);
+      const built = rows.map(s => {
         const add = st.additions
           .filter(a => ref(a.stepId) === s.id)
           .flatMap(a => {
@@ -741,6 +755,13 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
           cite: citeOr(s.cite, `step ${s.id}`),
         };
       });
+      // Reagent prep apart from the experiment's steps; a procedure read as nothing but prep keeps it all as steps.
+      let prep = built.filter((_, i) => rows[i]!.before);
+      let steps = built.filter((_, i) => !rows[i]!.before);
+      if (!steps.length && prep.length) {
+        dropped.push(`procedure ${p.id}: every step was reagent prep; kept as its steps`);
+        [steps, prep] = [prep, []];
+      }
       if (!steps.length) {
         dropped.push(`procedure ${p.id}: no steps`);
         return [];
@@ -759,6 +780,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
         ...(assay && ref(p.mix) ? { mix: ref(p.mix) } : {}),
         ...(assay && ref(p.curve) ? { standardCurve: ref(p.curve) } : {}),
         ...(r ? { range: r } : {}),
+        ...(prep.length ? { prep } : {}),
         steps,
         // Not asked for (the app shows none): the procedure's first step.
         cite: steps[0]!.cite,
@@ -773,7 +795,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
   // Citations the wire does not carry (the app shows none), from the facts they go with: a kit bottle where the kit
   // lists it, a bottle the user brings where a table or mix uses it, a piece of equipment at the first step using it.
   const kitCite = citeOr(inv.kitCite, 'kit');
-  const allSteps = procedures.flatMap(p => p.steps);
+  const allSteps = procedures.flatMap(p => [...(p.prep ?? []), ...p.steps]);
   for (const e of equipment) e.cite = allSteps.find(x => x.equipment?.includes(e.id))?.cite ?? kitCite;
   for (const c of components) {
     c.cite = c.suppliedBy === 'kit'
@@ -824,7 +846,9 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
     : null;
   // What the Overview said first (the intro) stays; the deep read's own words fill in when there was no intro.
   const first = usable(parts.intro) ? parts.intro : null;
-  const glance = first ? { steps: first.overviewSteps, cite: first.overviewCite } : { steps: nt.overviewSteps, cite: nt.overviewCite };
+  const glance = first
+    ? { steps: first.overviewSteps, expected: first.overviewExpected, cite: first.overviewCite }
+    : { steps: nt.overviewSteps, expected: nt.overviewExpected, cite: nt.overviewCite };
   const overviewSteps = glance.steps.length ? glance.steps.map(micro) : procedures.find(p => p.id === defaultsProcedure)!.steps.map(s => s.key);
 
   const title = cleanTitle(first?.title || nt.title || inv.kitName || inv.docTitle);
@@ -850,6 +874,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
     overview: {
       procedure: procedureIds.has(ref(nt.overviewProcedure)) ? ref(nt.overviewProcedure) : defaultsProcedure,
       steps: overviewSteps,
+      ...expectedOf(glance.expected),
       cite: citeOr(glance.cite, 'overview'),
     },
     components,
@@ -885,7 +910,7 @@ export function introFromProtocol(p: Protocol): ProtocolIntro {
     summary: p.summary,
     kit: { name: p.kit.name, vendor: p.kit.vendor, catalogs: p.kit.variants.map(v => v.catalog) },
     source: { title, publisher, docId, revision, url },
-    overview: { steps: p.overview.steps, cite: p.overview.cite },
+    overview: { steps: p.overview.steps, ...(p.overview.expected?.length ? { expected: p.overview.expected } : {}), cite: p.overview.cite },
     procedure: {
       name: procedure.name,
       steps: procedure.steps.map(x => ({ text: x.key, page: x.cite.page })),

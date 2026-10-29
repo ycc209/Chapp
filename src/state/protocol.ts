@@ -1,5 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Protocol } from '../../shared/protocol.ts';
+import { Protocol, type ProtocolSummary } from '../../shared/protocol.ts';
+
+/** Every protocol on this computer (GET /api/protocols), the newest first: null while it loads. Asked once per mount. */
+export function useProtocolList(): { list: ProtocolSummary[] | null; error: string | null } {
+  const [state, setState] = useState<{ list: ProtocolSummary[] | null; error: string | null }>({ list: null, error: null });
+  useEffect(() => {
+    let live = true;
+    fetch('/api/protocols')
+      .then(async res => {
+        if (!res.ok) throw new Error(`Your protocols failed to load (${res.status}).`);
+        return (await res.json()) as ProtocolSummary[];
+      })
+      .then(
+        list => live && setState({ list, error: null }),
+        (error: unknown) => live && setState({ list: null, error: error instanceof Error ? error.message : String(error) }),
+      );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return state;
+}
 
 // One request per protocol per page load: every screen of a run reads the same document.
 const loads = new Map<string, Promise<Protocol>>();

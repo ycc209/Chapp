@@ -187,11 +187,12 @@ export function whenSaid(iso: string, now = new Date()) {
 /**
  * What importing writes into the labmate's run: the protocol, procedure and plan, the results when they came along,
  * and a fresh start (step 0, nothing ticked, no timers). A trimmed share keeps the labmate's own plan. Their own kit
- * photos stay when the protocol is the same; photos that came with the share fill the bottles they have none of.
+ * photos stay: the run's when the protocol is the same, else those they took of this kit before (`kit`, from
+ * state/library.ts); photos that came with the share fill the bottles they have none of.
  */
-export function importPatch(share: StoredShare, current: RunSnapshot): Partial<RunState> {
+export function importPatch(share: StoredShare, current: RunSnapshot, kit: Record<string, string> = {}): Partial<RunState> {
   const sameKit = current.protocolId === share.protocolId;
-  const photos: Record<string, string> = sameKit ? { ...current.photos } : {};
+  const photos: Record<string, string> = sameKit ? { ...current.photos } : { ...kit };
   for (const c of share.kit) if (c.photo && !photos[c.id]) photos[c.id] = c.photo;
   const plan = share.plan ? sharedRunPlan(share.procedure, share.plan) : current;
   return {

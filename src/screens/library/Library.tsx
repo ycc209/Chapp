@@ -1,18 +1,17 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import type { Protocol } from '../../../shared/protocol.ts';
+import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
-import { useProtocol } from '../../state/protocol.ts';
-import { useRun } from '../../state/run.ts';
+import { librarySections, saveProtocol, unsaveProtocol, useKits, useMine, useRoom, type LibraryRow } from '../../state/library.ts';
+import { useProtocol, useProtocolList } from '../../state/protocol.ts';
+import { runStarted, useRun } from '../../state/run.ts';
 import { useSharedLibrary } from './store.ts';
 
-// The protocols this app has; only the BCA kit so far (data/protocols/).
-const SAVED = ['pierce-bca'];
-
 /**
- * /library: My-Library ("Library", the protocols saved on this phone; opening one goes to its protocol) and, with
- * ?view=shared, Library ("Shared library", Soon in the sidebar: your setups to upload, and an empty shelf for others').
- * Both come from the sidebar and go back to it.
+ * /library: My-Library ("Library", this phone's protocols: Saved, Recent, and the other kits Chapp has read on this
+ * computer; opening one makes it the run, asking first when another run is under way) and, with ?view=shared, Library
+ * ("Shared library", Soon in the sidebar: your setups to upload, and an empty shelf for others'). Both come from the
+ * sidebar and go back to it. What is mine and each kit's photos: state/library.ts.
  */
 export function LibraryScreen() {
   const [params] = useSearchParams();
@@ -22,13 +21,51 @@ export function LibraryScreen() {
 // The design's page: 56 px from the top (under the status bar), 20 at the sides, 34 at the bottom.
 const PAGE = 'flex h-full flex-col gap-[18px] overflow-y-auto bg-bg px-5 pt-[calc(56px+var(--screen-top))] pb-[var(--screen-bottom)] text-text [scrollbar-width:none]';
 const CARD = 'grid items-center gap-3 rounded-[20px] bg-white py-3 pr-3.5 pl-3 shadow-[0_1px_2px_rgba(17,17,19,0.03),0_4px_14px_rgba(17,17,19,0.05)]';
+const SHADOW = 'rounded-[20px] bg-white shadow-[0_1px_2px_rgba(17,17,19,0.03),0_4px_14px_rgba(17,17,19,0.05)]';
 const CAPTION = 'mx-1 my-0 text-[13px] leading-[18px] font-semibold text-text';
+const NOTE = 'mx-1 my-0 text-[15px] leading-5 text-muted';
 const SIDEBAR = '/?state=sidebar';
+/** Kit photos shown on a card; the rest are counted. */
+const THUMBS = 4;
 
 function MyLibrary() {
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const runProtocol = useRun(s => s.protocolId);
-  const ids = runProtocol && !SAVED.includes(runProtocol) ? [...SAVED, runProtocol] : SAVED;
+  const { list, error } = useProtocolList();
+  const mine = useMine(s => s.protocols);
+  const full = useRoom(s => s.full);
+  const runId = useRun(s => s.protocolId);
+  const started = useRun(runStarted);
+  // The protocol the user tapped while another run is under way: its card asks before the run is replaced.
+  const [asking, setAsking] = useState<string | null>(null);
+  const { saved, recent, others } = librarySections(list ?? [], mine, query);
+  const rows = [...saved, ...recent, ...others];
+  const runTitle = rows.find(r => r.id === runId)?.title ?? 'current';
+
+  const go = (id: string) => {
+    if (id !== useRun.getState().protocolId) useRun.getState().setProtocol(id);
+    navigate('/protocol');
+  };
+  const open = (id: string) => (id !== runId && runId && started ? setAsking(id) : go(id));
+  const toggle = (row: LibraryRow) => {
+    if (row.savedAt === null) {
+      if (!saveProtocol(row.id, { title: row.title })) toast('This phone has no room left to save it.');
+      return;
+    }
+    const was = unsaveProtocol(row.id);
+    toast(`Removed ${row.title} from Saved`, { action: { label: 'Undo', onClick: () => saveProtocol(row.id, { title: row.title, at: was ?? Date.now() }) } });
+  };
+  const card = (row: LibraryRow) => (
+    <Card
+      key={row.id}
+      row={row}
+      current={row.id === runId}
+      onOpen={() => open(row.id)}
+      onToggle={() => toggle(row)}
+      asking={asking === row.id ? { run: runTitle, onOpen: () => go(row.id), onKeep: () => setAsking(null) } : null}
+    />
+  );
+
   return (
     <div className={PAGE}>
       <Header title="Library">
@@ -39,55 +76,112 @@ function MyLibrary() {
         </Link>
       </Header>
       <Search label="Search your protocols" placeholder="Search your protocols" value={query} onChange={setQuery} />
-      <section aria-label="Saved" className="flex flex-col gap-2">
-        <p className={CAPTION}>Saved</p>
-        {ids.map(id => (
-          <Saved key={id} id={id} query={query} />
-        ))}
-      </section>
+      {full && (
+        <p role="alert" className={NOTE}>
+          This phone is out of room: new kit photos may not be kept.
+        </p>
+      )}
+      {error && <p className={NOTE}>{error}</p>}
+      {(list || error) && (
+        <>
+          <section aria-label="Saved" className="flex flex-col gap-2">
+            <p className={CAPTION}>Saved</p>
+            {saved.length === 0 && !query && <p className={NOTE}>Nothing saved yet. Tap the bookmark on a protocol to keep it here.</p>}
+            {saved.map(card)}
+          </section>
+          {recent.length > 0 && (
+            <section aria-label="Recent" className="flex flex-col gap-2">
+              <p className={CAPTION}>Recent</p>
+              {recent.map(card)}
+            </section>
+          )}
+          {others.length > 0 && (
+            <section aria-label="Other kits Chapp has read" className="flex flex-col gap-2">
+              <p className={CAPTION}>Other kits Chapp has read</p>
+              {others.map(card)}
+            </section>
+          )}
+          {query && rows.length === 0 && <p className={NOTE}>Nothing matches “{query.trim()}”.</p>}
+        </>
+      )}
     </div>
   );
 }
 
-/** One saved protocol, as Library's card: opens its protocol screen. Marked "Just saved" while it is the run's. */
-function Saved({ id, query }: { id: string; query: string }) {
-  const navigate = useNavigate();
-  const { protocol, error } = useProtocol(id);
-  const runProtocol = useRun(s => s.protocolId);
-  const runProcedure = useRun(s => s.procedure);
-  if (error) return <p className="mx-1 my-0 text-[15px] leading-5 text-muted">{error}</p>;
-  if (!protocol || !matches(protocol, query)) return null;
-  const current = runProtocol === id;
-  const procedure = protocol.procedures.find(p => p.id === (current ? runProcedure : protocol.defaults.procedure)) ?? protocol.procedures[0]!;
+type Asking = { run: string; onOpen: () => void; onKeep: () => void };
+
+/**
+ * One protocol as Library's card: the user's kit photos when they took any, "This run" on the run's own, and the
+ * bookmark that saves it or takes it out of Saved. A protocol no longer on this computer can only be taken out.
+ */
+function Card({ row, current, onOpen, onToggle, asking }: { row: LibraryRow; current: boolean; onOpen: () => void; onToggle: () => void; asking: Asking | null }) {
+  const photos = useKits(s => s.kits[row.id]);
+  const shots = Object.values(photos ?? {});
+  const saved = row.savedAt !== null;
+  const gone = row.summary === null;
   return (
-    <Link
-      to="/protocol"
-      onClick={e => {
-        // Another protocol than the run's: switch the run to it (a fresh start) before opening it.
-        if (current) return;
-        e.preventDefault();
-        useRun.getState().setProtocol(id);
-        navigate('/protocol');
-      }}
-      className={cn(CARD, 'grid-cols-[44px_minmax(0,1fr)_16px] text-ink no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue')}
-    >
-      <BookIcon />
-      <span className="flex min-w-0 flex-col gap-[3px]">
-        <span className="text-base leading-5 font-[650] text-ink">{protocol.title}</span>
-        <span className="flex items-center gap-1.5 text-[13px] leading-[18px] text-text">
-          {current && <span className="rounded-lg bg-sample-bg px-[7px] py-px text-[11px] leading-4 font-bold text-sample-ink">Just saved</span>}
-          {procedure.name} · {procedure.steps.length} steps
-        </span>
-      </span>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6c6c72" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="m9 6 6 6-6 6" />
-      </svg>
-    </Link>
+    <div className={cn(SHADOW, 'flex flex-col')}>
+      <div className="grid grid-cols-[minmax(0,1fr)_44px] items-center gap-1 py-1.5 pr-1.5 pl-3">
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={gone}
+          aria-expanded={asking ? true : undefined}
+          className="grid min-w-0 grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-blue"
+        >
+          <BookIcon />
+          <span className="flex min-w-0 flex-col gap-[3px]">
+            <span className="text-base leading-5 font-[650] text-ink">{row.title}</span>
+            <span className="flex items-center gap-1.5 text-[13px] leading-[18px] text-text">
+              {current && <span className="shrink-0 rounded-lg bg-sample-bg px-[7px] py-px text-[11px] leading-4 font-bold text-sample-ink">This run</span>}
+              {row.summary ? `${row.summary.procedure} · ${row.summary.steps} steps` : 'Not on this computer anymore'}
+            </span>
+            {shots.length > 0 && (
+              <span aria-label={`Your kit: ${shots.length} ${shots.length === 1 ? 'photo' : 'photos'}`} className="mt-1 flex items-center gap-1.5">
+                {shots.slice(0, THUMBS).map((src, i) => (
+                  <img key={i} src={src} alt="" className="size-8 rounded-lg object-cover" />
+                ))}
+                {shots.length > THUMBS && <span className="text-[13px] leading-[18px] font-semibold text-text">+{shots.length - THUMBS}</span>}
+              </span>
+            )}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={saved}
+          aria-label={saved ? `Saved: ${row.title}` : `Save ${row.title}`}
+          className="flex size-11 items-center justify-center rounded-full text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true">
+            <path d="M6 3h12v18l-6-4-6 4z" />
+          </svg>
+        </button>
+      </div>
+      {asking && (
+        <div role="group" aria-label="Replace the run" className="mx-3 mb-3 flex flex-col gap-2.5 border-t border-line pt-3">
+          <p className="m-0 text-[15px] leading-5 text-ink">
+            Your <b className="font-semibold">{asking.run}</b> run is under way. Open {row.title} instead? That run’s ticks, timers and readings are cleared.
+          </p>
+          <div className="flex gap-2">
+            <button type="button" onClick={asking.onOpen} className="min-h-10 rounded-full bg-ink px-3.5 text-sm leading-[18px] font-[650] text-white outline-none focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-offset-2">
+              Open it
+            </button>
+            <button type="button" onClick={asking.onKeep} className="min-h-10 rounded-full bg-sunken px-3.5 text-sm leading-[18px] font-[650] text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue">
+              Keep my run
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 function SharedLibrary() {
   const [query, setQuery] = useState('');
+  const mine = useMine(s => s.protocols);
+  const sharedIds = useSharedLibrary(s => s.ids);
+  const ids = [...new Set([...Object.keys(mine).filter(id => mine[id]!.savedAt !== null), ...sharedIds])];
   return (
     <div className={PAGE}>
       <Header title="Shared library">
@@ -100,7 +194,8 @@ function SharedLibrary() {
       <Search label="Search kits or protocols" placeholder="Kit name or catalog number" value={query} onChange={setQuery} />
       <section aria-label="Your setups" className="flex flex-col gap-2">
         <p className={CAPTION}>Your setups</p>
-        {SAVED.map(id => (
+        {ids.length === 0 && <p className={NOTE}>Save a protocol to your library first; then you can share it here.</p>}
+        {ids.map(id => (
           <Setup key={id} id={id} query={query} />
         ))}
       </section>
@@ -124,7 +219,7 @@ function Setup({ id, query }: { id: string; query: string }) {
   const { protocol } = useProtocol(id);
   const shared = useSharedLibrary(s => s.ids.includes(id));
   const add = useSharedLibrary(s => s.add);
-  if (!protocol || !matches(protocol, query)) return null;
+  if (!protocol || !matches([protocol.title, protocol.kit.name, ...protocol.kit.variants.map(v => v.catalog)], query)) return null;
   return (
     <div className={cn(CARD, 'grid-cols-[44px_minmax(0,1fr)_auto]')}>
       <BookIcon />
@@ -146,10 +241,10 @@ function Setup({ id, query }: { id: string; query: string }) {
 }
 
 /** A protocol matches a search by its title, kit name or a catalog number. */
-function matches(p: Protocol, query: string) {
+function matches(fields: string[], query: string) {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return [p.title, p.kit.name, ...p.kit.variants.map(v => v.catalog)].some(s => s.toLowerCase().includes(q));
+  return fields.some(s => s.toLowerCase().includes(q));
 }
 
 const CORNER = 'flex size-11 items-center justify-center rounded-full text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue';

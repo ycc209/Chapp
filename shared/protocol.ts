@@ -36,7 +36,11 @@ export const Cite = z
   })
   .refine(c => c.quote || c.table || c.figure, 'a citation needs a quote, a table or a figure');
 
-/** A short line shown next to a step. `text` is Chapp's own wording; `cite` points at the original. */
+/**
+ * A short line shown next to a step. `text` is Chapp's own wording; `cite` points at the original. `expected` is what
+ * the user should see or get when it works ("the solution turns blue", "lipid droplets by day 7–10"): never a step of
+ * its own, it goes with the step whose result it is.
+ */
 export const Note = z.object({
   kind: z.enum(['expected', 'tip', 'caution', 'info']),
   text: z.string().min(1),
@@ -178,6 +182,12 @@ export const Procedure = z.object({
   mix: Id.optional(),
   standardCurve: Id.optional(),
   range: Range.optional(),
+  /**
+   * Reagent prep: getting the kit's reagents ready before the experiment, as the manual's reagent preparation says
+   * (reconstitute or dissolve a vial, warm or equilibrate, make a working buffer from a concentrate, spin the tubes).
+   * Done ahead, often once per kit, so it is kept apart from `steps`, which are the experiment itself.
+   */
+  prep: z.array(Step).optional(),
   steps: z.array(Step).min(1),
   cite: Cite,
 });
@@ -201,8 +211,11 @@ export const Protocol = z.object({
   summary: z.string(),
   source: Source,
   kit: Kit,
-  /** The source's own at-a-glance summary of one procedure. */
-  overview: z.object({ procedure: Id, steps: z.array(z.string()).min(1), cite: Cite }),
+  /**
+   * The source's own at-a-glance summary of one procedure: what the user does (`steps`), and apart from them what it
+   * says they will see or get (`expected`: "Visible lipid droplets 7–10 days after differentiation medium").
+   */
+  overview: z.object({ procedure: Id, steps: z.array(z.string()).min(1), expected: z.array(z.string()).optional(), cite: Cite }),
   components: z.array(Component).min(1),
   equipment: z.array(Equipment),
   mixes: z.array(Mix),
@@ -229,6 +242,9 @@ export type Step = z.infer<typeof Step>;
 export type Procedure = z.infer<typeof Procedure>;
 export type Analysis = z.infer<typeof Analysis>;
 export type Protocol = z.infer<typeof Protocol>;
+
+/** A protocol as Library lists it (GET /api/protocols): its card and what a search looks in. `updated` in ms. */
+export type ProtocolSummary = { id: string; title: string; kit: string; catalogs: string[]; procedure: string; steps: number; updated: number };
 
 const ASSAY = ['ratio', 'sample', 'mixPerSample', 'mix', 'standardCurve', 'range'] as const;
 
@@ -313,7 +329,7 @@ export function problems(p: Protocol): string[] {
     if (isAssay(proc) && !p.analysis) out.push(`procedure ${proc.id} is an assay but the protocol has no analysis`);
     need(mixes, proc.mix, `procedure ${proc.id}`);
     need(curves, proc.standardCurve, `procedure ${proc.id}`);
-    for (const step of proc.steps) {
+    for (const step of [...(proc.prep ?? []), ...proc.steps]) {
       const where = `step ${step.id}`;
       need(curves, step.standardCurve, where);
       need(mixes, step.mix, where);
