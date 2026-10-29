@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
+import type { A2uiMessage } from '../../../shared/a2ui.ts';
 import type { Action, ConverseContext, ConverseReply } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { api } from '../../api/client.ts';
@@ -8,13 +9,15 @@ import { applyActions } from '../../state/actions.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { useSession } from '../../state/session.ts';
+import { useShown } from '../../state/shown.ts';
+import { useBench } from '../run/bench.ts';
 import { matchCommand } from '../../voice/commands.ts';
 import { speak } from '../../voice/speak.ts';
 
 /** One exchange with Chapp: what the user said, then Chapp thinking, then its answer (or a failure). */
 export type Turn =
   | { id: number; text: string; phase: 'thinking' }
-  | { id: number; text: string; phase: 'reply'; say: string }
+  | { id: number; text: string; phase: 'reply'; say: string; a2ui?: A2uiMessage[]; confirm?: Action[] }
   | { id: number; text: string; phase: 'error' };
 
 // After Chapp has finished speaking, how long its face keeps the reply's expression before going back to neutral.
@@ -104,8 +107,9 @@ export function useConverse(screen: string) {
       session.setExpression(face);
       session.setExchange({ ask: text, say: reply.say });
       session.addTurns({ role: 'user', text }, { role: 'chapp', text: reply.say });
-      setTurn({ id, text, phase: 'reply', say: reply.say });
-      applyActions(reply.actions, navigate);
+      if (reply.a2ui) useShown.getState().clear();
+      setTurn({ id, text, phase: 'reply', say: reply.say, ...(reply.a2ui ? { a2ui: reply.a2ui } : {}), ...(reply.confirm ? { confirm: reply.confirm } : {}) });
+      applyActions(reply.actions, navigate, protocolRef.current);
       if (reply.say) await speak(reply.say).catch(() => {});
       settle(id, face, SETTLE_MS);
     },
@@ -142,8 +146,8 @@ export function useConverse(screen: string) {
  */
 export function converseContext(screen: string, protocol: Protocol | null, at: Partial<ConverseContext> = {}): ConverseContext {
   const run = useRun.getState();
-  // On Home with no kit yet, or after New conversation set the run aside: nothing to assume.
-  if (screen === 'home' && (!run.protocolId || run.aside)) return { screen, ...at };
+  // On Home or in the conversation with no kit yet, or after New conversation set the run aside: nothing to assume.
+  if ((screen === 'home' || screen === 'chat') && (!run.protocolId || run.aside)) return { screen, ...at };
   const now = Date.now();
   const timers = Object.entries(run.timers).map(([id, ends]) => ({ id, secondsLeft: Math.max(0, Math.round((ends - now) / 1000)) }));
   const step = at.step ?? run.step;
@@ -154,6 +158,8 @@ export function converseContext(screen: string, protocol: Protocol | null, at: P
   } catch {
     // A procedure the protocol does not have: no title.
   }
+  const lengths = useBench.getState().lengths;
+  const shown = useShown.getState().plan;
   return {
     screen,
     protocolId: run.protocolId,
@@ -165,6 +171,9 @@ export function converseContext(screen: string, protocol: Protocol | null, at: P
     standards: run.standards,
     ...(timers.length ? { timers } : {}),
     readingsFrom: run.readingsFrom,
+    ...(Object.keys(lengths).length ? { lengths } : {}),
+    ...(Object.keys(run.edits.moved).length || run.edits.added.length ? { edits: run.edits } : {}),
+    ...(shown && (shown.samples !== run.samples || shown.replicates !== run.replicates) ? { shown } : {}),
     ...at,
   };
 }
@@ -182,6 +191,12 @@ export function acknowledge(actions: Action[]): string {
         case 'previousStep': return 'Back one step.';
         case 'markDone': return 'Done.';
         case 'startTimer': return 'Timer started.';
+        case 'setStepTime': return 'Changed for this run.';
+        case 'redo': return `${action.id} again.`;
+        case 'moveWell': return `${action.from} moved.`;
+        case 'addWell':
+        case 'addCondition':
+          return 'Added.';
         case 'navigate': return 'Okay.';
         case 'findProtocol': return 'Looking it up.';
       }

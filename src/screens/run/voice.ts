@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useNavigate } from 'react-router';
 import type { Action, ConverseContext, Source } from '../../../shared/ai.ts';
+import type { Protocol } from '../../../shared/protocol.ts';
 import { api } from '../../api/client.ts';
 import { applyActions } from '../../state/actions.ts';
 import { useSession } from '../../state/session.ts';
@@ -11,11 +12,14 @@ import { runCommand, spoken, type RunCommand } from './model.ts';
 /** A question the user asked at the bench and Chapp's answer, with the pages of the manual it rests on. */
 export type Exchange =
   | { id: number; ask: string; phase: 'thinking' }
-  | { id: number; ask: string; phase: 'reply'; say: string; sources: Source[] }
+  | { id: number; ask: string; phase: 'reply'; say: string; sources: Source[]; confirm?: Action[]; done?: string[]; command?: boolean }
   | { id: number; ask: string; phase: 'error' };
 
-/** What the screen does with a command; null when it does not apply here (then it goes on to Chapp). */
-export type Handled = { say: string } | null;
+/**
+ * What the screen does with a command; null when it does not apply here (then it goes on to Chapp). `show` puts the
+ * words on screen under what was said, for a change the plate alone does not explain (a well moved, a vial redone).
+ */
+export type Handled = { say: string; show?: boolean } | null;
 
 export type RunHandlers = {
   /** The run's own words: the timer, the incubation length, the photo, the sample export, yes or no, "done". */
@@ -23,6 +27,8 @@ export type RunHandlers = {
   /** The bench commands every screen knows: next, back, "C is OK", the plan's numbers. */
   command: (actions: Action[], said: string) => Handled;
   context: () => ConverseContext;
+  /** The run's protocol: where a well Chapp moves or adds goes. */
+  protocol: () => Protocol | null;
 };
 
 // After Chapp has finished speaking, how long its face keeps the reply's expression.
@@ -72,7 +78,7 @@ export function useRunVoice(handlers: RefObject<RunHandlers>) {
       const actions = matchCommand(text);
       const handled = (local && h.local(local, text)) || (actions && h.command(actions, text)) || null;
       if (handled) {
-        setExchange(null);
+        setExchange(handled.show ? { id, ask: text, phase: 'reply', say: handled.say, sources: [], command: true } : null);
         session.setStatus('');
         session.setExpression('happy');
         if (handled.say) await speak(spoken(handled.say)).catch(() => {});
@@ -91,8 +97,8 @@ export function useRunVoice(handlers: RefObject<RunHandlers>) {
         session.setStatus('');
         session.setExpression(face);
         session.setExchange({ ask: text, say: reply.say });
-        setExchange({ id, ask: text, phase: 'reply', say: reply.say, sources: reply.sources });
-        applyActions(reply.actions, navigate);
+        const done = applyActions(reply.actions, navigate, h.protocol());
+        setExchange({ id, ask: text, phase: 'reply', say: reply.say, sources: reply.sources, ...(reply.confirm ? { confirm: reply.confirm } : {}), ...(done.length ? { done } : {}) });
         if (reply.say) await speak(spoken(reply.say)).catch(() => {});
         settle(id, face);
       } catch {

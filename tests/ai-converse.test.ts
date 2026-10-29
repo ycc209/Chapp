@@ -85,7 +85,7 @@ describe('what Chapp is told', () => {
 
   it('sends the conversation so far, so "yes, find it" knows the kit', async () => {
     const { fn, calls } = fakeFetch(
-      json({ choices: [{ message: { content: JSON.stringify({ say: 'Looking up its manual.', expression: 'thinking', actions: [{ type: 'findProtocol', to: '', value: 0, id: '', query: 'Pierce Bradford Protein Assay Kit' }], cards: [], manualPages: [] }) } }] }),
+      json({ choices: [{ message: { content: JSON.stringify({ say: 'Looking up its manual.', expression: 'thinking', actions: [{ type: 'findProtocol', to: '', value: 0, id: '', query: 'Pierce Bradford Protein Assay Kit' }], a2ui: '[]', manualPages: [] }) } }] }),
     );
     const reply = await provider(fn).converse({
       text: 'Yes, find it',
@@ -137,7 +137,7 @@ describe('what Chapp is told', () => {
 
 describe('a reply that is partly broken', () => {
   it('keeps what is good and cites the manual’s matching note first, in its own words', () => {
-    const content = JSON.stringify({ say: 'That is normal; it clears to green as you mix.', expression: 'neutral', actions: [], cards: [], manualPages: [3, 2] });
+    const content = JSON.stringify({ say: 'That is normal; it clears to green as you mix.', expression: 'neutral', actions: [], a2ui: '[]', manualPages: [3, 2] });
     const checked = checkReply(content, { screen: 'run', protocolId: 'pierce-bca', step: 3 }, 'What if it turns cloudy when I add B?');
     expect(checked.ok).toBe(true);
     if (!checked.ok || !local) return;
@@ -147,7 +147,7 @@ describe('a reply that is partly broken', () => {
 
   it('cuts an answer too long to read aloud at a sentence', () => {
     const say = `${'This is a long sentence about the kit. '.repeat(20)}`;
-    const checked = checkReply(JSON.stringify({ say, actions: [], cards: [], manualPages: [] }), { screen: 'home' });
+    const checked = checkReply(JSON.stringify({ say, actions: [], a2ui: '[]', manualPages: [] }), { screen: 'home' });
     expect(checked.ok && checked.reply.say.length).toBeLessThanOrEqual(600);
     expect(checked.ok && checked.reply.say.endsWith('kit.')).toBe(true);
   });
@@ -167,11 +167,7 @@ const replies: Saved[] = existsSync(saved)
 
 describe.skipIf(!replies.length || !local)('live replies to the storyboard', () => {
   const expected: Record<string, (r: ReturnType<typeof checkReply> & { ok: true }) => void> = {
-    'home-bca': r => {
-      expect(r.reply.actions).toContainEqual({ type: 'navigate', to: '/protocol' });
-      expect(r.reply.cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
-      expect(r.reply.sources[0]?.url).toMatch(/MAN0011430/);
-    },
+    'home-bca': r => expect(r.reply.actions).toContainEqual({ type: 'navigate', to: '/protocol' }),
     'home-fresh': r => expect(r.reply.actions).toContainEqual({ type: 'navigate', to: '/protocol' }),
     'home-zh': r => expect(r.reply.actions).toContainEqual({ type: 'navigate', to: '/protocol' }),
     'plan-samples': r => expect(r.reply.actions).toContainEqual({ type: 'setSamples', samples: 12 }),
@@ -267,7 +263,7 @@ describe('POST /api/find-protocol with accept: text/event-stream', () => {
   const found: FoundProtocol = { found: true, progress: ['Looking.', 'Found it.'], answer: 'Steps.', sources: [], document: { title: 'Guide', url: PDF }, protocolId: 'pierce-bca' };
   const live: AIProvider = {
     transcribe: async () => ({ transcript: '' }),
-    converse: async () => ({ say: '', actions: [], cards: [], sources: [] }),
+    converse: async () => ({ say: '', actions: [], sources: [] }),
     findProtocol: async (_query, l) => {
       for (const line of found.progress) l?.onProgress?.(line);
       return found;

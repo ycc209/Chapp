@@ -127,7 +127,8 @@ function PlanContent({ protocol, procedure, heard, open0, changed0 }: ContentPro
   const standardReplicates = useRun(s => s.standardReplicates);
   const standards = useRun(s => s.standards);
   const picked = isPicked(usePlanView(s => s.picked), standards);
-  const plan = useMemo(() => ({ samples, replicates, standardReplicates, standards }), [samples, replicates, standardReplicates, standards]);
+  const edits = useRun(s => s.edits);
+  const plan = useMemo(() => ({ samples, replicates, standardReplicates, standards, edits }), [samples, replicates, standardReplicates, standards, edits]);
   const v = useMemo(() => planFor(protocol, procedure, plan), [protocol, procedure, plan]);
 
   const [open, setOpen] = useState<Section | ''>(open0);

@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router';
 import { PhoneFrame } from './app/PhoneFrame.tsx';
 import { LabGallery } from './components/lab/Gallery.tsx';
+import { ChatScreen } from './screens/chat/Chat.tsx';
 import { Home } from './screens/home/Home.tsx';
 import { Intro } from './screens/intro/Intro.tsx';
 import { KitScreen } from './screens/kit/Kit.tsx';
@@ -22,6 +23,7 @@ export function App() {
         <Route element={<PhoneFrame />}>
           <Route index element={<Home />} />
           <Route path="intro" element={<Intro />} />
+          <Route path="chat" element={<ChatScreen />} />
           <Route path="protocol" element={<ProtocolScreen />} />
           <Route path="kit" element={<KitScreen />} />
           <Route path="plan" element={<PlanScreen />} />

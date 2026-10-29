@@ -50,7 +50,7 @@ export function Ways({ v, value, onPick, className }: { v: PlanView; value: Way 
 }
 
 /** 1× 2× 3× on a grey track: the chosen one is a white pill. */
-function Replicates({ label, value, onChange }: { label: string; value: number; onChange: (k: number) => void }) {
+export function Replicates({ label, value, onChange }: { label: string; value: number; onChange: (k: number) => void }) {
   return (
     <div role="radiogroup" aria-label={label} className="grid grid-cols-3 rounded-[26px] bg-sunken p-1">
       {[1, 2, 3].map(k => {
@@ -76,7 +76,7 @@ function Replicates({ label, value, onChange }: { label: string; value: number; 
   );
 }
 
-const ROUND = cn('flex size-11 items-center justify-center rounded-[22px] bg-white p-0 text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue', SHADOW);
+export const ROUND = cn('flex size-11 items-center justify-center rounded-[22px] bg-white p-0 text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue', SHADOW);
 const NOTE = 'm-0 text-[15px] leading-[22px] text-text tabular-nums';
 const PANEL = 'flex flex-col gap-3 pr-1 pb-[18px] pl-9';
 

@@ -5,10 +5,11 @@ import type { ConverseTurn, Expression } from '../../shared/ai.ts';
  * What is happening right now, not kept across reloads: whether Chapp is listening, what it has heard so far, its
  * face and the line under its name.
  *
- * voice: idle, nothing open · listening, one thing said by tap (sent when the user stops) · talking, back-and-forth
- * conversation (hold Tap to speak and slide up), until the user ends it.
+ * voice: idle, nothing open · listening, one thing said by tap (sent when the user stops) · holding, Tap to speak held
+ * down (sent when it is let go, unless slid up to cancel) · talking, back-and-forth conversation (Chapp's conversation
+ * mode, gloves on), until the user ends it.
  */
-export type Voice = 'idle' | 'listening' | 'talking';
+export type Voice = 'idle' | 'listening' | 'holding' | 'talking';
 
 type Session = {
   voice: Voice;

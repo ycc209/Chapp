@@ -35,7 +35,7 @@ const transcribeOnServer = async (wav: Blob, signal: AbortSignal) => (await api.
  * it as a 16 kHz WAV to POST /api/voice. Nothing appears while the user speaks; the words come back in one piece.
  */
 export class ServerEngine implements Engine {
-  private readonly mode: Mode;
+  private mode: Mode;
   private readonly events: EngineEvents;
   private readonly transcribe: (wav: Blob, signal: AbortSignal) => Promise<string>;
   /** Cancels transcriptions still on their way when the engine stops. */
@@ -71,8 +71,16 @@ export class ServerEngine implements Engine {
 
   finish() {
     if (this.state === 'done' || this.state === 'sending') return;
-    if (this.mode === 'tap' && this.gate.heard && this.ctx) this.send(this.ctx.sampleRate, false);
+    if (this.mode !== 'talk' && this.gate.heard && this.ctx) this.send(this.ctx.sampleRate, false);
     else this.stop();
+  }
+
+  toTap() {
+    if (this.mode !== 'hold' || this.state !== 'listening') return;
+    this.mode = 'tap';
+    // Already quiet after speech: that was the pause that ends a tap.
+    if (this.gate.heard && !this.gate.speaking && this.ctx) this.send(this.ctx.sampleRate, false);
+    else if (!this.gate.heard) this.quietTimer = window.setTimeout(() => this.stop('no-speech'), NO_SPEECH_MS);
   }
 
   /** Lets go of the microphone while Chapp speaks: no echo, and iOS plays the answer on the speaker, not the earpiece. */
@@ -162,6 +170,13 @@ export class ServerEngine implements Engine {
     if (this.state !== 'listening') return;
     const ms = (chunk.length / rate) * 1000;
     const gate = this.gate.push(level(chunk), ms);
+    // Held, everything after the first word is kept, pauses too, until it is let go.
+    if (this.mode === 'hold' && this.speech.length) {
+      this.speech.push(chunk);
+      this.speechMs += ms;
+      if (this.speechMs >= MAX_TURN_MS) this.send(rate, false);
+      return;
+    }
     if (gate === 'quiet') {
       this.before.push(chunk);
       while (this.before.length > 1 && (this.before.length - 1) * ms > PREROLL_MS) this.before.shift();
@@ -179,13 +194,13 @@ export class ServerEngine implements Engine {
     if (gate === 'end' || this.speechMs >= MAX_TURN_MS) this.send(rate, gate === 'end');
   }
 
-  /** Sends this turn's recording to be transcribed. A tap closes the microphone first: there is nothing more to hear. */
+  /** Sends this turn's recording to be transcribed. A tap or a hold closes the microphone first: there is nothing more to hear. */
   private send(rate: number, endedByPause: boolean) {
     let samples = concat(this.speech);
     this.forget();
     if (endedByPause) samples = samples.subarray(0, Math.max(0, samples.length - Math.round(((SILENCE_MS - TAIL_MS) / 1000) * rate)));
     const wav = toWav(samples, rate);
-    if (this.mode === 'tap') {
+    if (this.mode !== 'talk') {
       this.state = 'sending';
       this.release();
     }
@@ -195,13 +210,13 @@ export class ServerEngine implements Engine {
         text = (await this.transcribe(wav, this.cancel.signal)).trim();
       } catch {
         if (this.state === 'done') return;
-        if (this.mode === 'tap') this.stop('failed');
+        if (this.mode !== 'talk') this.stop('failed');
         else this.events.warn('failed');
         return;
       }
       if (this.state === 'done') return;
       if (text) this.events.turn(text);
-      if (this.mode === 'tap') this.stop(text ? undefined : 'failed');
+      if (this.mode !== 'talk') this.stop(text ? undefined : 'failed');
     });
   }
 

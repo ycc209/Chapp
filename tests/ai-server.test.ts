@@ -22,7 +22,7 @@ const down: AIProvider = {
 const seen: { converse?: ConverseRequest; query?: string; wav?: number } = {};
 const spy: AIProvider = {
   transcribe: async wav => { seen.wav = wav.length; return { transcript: 'ok' }; },
-  converse: async request => { seen.converse = request; return { say: 'ok', actions: [], cards: [], sources: [] }; },
+  converse: async request => { seen.converse = request; return { say: 'ok', actions: [], sources: [] }; },
   findProtocol: async query => { seen.query = query; return { found: false, progress: [], answer: '', sources: [] }; },
 };
 
@@ -66,7 +66,6 @@ describe('routes with the mock provider', () => {
     const res = await postJson(mock, '/api/converse', { text: MOCK_TRANSCRIPT, context: { screen: 'home', protocolId: null } });
     expect(res.status).toBe(200);
     const reply = await res.json();
-    expect(reply.cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
     expect(reply.actions).toEqual([{ type: 'navigate', to: '/protocol' }]);
   });
 

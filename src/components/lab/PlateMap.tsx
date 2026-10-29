@@ -23,6 +23,8 @@ export type PlateMapProps = {
 
 const WELL = 'flex aspect-square w-full items-center justify-center rounded-full p-0 text-[9px] leading-[normal] font-bold';
 const EMPTY: CSSProperties = { background: 'var(--sunken)', color: 'var(--ink)' };
+// A well that went wrong during the run (PlatePlan.bad): left empty and not read.
+const BAD: CSSProperties = { background: 'var(--caution-bg)', color: 'var(--caution)', boxShadow: 'inset 0 0 0 1.5px var(--caution)' };
 
 function wellStyle(t: Tube, now: boolean): CSSProperties {
   if (now) return { background: 'var(--mark)', color: 'var(--ink)', boxShadow: '0 0 0 2px var(--ink)' };
@@ -58,9 +60,10 @@ export function PlateMap({ plan, now, skipped = [], onTube, dense, className, ..
           const tube = cell && plan.tubes[cell.tube];
           const shown = tube && !skipped.includes(tube.index) && (!loading || tube.index <= now);
           const isNow = !!shown && loading && tube.index === now;
-          const style = shown ? wellStyle(tube, isNow) : EMPTY;
-          const text = shown ? tube.ref : '';
-          const aria = shown ? `${tube.name} in ${name(r, c)}${isNow ? ', now' : loading ? ', loaded' : ''}` : `${name(r, c)}, empty`;
+          const bad = !cell && plan.bad.includes(name(r, c));
+          const style = shown ? wellStyle(tube, isNow) : bad ? BAD : EMPTY;
+          const text = shown ? tube.ref : bad ? '×' : '';
+          const aria = shown ? `${tube.name}${tube.label ? ` (${tube.label})` : ''} in ${name(r, c)}${isNow ? ', now' : loading ? ', loaded' : ''}` : bad ? `${name(r, c)}, went wrong, not read` : `${name(r, c)}, empty`;
           if (onTube) {
             return (
               <button

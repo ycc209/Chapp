@@ -1,7 +1,13 @@
 /**
  * Reads Chapp's answers aloud with the browser's own voices (speechSynthesis): free, instant and offline on phones.
  * While it speaks, `isSpeaking` is true and the microphone pauses, so Chapp does not hear itself.
+ *
+ * Chapp is silent for now (VOICE_OUTPUT): speak() and primeSpeech() do nothing, so no screen makes a sound. Turning
+ * the flag on brings every spoken answer back as it was.
  */
+
+/** Whether Chapp reads its answers aloud. Off: the user asked for no sound at all (2026-10-29). */
+export const VOICE_OUTPUT = false;
 
 /** A value others can read and watch. */
 export type Signal<T> = { get(): T; subscribe(listener: (value: T) => void): () => void };
@@ -46,6 +52,7 @@ let generation = 0;
 
 /** Reads `text` aloud, cutting off anything already being read; resolves when done, also when it fails. */
 export async function speak(text: string): Promise<void> {
+  if (!VOICE_OUTPUT) return;
   const s = synth();
   const busy = Boolean(s && (s.speaking || s.pending));
   stopSpeaking();
@@ -89,7 +96,7 @@ export async function speak(text: string): Promise<void> {
 let primed = false;
 export function primeSpeech() {
   const s = synth();
-  if (primed || !s) return;
+  if (!VOICE_OUTPUT || primed || !s) return;
   primed = true;
   const u = new SpeechSynthesisUtterance(' ');
   u.volume = 0;

@@ -107,6 +107,7 @@ export function ResultsScreen() {
   const replicates = useRun(s => s.replicates);
   const standardReplicates = useRun(s => s.standardReplicates);
   const standards = useRun(s => s.standards);
+  const edits = useRun(s => s.edits);
   const readings = useRun(s => s.readings);
   const from = useRun(s => s.readingsFrom);
   const setReadings = useRun(s => s.setReadings);
@@ -119,11 +120,11 @@ export function ResultsScreen() {
   const plate = useMemo(() => {
     if (!protocol) return null;
     try {
-      return runPlate(protocol, { procedure, samples, replicates, standardReplicates, standards });
+      return runPlate(protocol, { procedure, samples, replicates, standardReplicates, standards, edits });
     } catch {
       return null;
     }
-  }, [protocol, procedure, samples, replicates, standardReplicates, standards]);
+  }, [protocol, procedure, samples, replicates, standardReplicates, standards, edits]);
   const hasReadings = Object.keys(readings).length > 0;
   const analysis = useMemo(
     () => (protocol && plate && hasReadings ? analyzeRun(protocol, plate.roles, readings) : null),
@@ -249,7 +250,8 @@ export function ResultsScreen() {
   const pageSay = (p: number): Say =>
     !analysis ? [] : p === 0 ? concentrationSay(analysis) : p === 1 ? volumeSay(analysis, amount) : p === 2 ? commonSay(same) : curveSay(analysis);
 
-  const hearing = voice !== 'idle' && (heardSoFar || interim);
+  // Held, the words show in the bar's own bubble.
+  const hearing = voice !== 'idle' && voice !== 'holding' && (heardSoFar || interim);
   const answer: ReactNode = hearing ? (
     <>
       {heardSoFar}

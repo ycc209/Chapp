@@ -18,7 +18,8 @@ export function HomeCenter({ turn }: { turn: Turn | null }) {
   const voice = useSession(s => s.voice);
   const heard = useSession(s => s.heard);
   const interim = useSession(s => s.interim);
-  const hearing = voice !== 'idle' && (heard || interim);
+  // Held, the words show in the bar's own bubble.
+  const hearing = voice !== 'idle' && voice !== 'holding' && (heard || interim);
   const answer = turn?.phase === 'reply' ? turn.say : turn?.phase === 'error' ? ERROR_LINE : '';
   // With the keyboard up there is little room left: the words sit close to the message box.
   const { keyboard } = useScreen();

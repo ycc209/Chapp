@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { Confirm } from '../../components/chapp/Confirm.tsx';
 import {
   AmountCard,
   DoneAt,
@@ -64,7 +65,7 @@ export function Asked({ exchange, gloves }: { exchange: Exchange; gloves?: boole
         </DotLabel>
       ) : (
         <>
-          <DotLabel className="mb-1.5 px-1">You asked</DotLabel>
+          <DotLabel className="mb-1.5 px-1">{exchange.phase === 'reply' && exchange.command ? 'You said' : 'You asked'}</DotLabel>
           <p className="m-0 mb-3 px-1 text-[20px] leading-[26px] font-bold text-ink">{exchange.ask}</p>
         </>
       )}
@@ -72,6 +73,16 @@ export function Asked({ exchange, gloves }: { exchange: Exchange; gloves?: boole
       <p aria-live="polite" aria-label="Chapp's answer" className="m-0 px-1 text-[17px] leading-6 font-medium text-ink">
         {exchange.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
       </p>
+      {exchange.phase === 'reply' && exchange.done && (
+        <ul aria-label="What Chapp changed" className="m-0 mt-3 flex list-none flex-col gap-1.5 p-0 px-1">
+          {exchange.done.map((line, i) => (
+            <li key={i} className="text-[15px] leading-[21px] font-semibold text-ink">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
+      {exchange.phase === 'reply' && exchange.confirm && <Confirm actions={exchange.confirm} className="mt-3" />}
       {source && (
         <a
           href={source.url}
@@ -296,6 +307,9 @@ export function IncubateStep({ v }: { v: View }) {
   const temp = inc.temperature;
   const t = v.timer;
   const [first, ...alts] = inc.options;
+  // A length of the user's own (a change they confirmed with Chapp): one more choice, the one chosen.
+  const own = !inc.options.some(o => o.seconds === t.total);
+  const choices = [...inc.options.map(o => ({ value: o.seconds, label: o.label })), ...(own ? [{ value: t.total, label: lengthText(t.total) }] : [])];
   if (t.phase === 'choose') {
     return (
       <>
@@ -305,8 +319,16 @@ export function IncubateStep({ v }: { v: View }) {
               <B>{temp}</B>.{' '}
             </>
           )}
-          <B>{first!.label}</B> is the standard.
-          {alts.length > 0 ? (
+          {own ? (
+            <>
+              <B>{lengthText(t.total)}</B> for this run, as you changed it; the manual says <B>{first!.label}</B>. Say “start” when the plate is in.
+            </>
+          ) : (
+            <>
+              <B>{first!.label}</B> is the standard.
+            </>
+          )}
+          {own ? null : alts.length > 0 ? (
             <>
               {' '}
               <B>{alts.map(a => a.label).join(' or ')}</B> gives more signal and a lower floor; choose before I start the clock.
@@ -316,9 +338,7 @@ export function IncubateStep({ v }: { v: View }) {
           )}
         </Answer>
         <div className="mb-7 flex shrink-0 flex-col gap-3">
-          {alts.length > 0 && (
-            <MarkChips aria-label="How long to incubate" options={inc.options.map(o => ({ value: o.seconds, label: o.label }))} value={t.total} onChange={v.choose} />
-          )}
+          {choices.length > 1 && <MarkChips aria-label="How long to incubate" options={choices} value={t.total} onChange={v.choose} />}
           <DoneAt seconds={t.total} marked={v.flash} />
         </div>
       </>

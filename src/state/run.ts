@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { NO_EDITS, type PlateEdits } from '../components/lab/model.ts';
 
 /**
  * This run of a kit: the protocol, the plan, how far along it is and what was measured. Kept on the phone, so a
@@ -32,6 +33,8 @@ export type RunState = {
    * (the sidebar, or a run screen) or a kit is found.
    */
   aside: boolean;
+  /** What changed on the plate during the run (a well moved, wells or a condition added): every screen lays it out so. */
+  edits: PlateEdits;
 };
 
 type RunActions = {
@@ -48,6 +51,10 @@ type RunActions = {
   /** Replaces every reading at once, saying where they came from. */
   setReadings: (readings: Record<string, number>, from: 'sample' | 'plate') => void;
   setAside: (aside: boolean) => void;
+  /** A well went wrong: its contents go into `to` instead (a well moved again keeps its first place as bad too). */
+  moveWell: (from: string, to: string) => void;
+  /** Wells added: more of a tube on the plate (`of`), or a new sample with a name. */
+  addWells: (added: PlateEdits['added'][number]) => void;
   reset: () => void;
 };
 
@@ -67,13 +74,14 @@ const fresh: RunState = {
   readings: {},
   readingsFrom: null,
   aside: false,
+  edits: NO_EDITS,
 };
 
 export const useRun = create<RunState & RunActions>()(
   persist(
     set => ({
       ...fresh,
-      setProtocol: protocolId => set({ protocolId, step: 0, done: {}, timers: {}, aside: false }),
+      setProtocol: protocolId => set({ protocolId, step: 0, done: {}, timers: {}, aside: false, edits: NO_EDITS }),
       setPlan: plan => set(plan),
       goTo: step => set({ step: Math.max(0, step) }),
       next: () => set(s => ({ step: s.step + 1 })),
@@ -85,6 +93,14 @@ export const useRun = create<RunState & RunActions>()(
       setReading: (wellId, value) => set(s => ({ readings: { ...s.readings, [wellId]: value }, readingsFrom: 'plate' })),
       setReadings: (readings, from) => set({ readings, readingsFrom: from }),
       setAside: aside => set({ aside }),
+      moveWell: (from, to) =>
+        set(s => {
+          // A well things were already moved into, or an added one, going wrong in turn: what it held goes to `to`.
+          const moved = Object.fromEntries(Object.entries(s.edits.moved).map(([bad, w]) => [bad, w === from ? to : w]));
+          const added = s.edits.added.map(a => ({ ...a, wells: a.wells.map(w => (w === from ? to : w)) }));
+          return { edits: { moved: { ...moved, [from]: to }, added } };
+        }),
+      addWells: added => set(s => ({ edits: { ...s.edits, added: [...s.edits.added, added] } })),
       reset: () => set(fresh),
     }),
     { name: 'chapp.run' },

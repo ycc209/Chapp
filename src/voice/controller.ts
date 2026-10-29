@@ -1,4 +1,4 @@
-import { useSession } from '../state/session.ts';
+import { useSession, type Voice } from '../state/session.ts';
 import { BrowserEngine, recognitionClass } from './browser.ts';
 import { AFTER_SPEAKING_MS, chooseEngine, PROBLEM_TEXT, type Engine, type EngineKind, type Mode, type Problem } from './engine.ts';
 import { fixLabWords } from './labWords.ts';
@@ -31,7 +31,7 @@ const session = () => useSession.getState();
 
 /** Our own writes to `voice`, which the watcher below must not mistake for someone else closing the microphone. */
 let writing = false;
-function setVoice(voice: 'idle' | 'listening' | 'talking') {
+function setVoice(voice: Voice) {
   writing = true;
   try {
     session().setVoice(voice);
@@ -46,7 +46,10 @@ if (typeof window !== 'undefined') {
   });
 }
 
-/** tap: listen for one thing and send it · talk: back-and-forth until endConversation(). Call inside the user's tap. */
+/**
+ * tap: listen for one thing and send it · hold: listen while Tap to speak is held (sendHold() or cancelListening()
+ * when it is let go) · talk: back-and-forth until endConversation(). Call inside the user's gesture.
+ */
 export function startListening(next: Mode) {
   close();
   // Speaking over Chapp interrupts it.
@@ -54,17 +57,30 @@ export function startListening(next: Mode) {
   clearProblem();
   mode = next;
   session().setHeard('', '');
-  setVoice(next === 'tap' ? 'listening' : 'talking');
+  setVoice(VOICE[next]);
   // Before the engine starts: one that fails at once closes everything, this included.
   if (next === 'talk') unwatchSpeaking = isSpeaking.subscribe(onSpeaking);
   run(serverFromNowOn ? 'server' : chooseEngine(recognitionClass() !== null));
 }
 
-/** The user tapped while listening: send what was said now (or stop, if nothing was). */
+const VOICE: Record<Mode, Voice> = { tap: 'listening', hold: 'holding', talk: 'talking' };
+
+/** The user tapped while listening, or let go of a hold: send what was said now (or stop, if nothing was). */
 export function finishListening() {
-  if (engine && mode === 'tap') engine.finish();
+  if (engine && (mode === 'tap' || mode === 'hold')) engine.finish();
   else endConversation();
 }
+
+/** A press let go too soon to be a hold: it was a tap, so listening goes on until the next pause. */
+export function holdWasTap() {
+  if (!engine || mode !== 'hold') return;
+  mode = 'tap';
+  engine.toTap();
+  setVoice('listening');
+}
+
+/** Let go of a hold slid up to cancel: nothing is sent. */
+export const cancelListening = () => endConversation();
 
 /** Ends a conversation (or any listening) without sending the turn in progress. */
 export function endConversation() {
@@ -113,7 +129,7 @@ function deliver(heard: string) {
   }
   // The screen shows the answer next; the words were handed over.
   session().setHeard('', '');
-  if (mode === 'tap') endConversation();
+  if (mode !== 'talk') endConversation();
 }
 
 function ended(problem?: Problem) {

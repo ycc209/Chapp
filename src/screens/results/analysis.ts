@@ -34,7 +34,7 @@ export const FINAL_VOLUME = 100;
 /** A CV above this, %, gets the highlighter (Results-Swipe's `cvLimit`). */
 export const CV_LIMIT = 10;
 
-export type RunPlan = Pick<RunState, 'procedure' | 'samples' | 'replicates' | 'standardReplicates' | 'standards'>;
+export type RunPlan = Pick<RunState, 'procedure' | 'samples' | 'replicates' | 'standardReplicates' | 'standards'> & { edits?: RunState['edits'] };
 
 /**
  * The standards on the plate, made the way the plan says (Plan.dc.html's ways, runSetup): the kit's dilution table

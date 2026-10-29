@@ -26,12 +26,11 @@ describe('mock provider: converse', () => {
     expect(reply.say).toMatch(/Thermo Fisher/);
     expect(reply.expression).toBe('happy');
     expect(reply.actions).toEqual([{ type: 'navigate', to: '/protocol' }]);
-    expect(reply.cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
     expect(reply.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title }]);
   });
 
   it.each(['Pierce kit please', 'I have a protein assay to run', 'bca'])('hears the kit in "%s"', async text => {
-    expect((await ask(text)).cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
+    expect((await ask(text)).actions).toContainEqual({ type: 'navigate', to: '/protocol' });
   });
 
   it('moves to the next step and names it when it knows the protocol', async () => {
@@ -126,9 +125,23 @@ describe('mock provider: converse', () => {
     expect((await ask('I only have a little sample, can I use 10 µL?', run)).sources[0]?.page).toBe(3);
   });
 
+  it('draws the working reagent as A2UI, for the run or the samples asked about', async () => {
+    const reply = await ask('How much working reagent do I need?', run);
+    expect(reply.a2ui).toEqual([
+      { version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: 'chapp' } },
+      { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard' }] } },
+    ]);
+    // The words point at the card; they carry no number of their own.
+    expect(reply.say).not.toMatch(/\d/);
+    const thirty = await ask('How much working reagent for 30 samples?', run);
+    expect(thirty.a2ui?.[1]).toMatchObject({ updateComponents: { components: [{ id: 'root', component: 'ReagentCard', samples: 30 }] } });
+    // Without a kit open there is nothing to work it out from.
+    expect((await ask('How much working reagent do I need?')).a2ui).toBeUndefined();
+  });
+
   it('leaves the plan, the kit and everything else to their own answers', async () => {
     expect((await ask('12 samples in triplicate', run)).actions).toHaveLength(2);
-    expect((await ask(MOCK_TRANSCRIPT, run)).cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
+    expect((await ask(MOCK_TRANSCRIPT, run)).actions).toContainEqual({ type: 'navigate', to: '/protocol' });
     expect((await ask('Is sample 3 OK?', run)).sources).toEqual([]);
     // Without a protocol open there is no manual to answer from.
     expect((await ask('What if it turns cloudy when I add B?')).sources).toEqual([]);
@@ -217,7 +230,7 @@ describe('request validation', () => {
   });
 
   it('holds replies to the actions the app knows', () => {
-    const ok = { say: 'Hi', actions: [], cards: [], sources: [] };
+    const ok = { say: 'Hi', actions: [], sources: [] };
     expect(ConverseReplySchema.safeParse(ok).success).toBe(true);
     expect(ConverseReplySchema.safeParse({ ...ok, actions: [{ type: 'navigate', to: '/nowhere' }] }).success).toBe(false);
     expect(ConverseReplySchema.safeParse({ ...ok, actions: [{ type: 'setReplicates', replicates: 0 }] }).success).toBe(false);

@@ -50,12 +50,14 @@ export const joinWords = (...parts: string[]) => parts.map(p => p.trim()).filter
  * which also clears the words of the last one.
  */
 export class BrowserEngine implements Engine {
-  private readonly mode: Mode;
+  private mode: Mode;
   private readonly events: EngineEvents;
   private readonly lang: string;
   private rec: Recognition | null = null;
   private settled = '';
   private interim = '';
+  /** A hold's words from recognizers that already stopped by themselves (Safari stops after each sentence). */
+  private kept = '';
   private state: 'listening' | 'paused' | 'done' = 'listening';
   /** The turn is over; waiting for the recognizer's last words before handing it over. */
   private closing = false;
@@ -78,8 +80,15 @@ export class BrowserEngine implements Engine {
 
   finish() {
     if (this.state === 'done') return;
-    if (this.mode === 'tap' && this.text()) this.endTurn();
+    if (this.mode !== 'talk' && this.text()) this.endTurn();
     else this.stop();
+  }
+
+  toTap() {
+    if (this.mode !== 'hold' || this.state === 'done') return;
+    this.mode = 'tap';
+    if (this.text()) this.silenceTimer = window.setTimeout(() => this.endTurn(), SILENCE_MS);
+    else this.quietTimer = window.setTimeout(() => this.stop('no-speech'), NO_SPEECH_MS);
   }
 
   pause() {
@@ -135,9 +144,11 @@ export class BrowserEngine implements Engine {
     }
     this.settled = joinFinals(finals);
     this.interim = interim.trim();
-    this.events.heard(this.settled, this.interim);
+    this.events.heard(joinWords(this.kept, this.settled), this.interim);
     if (!this.text() || this.closing) return;
     clearTimeout(this.quietTimer);
+    // Held, a pause does not end the turn: letting go does.
+    if (this.mode === 'hold') return;
     clearTimeout(this.silenceTimer);
     // Settled words mean the recognizer already heard a short pause, so less of the pause is left to wait for.
     this.silenceTimer = window.setTimeout(() => this.endTurn(), this.interim ? SILENCE_MS : SILENCE_MS - 500);
@@ -148,7 +159,7 @@ export class BrowserEngine implements Engine {
       case 'aborted':
         return;
       case 'no-speech':
-        // Talk mode just listens again (onend follows).
+        // Hold and talk modes just listen again (onend follows).
         if (this.mode === 'tap' && !this.text()) this.stop('no-speech');
         return;
       case 'not-allowed':
@@ -161,15 +172,17 @@ export class BrowserEngine implements Engine {
       case 'network':
         return this.stop('network');
       default:
-        if (this.mode === 'tap') this.stop('failed');
+        if (this.mode !== 'talk') this.stop('failed');
     }
   }
 
   private onEnd() {
     if (this.closing) return this.deliver();
     if (this.state !== 'listening') return;
-    // The recognizer stopped by itself: Safari after a sentence, Chrome after a long silence or a minute.
-    if (this.text()) return this.deliver();
+    // The recognizer stopped by itself: Safari after a sentence, Chrome after a long silence or a minute. Held, the
+    // words so far are kept and it listens on.
+    if (this.mode === 'hold') this.kept = this.text();
+    else if (this.text()) return this.deliver();
     if (this.mode === 'tap') return this.stop('no-speech');
     const now = Date.now();
     this.restarts = [...this.restarts.filter(t => now - t < 10000), now];
@@ -197,8 +210,8 @@ export class BrowserEngine implements Engine {
     if (text) this.events.turn(text);
     // The turn's handler may have ended the conversation.
     if (this.state !== 'listening') return;
-    if (this.mode === 'tap') this.stop();
-    else this.listen();
+    if (this.mode === 'talk') this.listen();
+    else this.stop();
   }
 
   /** Lets go of the recognizer and the words of this turn. */
@@ -210,6 +223,7 @@ export class BrowserEngine implements Engine {
     this.closing = false;
     this.settled = '';
     this.interim = '';
+    this.kept = '';
     try {
       rec?.abort();
     } catch {
@@ -224,6 +238,6 @@ export class BrowserEngine implements Engine {
   }
 
   private text() {
-    return joinWords(this.settled, this.interim);
+    return joinWords(this.kept, this.settled, this.interim);
   }
 }

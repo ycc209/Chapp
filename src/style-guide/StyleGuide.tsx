@@ -1,8 +1,28 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { ArrowRight, BookOpen, Camera, FileUp, Keyboard, Menu, Mic, Plus, QrCode } from 'lucide-react';
 import { Protocol, type Cite, type Note, type StandardCurve } from '../../shared/protocol.ts';
 import { formatVolume, plateLayout, standardSeries, workingReagent } from '../../shared/calc.ts';
 import './style-guide.css';
+
+// The style guide's own outline icons (24 × 24, 2 px strokes), so the page needs no icon package.
+type GlyphProps = { size?: number; 'aria-hidden'?: boolean };
+const glyph = (children: React.ReactNode) =>
+  function Glyph({ size = 24, ...rest }: GlyphProps) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...rest}>
+        {children}
+      </svg>
+    );
+  };
+const Menu = glyph(<path d="M4 6h16M4 12h16M4 18h16" />);
+const Plus = glyph(<path d="M12 5v14M5 12h14" />);
+const ArrowRight = glyph(<path d="M5 12h14M13 6l6 6-6 6" />);
+const Mic = glyph(<><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></>);
+const Keyboard = glyph(<><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></>);
+const Camera = glyph(<><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><circle cx="12" cy="13" r="3.5" /></>);
+const BookOpen = glyph(<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2zM22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z" />);
+const FileUp = glyph(<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M12 18v-6M9 15l3-3 3 3" />);
+const QrCode = glyph(<><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><path d="M14 14h3v3h-3zM18 18h3v3h-3z" /></>);
+
 
 /** The run every example on this page is drawn for: the storyboard's 12 samples in duplicate. */
 const RUN = { procedure: 'microplate', samples: 12, replicates: 2 };

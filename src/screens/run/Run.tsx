@@ -12,6 +12,7 @@ import { toast } from '../../components/ui/Toaster.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { cn } from '../../lib/cn.ts';
 import { applyActions } from '../../state/actions.ts';
+import { moveWells, redo } from '../../state/benchEdits.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { useSession } from '../../state/session.ts';
@@ -22,7 +23,7 @@ import { TypingBar } from '../home/TypingBar.tsx';
 import { acknowledge, converseContext } from '../home/useConverse.ts';
 import { procedureFor, shortName } from '../protocol/content.ts';
 import { useBench } from './bench.ts';
-import { GlovesAdd, GlovesBar, GlovesIncubate, GlovesLoad, GlovesMix, GlovesRead, GlovesStandards } from './Gloves.tsx';
+import { GlovesAdd, GlovesBar, GlovesIncubate, GlovesLoad, GlovesMix, GlovesRead, GlovesStandards, GlovesToggle } from './Gloves.tsx';
 import {
   benchFor,
   checkIsClean,
@@ -60,9 +61,9 @@ const TIMER_STATES = ['choose', 'timer', 'running', 'stopped', 'confirm', 'done'
  * Following the protocol at the bench, step by step (/run/1 … /run/6, and /run/all for every step): Run-Standards,
  * Run-Mix, Run-Load, Run-Add, Run-Incubate → Run-Timer → Timer-Done, Run-Read, Run-List.
  *
- * Gloves on (Gloves-*, "Run, mic on") is a mode of the same screen, ?gloves=1: hold Tap to speak and slide up, and the
- * step turns into its big-type layout while Chapp keeps listening; a tap on Listening ends it and brings the buttons
- * back. Either way the voice does everything: "next", "back", "C is OK", "start the timer", "stop", "two hours",
+ * Gloves on (Gloves-*, "Run, mic on") is a mode of the same screen, ?gloves=1: the gloves button at the top right, and
+ * the step turns into its big-type layout while Chapp keeps listening; a tap on Listening (or the button again) ends
+ * it and brings the buttons back. Either way the voice does everything: "next", "back", "C is OK", "start the timer", "stop", "two hours",
  * "photo", "use the sample export"; anything else is a question for Chapp, answered from the manual.
  *
  * Progress lives in useRun() (ticked vials and tubes, finished steps, the timer's end, the readings), so a reload in
@@ -77,15 +78,16 @@ export function RunScreen() {
   const replicates = useRun(s => s.replicates);
   const standardReplicates = useRun(s => s.standardReplicates);
   const standards = useRun(s => s.standards);
+  const edits = useRun(s => s.edits);
   const { protocol, error } = useProtocol(protocolId);
   const bench = useMemo(() => {
     if (!protocol) return null;
     try {
-      return benchFor(protocol, { procedure, samples, replicates, standardReplicates, standards });
+      return benchFor(protocol, { procedure, samples, replicates, standardReplicates, standards, edits });
     } catch {
       return null;
     }
-  }, [protocol, procedure, samples, replicates, standardReplicates, standards]);
+  }, [protocol, procedure, samples, replicates, standardReplicates, standards, edits]);
 
   if (!protocol || !bench) {
     return (
@@ -598,6 +600,41 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
           }
           setConfirm(false);
           return { say: 'It’s still running.' };
+        case 'done': {
+          // Several vials or tubes at once: just those, ticked.
+          if (at === idx.standards && !bench.ready) {
+            if (!c.refs.every(r => vials.some(v => v.id === r))) return null;
+            const patch = Object.fromEntries(c.refs.map(r => [r, true]));
+            leaveReview();
+            setMany(patch);
+            setHeard(said);
+            return { say: standardsText(standardsLine(vials, { ...done, ...patch }), nextAfter(at)) };
+          }
+          if (at === idx.load) {
+            const tubes = c.refs.map(r => plate.tubes.find(t => t.ref.toUpperCase() === r));
+            if (tubes.some(t => !t)) return null;
+            const patch = Object.fromEntries(tubes.map(t => [tubeKey(t!.index), true]));
+            leaveReview();
+            setMany(patch);
+            setFlash(true);
+            setHeard(said);
+            return { say: tubeText(plate, currentTube(plate, { ...done, ...patch }), bench.load) };
+          }
+          return null;
+        }
+        case 'redo': {
+          // A vial again, with every vial made from it; or a tube to load again (src/state/benchEdits.ts).
+          const vialsOnly = c.refs.every(r => vials.some(v => v.id === r));
+          if (vialsOnly ? bench.ready || at > idx.standards : at !== idx.load) return null;
+          leaveReview();
+          setHeard(said);
+          // The step's own line says which vial is next.
+          return { say: redo(p, c.refs), show: true };
+        }
+        case 'badWell':
+          // A well gone wrong: what it held into the well named, or the next free one.
+          setHeard(said);
+          return { say: moveWells(p, c.wells, c.to), show: true };
         case 'results':
           if (at === idx.read && checkView) {
             setPhoto(null);
@@ -611,6 +648,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
       }
     },
     context: () => converseContext('run', p, { step: at, ...(bench.steps[at] ? { stepTitle: bench.steps[at].title } : {}) }),
+    protocol: () => p,
   };
   const { exchange, send, clear } = useRunVoice(handlers);
   const mic = useVoice(send);
@@ -631,17 +669,21 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   }, [exchange?.id]);
 
   // ─── Gloves on and off ─────────────────────────────────────────────────────────────────────────────────────────
-  // Holding Tap to speak and sliding up starts the conversation: that is gloves on. When the conversation ends (a tap
-  // on Listening, or the microphone stopped), the buttons come back.
+  // The gloves button turns them on: Chapp listens for good (inside the tap, so the microphone may open). When the
+  // conversation ends (a tap on Listening, the button again, or the microphone stopped), the buttons come back.
   const before = useRef(voice);
   useEffect(() => {
     const was = before.current;
     before.current = voice;
     if (list) return;
-    if (voice === 'talking' && !gloves) setGloves(true);
-    else if (voice === 'idle' && was === 'talking' && gloves) setGloves(false);
+    if (voice === 'idle' && was === 'talking' && gloves) setGloves(false);
   }, [voice]);
   const glovesTap = () => (voice === 'idle' ? mic.talk() : mic.end());
+  const glovesOn = (on: boolean) => {
+    setGloves(on);
+    if (on) mic.talk();
+    else mic.end();
+  };
 
   // Gloves on, "the screen stays on" (Gloves-Timer), where the browser can keep it on.
   useEffect(() => {
@@ -854,6 +896,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
         subtitle={list ? `${shortName(p)} · All ${total} steps` : undefined}
         pill={list ? undefined : <StepPill index={at} total={total} title={title} to={gloves ? undefined : '/run/all'} className="-mt-4" />}
       />
+      {!list && <GlovesToggle on={gloves} onChange={glovesOn} />}
 
       <input
         ref={fileInput}

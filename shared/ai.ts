@@ -18,6 +18,7 @@
  *   GET  /api/protocols/:id/manual.pdf                                  → the PDF an imported protocol was read from
  * A non-2xx answer carries ApiError.
  */
+import type { A2uiMessage } from './a2ui.ts';
 import type { Protocol } from './protocol.ts';
 
 /** Chapp's faces. Each has a picture in public/chapp/ (neutral is chapp.webp); all but listen are clips in the 3D model. */
@@ -46,6 +47,15 @@ export type ConverseContext = {
   timers?: { id: string; secondsLeft: number }[];
   /** Where the plate readings came from: 'sample' is the built-in example export, which must be called sample data. */
   readingsFrom?: 'sample' | 'plate' | null;
+  /**
+   * The plan on the card the user last changed by hand under an answer (samples × replicates), when it is not the run's:
+   * what "is that enough?" is about. The server works its numbers out like the run's.
+   */
+  shown?: { samples: number; replicates: number };
+  /** This run's own length for a timed step, in seconds, where the user changed it (Run's choice, or a confirmed proposal). */
+  lengths?: Record<string, number>;
+  /** What changed on the plate during the run (src/components/lab/model.ts PlateEdits): wells moved, wells added. */
+  edits?: { moved: Record<string, string>; added: { name: string; of?: string; wells: string[] }[] };
 };
 
 /** A turn of this conversation, oldest first: so "yes, find it" knows which kit was meant. */
@@ -62,18 +72,36 @@ export type Action =
   | { type: 'previousStep' }
   | { type: 'markDone'; id: string }
   | { type: 'startTimer'; id: string; seconds: number }
+  /** This run's length for a timed step ("make step 4 24 hours"): only ever from the user's tap on Chapp's proposal. */
+  | { type: 'setStepTime'; id: string; seconds: number }
+  /** A vial or tube to do again (a vial with the vials made from it: src/state/benchEdits.ts). */
+  | { type: 'redo'; id: string }
+  /** A well gone wrong: what it held goes into `to`, or the next free well. */
+  | { type: 'moveWell'; from: string; to?: string }
+  /** One more well: of a tube on the plate ("sample 3", "B") or something new, named; in `well` or the next free one. */
+  | { type: 'addWell'; what: string; well?: string }
+  /** One more condition: a new sample, named, with the run's replicates. */
+  | { type: 'addCondition'; name: string }
   /** Look for a kit's manual on the web (and read it in): the app opens the Overview, which searches for `query`. */
   | { type: 'findProtocol'; query: string };
 
-/** Something the app draws under Chapp's answer. Kept small until we decide how far Chapp composes screens. */
-export type Card = { kind: 'protocol'; protocolId: string } | { kind: 'text'; title?: string; text: string };
-
 export type ConverseReply = {
-  /** What Chapp says, shown and read aloud. */
+  /** What Chapp says, shown under the user's words. It never says it changed something: the app shows what it did. */
   say: string;
   expression?: Expression;
+  /** Changes the user asked for in so many words: the app makes them at once, each with a line saying so. */
   actions: Action[];
-  cards: Card[];
+  /**
+   * Changes that wait for the user's tap: a step's new length (always), and anything the user's words did not ask for
+   * plainly ("is it time for the next step?"), each shown as a button (server/ai/authorize.ts).
+   */
+  confirm?: Action[];
+  /**
+   * What Chapp draws under its answer: A2UI v0.9 messages for one surface (createSurface, then updateComponents), which
+   * the model wrote and the server checked (shared/a2ui.ts). Values are bound to the data model the app fills; absent
+   * when words are enough.
+   */
+  a2ui?: A2uiMessage[];
   sources: Source[];
 };
 

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useScreen } from '../../app/screen.ts';
+import { A2uiSurface } from '../../components/a2ui/Surface.tsx';
+import { Confirm } from '../../components/chapp/Confirm.tsx';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SHEET_DURATION, SHEET_EASE } from '../../components/ui/Sheet.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
@@ -171,6 +173,7 @@ export function ProtocolScreen() {
           {overview && <Bubble>{importing?.name ?? ask ?? ''}</Bubble>}
           {/* How Chapp found the manual, until what it read comes in: then the kit, its glance and steps take the screen. */}
           {overview && stage < 3 && !intro && finding.progress.length > 0 && <Progress lines={finding.progress} searching={stage === 0} />}
+          {finding.said && stage >= 1 && <SaidCheck said={finding.said.number} found={finding.said.found} className="mb-5" />}
           {finding.notFound && (
             <p aria-label="Chapp's answer" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
               {finding.notFound}
@@ -228,6 +231,8 @@ export function ProtocolScreen() {
               <p aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
                 {turn.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
               </p>
+              {turn.phase === 'reply' && turn.a2ui ? <A2uiSurface messages={turn.a2ui} protocol={protocol} live onAnswer={send} ask={turn.text} /> : null}
+              {turn.phase === 'reply' && turn.confirm ? <Confirm actions={turn.confirm} /> : null}
             </div>
           )}
         </div>
@@ -288,8 +293,21 @@ export function ProtocolScreen() {
   );
 }
 
-/** What the user said, on the right in light blue (Overview.dc.html). */
-function Bubble({ children }: { children: string }) {
+/** What the user said, on the right in light blue (Overview.dc.html); the conversation (/chat) uses it too. */
+/**
+ * The catalog number the user said is not the kit found ("EEA 302" said, EEA032 found): a misheard or mistyped number
+ * finds a neighbour in the vendor's range, so the user checks the box before following this manual.
+ */
+export function SaidCheck({ said, found, className }: { said: string; found: string; className?: string }) {
+  return (
+    <p role="note" className={cn('m-0 flex shrink-0 flex-col gap-0.5 self-start rounded-[16px] bg-caution-bg px-3.5 py-2.5 text-[14px] leading-[19px] text-[#8a4d00]', className)}>
+      <b className="font-semibold">You said {said}. This manual is for {found}.</b>
+      <span>Check the number on your box before you follow it.</span>
+    </p>
+  );
+}
+
+export function Bubble({ children }: { children: string }) {
   return (
     <div className="mb-5 flex shrink-0 justify-end">
       <p className="max-w-[calc(82%+32px)] rounded-[22px] bg-[#d6e8fc] px-4 py-2.5 text-[17px] leading-[22px] font-medium text-ink [overflow-wrap:anywhere]">{children}</p>
@@ -298,7 +316,7 @@ function Bubble({ children }: { children: string }) {
 }
 
 /** What Chapp did to find the manual, ticked off as it went (FoundProtocol.progress). */
-function Progress({ lines, searching = false, label = 'How Chapp found the manual', className }: { lines: string[]; searching?: boolean; label?: string; className?: string }) {
+export function Progress({ lines, searching = false, label = 'How Chapp found the manual', className }: { lines: string[]; searching?: boolean; label?: string; className?: string }) {
   return (
     <ul aria-label={label} aria-live="polite" className={cn('mb-5 flex shrink-0 flex-col gap-1.5 px-1 animate-in fade-in duration-300', className)}>
       {lines.map((line, i) => (

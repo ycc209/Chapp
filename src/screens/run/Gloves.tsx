@@ -222,3 +222,29 @@ export function GlovesBar({ listening, dark, onTap }: { listening: boolean; dark
     </button>
   );
 }
+
+/**
+ * Gloves on or off, at the top right of the run screen (where the back button's twin would be): on, Chapp keeps
+ * listening and the step turns into its big-type layout; off, the buttons come back. Filled while on.
+ */
+export function GlovesToggle({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      aria-label={on ? 'Gloves on: Chapp keeps listening. Tap for the buttons' : 'Gloves on: Chapp keeps listening, no buttons'}
+      onClick={() => onChange(!on)}
+      className={cn(
+        'absolute top-[calc(56px+var(--screen-top))] right-5 z-[6] flex size-11 items-center justify-center rounded-full outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-blue',
+        on ? 'bg-ink text-white' : 'text-ink',
+      )}
+    >
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+        <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+        <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+        <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+      </svg>
+    </button>
+  );
+}

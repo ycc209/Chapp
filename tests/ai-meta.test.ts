@@ -27,7 +27,7 @@ function fakeFetch(...answers: (unknown | { status: number; body: unknown } | Er
 }
 const provider = (fetch: typeof globalThis.fetch, timeouts = {}) => createMetaProvider({ apiKey: KEY, fetch, log: () => {}, timeouts });
 const chat = (content: unknown) => ({ choices: [{ message: { role: 'assistant', content: typeof content === 'string' ? content : JSON.stringify(content) } }] });
-const wire = (over: object = {}) => ({ say: 'Hello!', expression: 'happy', actions: [], cards: [], manualPages: [], ...over });
+const wire = (over: object = {}) => ({ say: 'Hello!', expression: 'happy', actions: [], a2ui: '[]', manualPages: [], ...over });
 
 describe('meta converse', () => {
   it('asks Muse Spark for strict JSON and turns the flat wire format into a ConverseReply', async () => {
@@ -37,12 +37,10 @@ describe('meta converse', () => {
         { type: 'navigate', to: '/protocol', value: 0, id: '' },
         { type: 'setSamples', to: '', value: 12, id: '' },
         { type: 'setReplicates', to: '', value: 3, id: '' },
-        { type: 'startTimer', to: '', value: 1800, id: 'm-incubate' },
         { type: 'nextStep', to: '', value: 0, id: '' },
       ],
-      cards: [{ kind: 'text', protocolId: '', title: '', text: 'Cloudy is normal.' }],
     })));
-    const reply = await provider(fn).converse({ text: 'hi', context: home });
+    const reply = await provider(fn).converse({ text: 'Open it: 12 samples in triplicate, then the next step.', context: home });
     expect(reply).toEqual({
       say: 'I found the manual.',
       expression: 'happy',
@@ -50,10 +48,8 @@ describe('meta converse', () => {
         { type: 'navigate', to: '/protocol' },
         { type: 'setSamples', samples: 12 },
         { type: 'setReplicates', replicates: 3 },
-        { type: 'startTimer', id: 'm-incubate', seconds: 1800 },
         { type: 'nextStep' },
       ],
-      cards: [{ kind: 'text', text: 'Cloudy is normal.' }],
       sources: [],
     });
     expect(calls).toHaveLength(1);
@@ -63,22 +59,19 @@ describe('meta converse', () => {
     expect(body.model).toBe('muse-spark-1.3');
     expect(body.response_format).toEqual(replyFormat);
     expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user']);
-    expect(body.messages[1].content).toBe('hi');
+    expect(body.messages[1].content).toBe('Open it: 12 samples in triplicate, then the next step.');
   });
 
-  it.skipIf(!local)('cites the manual: the pages named for the protocol on screen, and any protocol card', async () => {
-    const { fn } = fakeFetch(chat(wire({ say: 'Add 25 µL per well.', manualPages: [3, 3, 99] })), chat(wire({ cards: [{ kind: 'protocol', protocolId: 'pierce-bca', title: '', text: '' }] })));
-    const p = provider(fn);
-    const onScreen = await p.converse({ text: 'how much sample?', context: { screen: 'run', protocolId: 'pierce-bca', step: 2 } });
+  it.skipIf(!local)('cites the manual: the pages named for the protocol on screen', async () => {
+    const { fn } = fakeFetch(chat(wire({ say: 'Add 25 µL per well.', manualPages: [3, 3, 99] })));
+    const onScreen = await provider(fn).converse({ text: 'how much sample?', context: { screen: 'run', protocolId: 'pierce-bca', step: 2 } });
     expect(onScreen.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title, page: 3 }]);
-    const card = await p.converse({ text: 'I got a BCA kit', context: home });
-    expect(card.cards).toEqual([{ kind: 'protocol', protocolId: 'pierce-bca' }]);
-    expect(card.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title }]);
   });
 
-  it('drops a protocol card for a kit there is no document for', async () => {
-    const { fn } = fakeFetch(chat(wire({ cards: [{ kind: 'protocol', protocolId: 'made-up-kit', title: '', text: '' }] })));
-    expect((await provider(fn).converse({ text: 'x', context: home })).cards).toEqual([]);
+  it('draws nothing when no kit is open: there is nothing to work the numbers out from', async () => {
+    const a2ui = JSON.stringify([{ version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: 'chapp' } }, { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard' }] } }]);
+    const { fn } = fakeFetch(chat(wire({ a2ui })));
+    expect((await provider(fn).converse({ text: 'x', context: home })).a2ui).toBeUndefined();
   });
 
   it('drops a broken action, card or face instead of asking again', async () => {
@@ -86,10 +79,10 @@ describe('meta converse', () => {
       say: 'Twelve it is.',
       expression: 'grumpy',
       actions: [{ type: 'navigate', to: '', value: 0, id: '' }, { type: 'setSamples', to: '', value: 12, id: '' }, { type: 'launchRocket', to: '', value: 0, id: '' }],
-      cards: [{ kind: 'text', protocolId: '', title: 'Empty', text: '' }],
+      a2ui: 'not even JSON',
     });
     const { fn, calls } = fakeFetch(chat(bad));
-    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', actions: [{ type: 'setSamples', samples: 12 }], cards: [], sources: [] });
+    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', actions: [{ type: 'setSamples', samples: 12 }], sources: [] });
     expect(calls).toHaveLength(1);
   });
 
@@ -112,7 +105,7 @@ describe('meta converse', () => {
   it('falls back to the words alone when the retry is no better', async () => {
     const bad = wire({ say: 'Twelve it is.', actions: 'twelve' });
     const { fn, calls } = fakeFetch(chat(bad), chat('not json at all'));
-    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', expression: 'neutral', actions: [], cards: [], sources: [] });
+    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', expression: 'neutral', actions: [], sources: [] });
     expect(calls).toHaveLength(2);
   });
 
@@ -124,7 +117,7 @@ describe('meta converse', () => {
   });
 
   it('keeps the first answer’s words when the retry itself fails', async () => {
-    const { fn } = fakeFetch(chat(wire({ say: 'Sure.', cards: 'none' })), { status: 500, body: { error: { message: 'oops' } } });
+    const { fn } = fakeFetch(chat(wire({ say: 'Sure.', actions: 'none' })), { status: 500, body: { error: { message: 'oops' } } });
     expect((await provider(fn).converse({ text: 'x', context: home })).say).toBe('Sure.');
   });
 

@@ -16,8 +16,7 @@ export type MarkChipsProps<T extends string | number> = {
 const SHADOW = 'shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
 
 /**
- * Pick one, the choice marked in yellow: the thing to do now. (ui/ToggleGroup has the grey segmented and ink chip
- * looks; this is the yellow one the run and results screens use.)
+ * Pick one, the choice marked in yellow: the thing to do now, as the run and results screens use it.
  */
 export function MarkChips<T extends string | number>({ options, value, onChange, variant = 'choice', className, ...rest }: MarkChipsProps<T>) {
   const tabs = variant === 'tabs';

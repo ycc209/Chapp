@@ -22,7 +22,7 @@ import type { RunState } from '../../state/run.ts';
  * (data/protocols/*.json) through shared/calc.ts and the lab parts' model.
  */
 
-export type RunPlan = Pick<RunState, 'procedure' | 'samples' | 'replicates' | 'standardReplicates' | 'standards'>;
+export type RunPlan = Pick<RunState, 'procedure' | 'samples' | 'replicates' | 'standardReplicates' | 'standards'> & { edits?: RunState['edits'] };
 
 /** One way to incubate: the protocol's own time first, then its documented alternatives ("2 h for more signal"). */
 export type IncubationOption = { seconds: number; label: string; standard: boolean };
@@ -143,6 +143,20 @@ export const currentTube = (plate: PlatePlan, done: Record<string, boolean>) => 
 /** Tubes loaded so far, counted up to the one going in now (Run-List: "9 of 21 tubes"). */
 export const tubesLoaded = (plate: PlatePlan, done: Record<string, boolean>) => currentTube(plate, done);
 
+/** A vial to make again, and every vial made from it (a dilution of it, or of one of those): all made again. */
+export function redoVials(vials: readonly StandardVial[], id: string): string[] {
+  const again = new Set([id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const v of vials)
+      if (v.from && again.has(v.from) && !again.has(v.id)) {
+        again.add(v.id);
+        grew = true;
+      }
+  }
+  return vials.filter(v => again.has(v.id)).map(v => v.id);
+}
+
 /** Loads tubes up to `index` (moving on), or takes `index` and those after it back off (going back to it). */
 export function loadUpTo(plate: PlatePlan, done: Record<string, boolean>, index: number, on: boolean): Record<string, boolean> {
   return Object.fromEntries(plate.tubes.map(t => [tubeKey(t.index), on ? t.index <= index || !!done[tubeKey(t.index)] : t.index < index && !!done[tubeKey(t.index)]]));
@@ -174,8 +188,10 @@ export function timerPhase(endsAt: number | undefined, paused: number | undefine
 
 /**
  * The run's own words, matched on the phone before anything goes to the server: the timer, the incubation length,
- * the photo of the reader, the sample export, yes or no, and "done" for a step with nothing to count. The whole
- * utterance has to be the command, as in src/voice/commands.ts; "next", "back" and "C is OK" are matched there.
+ * the photo of the reader, the sample export, yes or no, and "done" for a step with nothing to count; several vials
+ * or tubes at once ("A B C D OK", "A 到 D 好了", "1 to 5 done"), one to do again ("redo B", "B 重做"), and a well that
+ * went wrong ("B3 has a bubble, use H1", "B3 壞了，改到 H1"). The whole utterance has to be the command, as in
+ * src/voice/commands.ts; "next", "back" and "C is OK" are matched there.
  */
 export type RunCommand =
   | { type: 'timer'; what: 'start' | 'stop' | 'resume' }
@@ -184,10 +200,75 @@ export type RunCommand =
   | { type: 'sample' }
   | { type: 'answer'; yes: boolean }
   | { type: 'advance' }
-  | { type: 'results' };
+  | { type: 'results' }
+  /** Vials or tubes done, by ref ("A", "3"), as said. */
+  | { type: 'done'; refs: string[] }
+  /** Vials or tubes to do again. */
+  | { type: 'redo'; refs: string[] }
+  /** Wells that went wrong, and the well the user named for their contents (null: Chapp picks the next free one). */
+  | { type: 'badWell'; wells: string[]; to: string | null };
+
+const WELL = /\b([A-H](?:1[0-2]|[1-9]))\b/gi;
+const DONE_END = /\s*(?:ok|okay|done|finished|ready|loaded|good|in|all set|好了|好|做好了|做好|完成了?|弄好了|加好了|加完了|都好了|ok了)[\s。.!！]*$/i;
+const REDO = /\b(?:redo|re-do|remake|again|do (?:it|them) again|broke|broken|spilled|bad)\b|重做|重來|重新做|再做一次|再做|壞了|壞掉了|灑了|弄翻了|打翻了/i;
+const BAD_WELL = /\b(?:bad|bubbles?|spill(?:ed)?|wrong|broke|contaminated|empty|missed)\b|壞|氣泡|灑|錯了|污染|漏|空的|沒加到/i;
+const TO_WELL = /(?:改到|換到|移到|放到|改放|換成|改成|改用|用|\bmove (?:it |them )?to|\buse|\binstead|\bput (?:it |them )?in(?:to)?|\binto)\s*([A-H](?:1[0-2]|[1-9]))\b/i;
+
+/**
+ * The vials or tubes named in a few words: "A B C D", "ABCD", "A to D", "A 到 D", "1–5", "3 和 5" → their refs in the
+ * order said, upper-case, ranges filled in. Null when anything else is in the words (left to Chapp to understand).
+ */
+export function refsSaid(words: string): string[] | null {
+  const t = words
+    .toUpperCase()
+    .replace(/\s*(?:到|至|~|～|－|–|—|-|\bTO\b|\bTHROUGH\b|\bTHRU\b)\s*/g, '>')
+    .replace(/\b(?:VIALS?|STANDARDS?|SAMPLES?|TUBES?|AND|ARE|IS|THE|ALSO|BOTH|ALL)\b|標準品|樣本|管|和|跟|還有|都|也|、|，|,|&|\+/g, ' ')
+    .trim();
+  if (!t) return null;
+  const refs: string[] = [];
+  const LETTERS = 'ABCDEFGHIJKLMNOP';
+  for (const token of t.split(/\s+/)) {
+    const range = /^([A-P]|\d{1,2})>([A-P]|\d{1,2})$/.exec(token);
+    if (range) {
+      const [a, b] = [range[1]!, range[2]!];
+      if (/\d/.test(a) !== /\d/.test(b)) return null;
+      const [from, to] = /\d/.test(a) ? [Number(a), Number(b)] : [LETTERS.indexOf(a), LETTERS.indexOf(b)];
+      if (to < from || to - from > 24) return null;
+      for (let i = from; i <= to; i++) refs.push(/\d/.test(a) ? String(i) : LETTERS[i]!);
+    } else if (/^[A-P]+$/.test(token) && token.length <= 16) refs.push(...token);
+    else if (/^\d{1,2}$/.test(token)) refs.push(String(Number(token)));
+    else return null;
+  }
+  return refs.length ? [...new Set(refs)] : null;
+}
+
+/** Several vials or tubes done, one to do again, or a well gone wrong: the bench's own words for its items. */
+function itemsCommand(text: string): RunCommand | null {
+  const wells = [...text.matchAll(WELL)].map(m => m[1]!.toUpperCase());
+  if (wells.length && BAD_WELL.test(text)) {
+    const to = TO_WELL.exec(text)?.[1]?.toUpperCase() ?? null;
+    const from = wells.filter(w => w !== to);
+    return from.length ? { type: 'badWell', wells: [...new Set(from)], to } : null;
+  }
+  if (wells.length) return null;
+  const redo = REDO.exec(text);
+  if (redo) {
+    const refs = refsSaid(text.replace(REDO, ' ').replace(/[。.!！]/g, ' '));
+    return refs ? { type: 'redo', refs } : null;
+  }
+  const done = DONE_END.exec(text);
+  if (done && done.index > 0) {
+    const refs = refsSaid(text.slice(0, done.index));
+    // One vial alone ("C is OK") stays src/voice/commands.ts's, which catches the vials before it up too.
+    return refs && refs.length > 1 ? { type: 'done', refs } : null;
+  }
+  return null;
+}
 
 export function runCommand(text: string): RunCommand | null {
   if (/[?？]\s*$/.test(text)) return null;
+  const items = itemsCommand(text.trim());
+  if (items) return items;
   const said = strip(normalize(text));
   if (!said) return null;
   if (/^(?:start|go|begin|start it|start (?:the )?(?:timer|clock)|start timing|(?:the )?plate(?:'s| is) in|it's in)$/.test(said)) return { type: 'timer', what: 'start' };

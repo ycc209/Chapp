@@ -39,7 +39,8 @@ export function Answer({ children }: { children: ReactNode }) {
   const voice = useSession(s => s.voice);
   const heard = useSession(s => s.heard);
   const interim = useSession(s => s.interim);
-  const hearing = voice !== 'idle' && (heard || interim);
+  // Held, the words show in the bar's own bubble.
+  const hearing = voice !== 'idle' && voice !== 'holding' && (heard || interim);
   return (
     <p aria-label="Chapp's answer" aria-live="polite" className={cn(SAY, 'mb-6 shrink-0 px-1')}>
       {hearing ? (

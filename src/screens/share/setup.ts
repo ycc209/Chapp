@@ -1,7 +1,7 @@
 import { analyzePlate, type WellRole } from '../../../shared/fit.ts';
 import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
 import { SHARE_FORMAT, type SharedComponent, type SharedPlan, type SharedSetup, type ShareScope, type StoredShare } from '../../../shared/share.ts';
-import { runSetup, type RunPlan } from '../../components/lab/model.ts';
+import { NO_EDITS, runSetup, type RunPlan } from '../../components/lab/model.ts';
 import type { RunState } from '../../state/run.ts';
 
 /**
@@ -12,7 +12,7 @@ import type { RunState } from '../../state/run.ts';
 export type RunSnapshot = Pick<
   RunState,
   'protocolId' | 'procedure' | 'samples' | 'replicates' | 'standardReplicates' | 'standards' | 'photos' | 'readings'
->;
+> & { edits?: RunState['edits'] };
 
 /** "Pierce BCA Protein Assay" → "Pierce BCA": the name Chapp says (header subtitle, "a Pierce BCA run"). */
 export const shortName = (p: Protocol) => p.title.replace(/\s+(?:Protein\s+)?Assay(?:\s+Kit)?$/i, '') || p.title;
@@ -71,6 +71,7 @@ export function buildShare(
   if (options.from) setup.from = options.from;
   if (scope !== 'protocol') {
     setup.plan = { samples: run.samples, replicates: run.replicates, standardReplicates: run.standardReplicates, standards: run.standards };
+    if (run.edits && (Object.keys(run.edits.moved).length || run.edits.added.length)) setup.plan.edits = run.edits;
   }
   if (scope === 'all' && hasResults(run)) {
     setup.results = { readings: { ...run.readings } };
@@ -91,6 +92,7 @@ export function sharedRunPlan(procedure: string, plan: SharedPlan): RunPlan {
     replicates: plan.replicates,
     standardReplicates: plan.standardReplicates ?? plan.replicates,
     standards: plan.standards ?? 'kit',
+    ...(plan.edits ? { edits: plan.edits } : {}),
   };
 }
 
@@ -199,6 +201,7 @@ export function importPatch(share: StoredShare, current: RunSnapshot): Partial<R
     replicates: plan.replicates,
     standardReplicates: plan.standardReplicates,
     standards: plan.standards,
+    edits: plan.edits ?? NO_EDITS,
     step: 0,
     done: {},
     timers: {},

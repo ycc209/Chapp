@@ -101,6 +101,8 @@ export type Tube = {
   ref: string;
   /** "Standard A" or "Sample 1". */
   name: string;
+  /** What the user called a sample added during the run ("heat shock"), when it has a name. */
+  label?: string;
   blank: boolean;
   /** µg/mL, standards only. */
   concentration?: number;
@@ -120,7 +122,21 @@ export type PlatePlan = {
   columns: number;
   fits: boolean;
   wells: number;
+  /** Wells that went wrong during the run (PlateEdits.moved): empty, crossed out, not read. */
+  bad: string[];
 };
+
+/**
+ * What changed on the plate during the run, said at the bench: a well that went wrong (a bubble, a spill) and the well
+ * its contents went into instead, and wells added: more of a tube already on the plate (`of`, its ref: "3", "B") or
+ * something new with a name ("positive control", a condition), which is a sample of its own. Wells are kept as they
+ * were chosen, so a well already loaded never moves.
+ */
+export type PlateEdits = {
+  moved: Record<string, string>;
+  added: { name: string; of?: string; wells: string[] }[];
+};
+export const NO_EDITS: PlateEdits = { moved: {}, added: [] };
 
 const ROWS = 'ABCDEFGHIJKLMNOP';
 
@@ -169,7 +185,73 @@ export function plateMap(opts: {
   place(0, standards.length, standardReplicates);
   place(standards.length, samples, sampleReplicates);
   const columns = base + (row ? width : 0);
-  return { rows, cols, tubes, cells, columns, fits: columns <= cols, wells: standards.length * standardReplicates + samples * sampleReplicates };
+  return { rows, cols, tubes, cells, columns, fits: columns <= cols, wells: standards.length * standardReplicates + samples * sampleReplicates, bad: [] };
+}
+
+/** "B3" → its row and column from 0, or null when it is not a well of this plate. */
+export function wellAt(well: string, rows = 8, cols = 12): { row: number; col: number } | null {
+  const m = /^([A-P])(\d{1,2})$/.exec(well.trim().toUpperCase());
+  if (!m) return null;
+  const row = ROWS.indexOf(m[1]!);
+  const col = Number(m[2]) - 1;
+  return row < rows && col >= 0 && col < cols ? { row, col } : null;
+}
+
+const wellName = (row: number, col: number) => `${ROWS[row]}${col + 1}`;
+
+/**
+ * The first `count` free wells side by side in one row, walking down the columns as the layout does: where a sample
+ * added during the run goes, or a well's contents when it went wrong. Empty when the plate has no room.
+ */
+export function freeWells(plan: PlatePlan, count = 1, taken: readonly string[] = []): string[] {
+  const used = new Set([...plan.cells.map(c => c.well), ...plan.bad, ...taken]);
+  for (let col = 0; col + count <= plan.cols; col++)
+    for (let row = 0; row < plan.rows; row++) {
+      const wells = Array.from({ length: count }, (_, j) => wellName(row, col + j));
+      if (wells.every(w => !used.has(w))) return wells;
+    }
+  return [];
+}
+
+/**
+ * The plate with what changed during the run (PlateEdits): a well that went wrong is left empty and its contents sit
+ * in the well chosen instead; added wells join their tube, or a new sample numbered after the last. A well of the
+ * plan that an edit has taken (a sample added before the plan grew) moves to the next free well.
+ */
+export function editPlate(plan: PlatePlan, edits: PlateEdits | undefined): PlatePlan {
+  if (!edits || (!Object.keys(edits.moved).length && !edits.added.length)) return plan;
+  const tubes = plan.tubes.map(t => ({ ...t, wells: [] as string[] }));
+  const bad = Object.keys(edits.moved).filter(w => wellAt(w, plan.rows, plan.cols));
+  const targets = [...Object.values(edits.moved), ...edits.added.flatMap(a => a.wells)];
+  const cells: PlateCell[] = [];
+  const at = (well: string, tube: number, replicate: number) => {
+    const w = wellAt(well, plan.rows, plan.cols);
+    if (w) cells.push({ well: wellName(w.row, w.col), row: w.row, col: w.col, tube, replicate });
+  };
+  // The plan's wells: moved where one went wrong, or out of the way of an edit's well.
+  const used = new Set([...plan.cells.map(c => c.well), ...bad, ...targets]);
+  for (const c of plan.cells) {
+    let well = edits.moved[c.well] ?? c.well;
+    if (!edits.moved[c.well] && targets.includes(c.well)) {
+      well = freeWells({ ...plan, cells: [], bad: [] }, 1, [...used]).at(0) ?? c.well;
+      used.add(well);
+    }
+    at(well, c.tube, c.replicate);
+  }
+  // Wells added: to their tube, or a new sample of their own.
+  let next = plan.tubes.filter(t => t.kind === 'sample').length;
+  for (const a of edits.added) {
+    let tube = a.of ? tubes.findIndex(t => t.ref.toUpperCase() === a.of!.toUpperCase()) : -1;
+    if (tube < 0) {
+      next++;
+      tube = tubes.length;
+      tubes.push({ index: tube, kind: 'sample', ref: String(next), name: `Sample ${next}`, label: a.name, blank: false, level: 0, wells: [] });
+    }
+    const before = cells.filter(c => c.tube === tube).length;
+    a.wells.forEach((w, j) => at(edits.moved[w] ?? w, tube, before + j + 1));
+  }
+  for (const c of cells) tubes[c.tube]!.wells.push(c.well);
+  return { ...plan, tubes, cells, wells: cells.length, bad };
 }
 
 /** The most samples that fit beside these standards ("Up to 36 samples fit beside the kit's 9"). */
@@ -251,7 +333,15 @@ export type ReagentPlan = ReturnType<typeof reagentPlan>;
 export type StandardsWay = 'kit' | 'halve' | 'five' | 'ready';
 
 /** The plan a run is laid out from, as useRun() keeps it: Plan sets it; Run, Results and Share read it back. */
-export type RunPlan = { procedure: string; samples: number; replicates: number; standardReplicates: number; standards: StandardsWay };
+export type RunPlan = {
+  procedure: string;
+  samples: number;
+  replicates: number;
+  standardReplicates: number;
+  standards: StandardsWay;
+  /** What changed on the plate during the run (wells moved or added); the plan's layout without them. */
+  edits?: PlateEdits;
+};
 
 function procedureOf(p: Protocol, procedureId: string) {
   const proc = p.procedures.find(x => x.id === procedureId);
@@ -291,7 +381,7 @@ export function standardsFor(p: Protocol, procedureId: string, way: StandardsWay
  */
 export function runSetup(p: Protocol, plan: RunPlan) {
   const series = standardsFor(p, plan.procedure, plan.standards, plan.standardReplicates);
-  const plate = plateMap({ standards: series.vials, standardReplicates: plan.standardReplicates, samples: plan.samples, sampleReplicates: plan.replicates });
+  const plate = editPlate(plateMap({ standards: series.vials, standardReplicates: plan.standardReplicates, samples: plan.samples, sampleReplicates: plan.replicates }), plan.edits);
   return { series, plate, roles: wellRoles(plate), reagent: reagentPlan(p, plan.procedure, plate.wells) };
 }
 

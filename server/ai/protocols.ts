@@ -241,6 +241,15 @@ export function protocolBrief(protocol: Protocol, context: ConverseContext): str
         ? `This run (computed by the app): ${context.samples} samples × ${context.replicates} replicates and ${run.vials} standards (${WAYS[context.standards ?? 'kit']}) × ${sr} = ${run.wells} wells; working reagent ${run.workingReagent} (${run.parts.join(' + ')}); ${made}. For this run's amounts, say these, not the manual's full-table volumes.`
         : `This run: ${context.samples} samples × ${context.replicates} replicates does not fit one 96-well plate.`,
     );
+    // The card the user changed by hand under the last answer: what "is that enough?" is about now.
+    const shown = context.shown;
+    const card = shown && runNumbers(protocol, procedure.id, shown.samples, shown.replicates, { ...context, standardReplicates: shown.replicates });
+    if (shown)
+      lines.push(
+        card
+          ? `The card the user changed by hand (computed by the app): ${shown.samples} samples × ${shown.replicates} = ${card.wells} wells; working reagent ${card.workingReagent} (${card.parts.join(' + ')}). The user's next question is about this card: answer for it, and give its samples and replicates to the card you draw.`
+          : `The card the user changed by hand: ${shown.samples} samples × ${shown.replicates} does not fit one 96-well plate.`,
+      );
   }
   return lines.join('\n');
 }

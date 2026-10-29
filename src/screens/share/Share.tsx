@@ -61,6 +61,7 @@ export function ShareScreen() {
   const readings = useRun(s => s.readings);
   const readingsFrom = useRun(s => s.readingsFrom);
   const photos = useRun(s => s.photos);
+  const edits = useRun(s => s.edits);
   const { protocol, error } = useProtocol(protocolId);
   const withResults = hasResults({ readings });
   const shown: ShareScope = scope === 'noresults' && !withResults ? 'all' : scope;
@@ -71,7 +72,7 @@ export function ShareScreen() {
   const setup = useMemo(
     () => {
       if (!protocol) return null;
-      const run = { protocolId, procedure, samples, replicates, standardReplicates, standards, readings, photos };
+      const run = { protocolId, procedure, samples, replicates, standardReplicates, standards, readings, photos, edits };
       // Chapp's example readings travel marked as such, so the labmate's phone labels them "Sample data" too.
       return buildShare(
         shown,
@@ -81,7 +82,7 @@ export function ShareScreen() {
         { photos: sendPhotos, from: userName },
       );
     },
-    [protocol, shown, protocolId, procedure, samples, replicates, standardReplicates, standards, readings, readingsFrom, photos, sendPhotos],
+    [protocol, shown, protocolId, procedure, samples, replicates, standardReplicates, standards, readings, readingsFrom, photos, sendPhotos, edits],
   );
   const { link, previous, failed, retry } = useShareLink(setup);
 

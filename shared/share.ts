@@ -57,6 +57,17 @@ export const SharedPlan = z
     standardReplicates: z.number().int().min(1).max(6).optional(),
     /** How the standards were made (useRun().standards); a share without it used the kit's table. */
     standards: z.enum(['kit', 'halve', 'five', 'ready']).optional(),
+    /**
+     * What changed on the plate during the run (src/components/lab/model.ts PlateEdits): a well that went wrong and
+     * where its contents went, wells added. The readings are where these put things, so they travel together.
+     */
+    edits: z
+      .object({
+        moved: z.record(Well, Well),
+        added: z.array(z.object({ name: z.string().trim().min(1).max(60), of: z.string().max(10).optional(), wells: z.array(Well).min(1).max(8) }).strict()).max(48),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

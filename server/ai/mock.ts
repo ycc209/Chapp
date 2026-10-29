@@ -1,3 +1,4 @@
+import { CATALOG_ID, type A2uiMessage } from '../../shared/a2ui.ts';
 import type { Action, AIProvider, ConverseContext, ConverseReply, FoundProtocol, ImportedProtocol, Source } from '../../shared/ai.ts';
 import { MAX_REPLICATES, MAX_SAMPLES } from './schema.ts';
 import { mockReadPlate } from './plate.ts';
@@ -42,8 +43,16 @@ function replicatesIn(text: string): number | undefined {
 }
 
 const reply = (say: string, extra: Partial<ConverseReply> = {}): ConverseReply => ({
-  say, expression: 'neutral', actions: [], cards: [], sources: [], ...extra,
+  say, expression: 'neutral', actions: [], sources: [], ...extra,
 });
+
+/** The working reagent as Muse Spark draws it (A2UI v0.9, Chapp's ReagentCard): for the run, or for the samples asked about. */
+export function reagentSurface(samples?: number): A2uiMessage[] {
+  return [
+    { version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: CATALOG_ID } },
+    { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard', ...(samples ? { samples } : {}) }] } },
+  ];
+}
 
 function converse(text: string, context: ConverseContext): ConverseReply {
   const zh = isChinese(text);
@@ -63,9 +72,18 @@ function converse(text: string, context: ConverseContext): ConverseReply {
     return reply(zh ? '好，回到上一步。' : 'Going back a step.', { actions: [{ type: 'previousStep' }] });
   }
 
+  // How much working reagent: a card the app works out (A2UI), and words that point at it.
+  const open = context.protocolId ? loadProtocol(context.protocolId) : null;
+  if (open && /working reagent|工作液/i.test(text) && /how much|enough|need|多少|夠/i.test(text)) {
+    const asked = samplesIn(text);
+    return reply(zh ? '要配的工作液在這裡，照你的計畫算好了。' : "Here's the working reagent to make, worked out for your plan.", {
+      expression: 'happy',
+      a2ui: reagentSurface(asked !== undefined && asked <= MAX_SAMPLES ? asked : undefined),
+    });
+  }
+
   // A question about the kit while its protocol is open, or at the bench something seen ("it turned cloudy when I
   // added B"): answered from the manual's own notes and steps, with the page it is on.
-  const open = context.protocolId ? loadProtocol(context.protocolId) : null;
   const question = /[?？]\s*$|^\s*(?:what|why|how|when|where|which|who|is|are|can|could|should|do|does|did|will|would|may|must|if)\b/i.test(text);
   if (open && (question || /^run/i.test(context.screen))) {
     const answer = answerFromManual(open, text, { least: question ? 2 : 3 });
@@ -82,7 +100,7 @@ function converse(text: string, context: ConverseContext): ConverseReply {
   if (/\bbca\b|\bpierce\b|protein assay|蛋白質?定量/i.test(text)) {
     return reply(
       zh ? '我找到 Thermo Fisher 的 Pierce BCA 說明書了，我們來看步驟。' : "I found Thermo Fisher's user guide for the Pierce BCA kit. Let's look at the protocol.",
-      { expression: 'happy', actions: [{ type: 'navigate', to: '/protocol' }, ...plan], cards: [{ kind: 'protocol', protocolId: bca.id }], sources: [manual] },
+      { expression: 'happy', actions: [{ type: 'navigate', to: '/protocol' }, ...plan], sources: [manual] },
     );
   }
 

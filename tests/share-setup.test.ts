@@ -179,3 +179,19 @@ describe('trimming by replying', () => {
     expect(parseTrim('')).toBeNull();
   });
 });
+
+describe('a share of a plate changed during the run', () => {
+  it('carries the wells moved and added with the plan, and puts them back on import', () => {
+    const edits = { moved: { B3: 'H12' }, added: [{ name: 'heat shock', wells: ['G5', 'G6'] }] };
+    const run = { ...storyRun(), edits };
+    const setup = buildShare('all', run, bca);
+    expect(setup.plan?.edits).toEqual(edits);
+    expect(SharedSetup.safeParse(setup).success).toBe(true);
+    const patch = importPatch(stored(setup), { ...storyRun(), protocolId: null });
+    expect(patch.edits).toEqual(edits);
+    // A run with nothing changed sends no edits, and an import of it starts clean.
+    const plain = buildShare('all', storyRun(), bca);
+    expect(plain.plan && 'edits' in plain.plan).toBe(false);
+    expect(importPatch(stored(plain), storyRun()).edits).toEqual({ moved: {}, added: [] });
+  });
+});

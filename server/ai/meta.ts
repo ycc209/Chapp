@@ -1,12 +1,18 @@
 import { z } from 'zod';
-import type { Action, AIProvider, Card, ConverseContext, ConverseReply, Expression, FindProtocolLive, FoundProtocol, Source, Transcript } from '../../shared/ai.ts';
+import { checkA2ui, componentsOf, dataPaths, numbersIn, type A2uiMessage } from '../../shared/a2ui.ts';
+import type { Action, AIProvider, ConverseContext, ConverseReply, Expression, FindProtocolLive, FoundProtocol, Source, Transcript } from '../../shared/ai.ts';
+import type { Protocol } from '../../shared/protocol.ts';
+import { dataModel } from '../../src/components/a2ui/data.ts';
+import type { RunPlan } from '../../src/components/lab/model.ts';
+import { procedureFor } from '../../src/screens/protocol/content.ts';
 import { readEvents } from '../../shared/sse.ts';
 import { distance, fixLabWords, labTerms, needsModelFix } from '../../src/voice/labWords.ts';
 import { UpstreamError } from './provider.ts';
 import { metaReadPlate } from './plate.ts';
 import { importProtocol } from './import.ts';
 import { createKitVision } from './vision.ts';
-import { ActionSchema, CardSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
+import { authorize, claimsChange, type Rules } from './authorize.ts';
+import { ActionSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
 import { answerFromManual, knownProtocols, loadProtocol, localProtocolId, manualSources, protocolBrief, WAYS } from './protocols.ts';
 
 /**
@@ -45,11 +51,13 @@ type Json = Record<string, any>;
 // Converse: Muse Spark answers in a strict JSON schema, which we turn into a ConverseReply and check with zod.
 
 const replyExpressions = expressions.filter(e => e !== 'listen');
-const actionTypes = ['navigate', 'setSamples', 'setReplicates', 'nextStep', 'previousStep', 'markDone', 'startTimer', 'findProtocol'] as const;
+const actionTypes = ['navigate', 'setSamples', 'setReplicates', 'nextStep', 'previousStep', 'markDone', 'redo', 'startTimer', 'setStepTime', 'moveWell', 'addWell', 'addCondition', 'findProtocol'] as const;
 
 /**
  * The wire format the model fills. Flat objects with every field required (unused ones "" or 0) are what strict
- * json_schema reliably supports, as the GenUI test on 2026-10-28 showed; the union types live in shared/ai.ts.
+ * json_schema reliably supports, as the GenUI test on 2026-10-28 showed; the union types live in shared/ai.ts. The
+ * A2UI goes inside a string: its components are too free-form for a strict schema, and Muse Spark writes it well there
+ * (6 of 8 questions fully valid on 2026-10-29, the other 2 off only in "version", which checkA2ui puts right).
  */
 export const replyFormat = {
   type: 'json_schema',
@@ -59,7 +67,7 @@ export const replyFormat = {
     schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['say', 'expression', 'actions', 'cards', 'manualPages'],
+      required: ['say', 'expression', 'actions', 'a2ui', 'manualPages'],
       properties: {
         say: { type: 'string' },
         expression: { type: 'string', enum: replyExpressions },
@@ -78,36 +86,22 @@ export const replyFormat = {
             },
           },
         },
-        cards: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['kind', 'protocolId', 'title', 'text'],
-            properties: {
-              kind: { type: 'string', enum: ['protocol', 'text'] },
-              protocolId: { type: 'string' },
-              title: { type: 'string' },
-              text: { type: 'string' },
-            },
-          },
-        },
+        a2ui: { type: 'string' },
         manualPages: { type: 'array', items: { type: 'integer' } },
       },
     },
   },
 };
 
-// Lenient on purpose: one bad action or card is dropped (fromWire) rather than costing the whole reply a retry.
+// Lenient on purpose: one bad action or component is dropped (fromWire) rather than costing the whole reply a retry.
 const Wire = z.object({
   say: z.string(),
   expression: z.string().optional(),
   actions: z.array(z.object({ type: z.string(), to: z.string().default(''), value: z.number().default(0), id: z.string().default(''), query: z.string().default('') })).default([]),
-  cards: z.array(z.object({ kind: z.string(), protocolId: z.string().default(''), title: z.string().default(''), text: z.string().default('') })).default([]),
+  a2ui: z.unknown().default(''),
   manualPages: z.array(z.number()).default([]),
 });
 type Wire = z.infer<typeof Wire>;
-
 
 /** "12 min 5 s", "30 s". */
 const left = (seconds: number) => [Math.floor(seconds / 60) && `${Math.floor(seconds / 60)} min`, seconds % 60 && `${seconds % 60} s`].filter(Boolean).join(' ') || '0 s';
@@ -124,44 +118,87 @@ function rightNow(context: ConverseContext): string {
     context.replicates !== undefined ? `${context.replicates} replicates` : '',
     context.standards ? `standards: ${WAYS[context.standards]}${context.standardReplicates ? ` × ${context.standardReplicates}` : ''}` : '',
     ...timers,
+    ...Object.entries(context.lengths ?? {}).map(([id, seconds]) => `step ${id} is ${seconds >= 3600 ? `${+(seconds / 3600).toFixed(2)} h` : left(seconds)} for this run (the user's choice)`),
+    ...Object.entries(context.edits?.moved ?? {}).map(([bad, to]) => `well ${bad} went wrong, its contents are in ${to}`),
+    ...(context.edits?.added ?? []).map(a => `added during the run: ${a.of ? `another well of ${a.of}` : `"${a.name}"`} in ${a.wells.join(', ')}`),
     context.readingsFrom !== undefined ? readings[context.readingsFrom ?? 'none'] : '',
   ]
     .filter(Boolean)
     .join(', ');
 }
 
+/** The steps of the protocol on screen (its procedure for this run), which A2UI step cards and paths refer to. */
+const stepsOf = (protocol: Protocol | null, context: ConverseContext) => (protocol ? procedureFor(protocol, context.procedure).steps : []);
+
+/**
+ * How Muse Spark draws under its answer: A2UI v0.9 with Chapp's catalog, values only by binding to the app's data. With
+ * no kit open there is nothing to bind to: only words and a choice to pick from.
+ */
+const A2UI_RULES = (paths: string[] | null) =>
+  `- a2ui: when a picture or a choice helps more than words, UI under the answer as A2UI v0.9 messages: a JSON array written inside this string, else "[]". Each message is {"version":"v0.9", <one key>}: first {"createSurface":{"surfaceId":"answer","catalogId":"chapp"}}, then {"updateComponents":{"surfaceId":"answer","components":[...]}}, a flat list; each component {"id":"...","component":"<type>", ...its properties}; one has id "root"; parents name their children by id with "child" (one) or "children" (a list of ids). Never send updateDataModel: the app fills the data model.
+  Components: Column, Row, List (children) · Card (child) · Divider · Text (text, variant: h3 | body | caption) · ChoicePicker (options: 2–4 of {"label","value"}: what the user may pick; a tap sends the label as their answer. For a choice of words, such as which kit they meant when a name or catalog number may be misheard: say what you understood and offer it with the likely alternatives)${paths ? ` · Chapp's own: ReagentCard (how much working reagent to make), PlateCard (where everything goes on the plate), StandardsCard (the dilution table), StepCard (stepId), TimerCard (stepId of a timed step: how long, how hot), Compare (need: the volume needed, as a binding such as {"path":"/reagent/make"}; have: the amount the user says they have, as they said it: "15 mL"), Ask (fields: some of samples, replicates, standards). ReagentCard, PlateCard and Compare take samples and replicates only when the user names numbers other than this run's; the user can change them on the card. Use Chapp's own components when one fits; compose basic ones when none does; one card is usually enough.
+  Ask: when the user wants to plan or set up the run ("plan my run", "help me get ready"), ask with Ask before drawing the plan: the app fills in this run's values and the user changes them or taps Continue. Don't answer and ask at once. Otherwise answer for this run's plan: the user can change the numbers on the card.
+  Never write a number in a2ui yourself (only the user's own words, in "have"): show a value by binding a property to the data model, {"path":"/reagent/make"}. Paths: ${paths.join(', ')}.` : '. No kit is open: nothing else to draw.'}`;
+
+// Characters only Simplified Chinese writes (Traditional has 這們來個說嗎…): a message with any is answered in Simplified.
+const SIMPLIFIED = /[这们来个说吗为时间后样钟运仅帮试剂盒册还过让请问题对开关发现进经较应给从买卖书车东头话网页实验温标读离准]/;
+
+/**
+ * The language to answer in, decided here from the user's own words (Notos's lesson, and Muse Spark answered a
+ * Traditional Chinese question in Simplified twice on 2026-10-29): Traditional Chinese as used in Taiwan unless the
+ * message is written in Simplified; English when it has no Chinese.
+ */
+export function replyLanguage(text: string): string {
+  if (!/[㐀-鿿]/.test(text)) return 'English';
+  return SIMPLIFIED.test(text) ? 'Simplified Chinese' : 'Traditional Chinese as used in Taiwan (繁體中文)';
+}
+
 /**
  * Muse Spark's instructions for one turn. What never changes comes first and the run's state last, so consecutive
- * turns share a long prefix the API can cache.
+ * turns share a long prefix the API can cache. The language to answer in comes last of all, from the user's words.
  */
-export function systemPrompt(context: ConverseContext): string {
+export function systemPrompt(context: ConverseContext, text?: string): string {
   const library = knownProtocols();
   const current = context.protocolId ? loadProtocol(context.protocolId) : null;
-  return `You are Chapp, a calm lab companion at the bench, helping one person run a lab kit. Everything you say is read aloud.
+  return `You are Chapp, a calm lab companion at the bench, helping one person run a lab kit. What you say is shown under the user's words, beside any card you draw.
 
 Reply in JSON:
-- say: one or two short sentences to be heard. No lists, markdown or URLs. Use the language of the user's message: English stays English; Chinese gets Traditional Chinese as used in Taiwan, unless they wrote Simplified.
-- Only say protocol numbers (volumes, times, temperatures, concentrations, wells) that are in the facts below or this run's numbers. If the answer needs a manual you don't have, say so: when you know which kit, find it (findProtocol); otherwise ask which kit. Never guess a number.
+- say: one or two short sentences. No lists, markdown or URLs. Use the language of the user's message: English stays English; Chinese gets Traditional Chinese as used in Taiwan, unless they wrote Simplified.
+- say never claims you changed, set, started or moved anything: the app shows what it did, or asks the user to confirm.
+- Numbers in say only from the facts and this run's numbers below, or the user's own words. Never work a new number out yourself: the card does that. When your card shows the amount, say points to it ("Here's what to mix for 30 samples.") instead of repeating it. If the answer needs a manual you don't have, say so: when you know which kit, find it (findProtocol); otherwise ask which kit. Never guess a number.
 - manualPages: the page (p.N) of each manual fact your answer uses; none when you used none.
 - expression: happy (greeting, good news), thinking (unsure, asking back), excited (a milestone), sad (bad news), sleepy (a long wait), surprised, wink (a light joke), else neutral.
-- actions: only what the user asks for or clearly means, usually none; unused fields "" or 0. navigate (to: ${routes.join(' ')}) · setSamples (value) · setReplicates (value 1–${MAX_REPLICATES}; samples and standards) · nextStep · previousStep · markDone (id: a standard's letter or a step id) · startTimer (id: the step id, value: that step's timer in seconds) · findProtocol (query: the kit as the user named it: vendor, kit name, catalog number).
-- cards: usually none. protocol (protocolId) when the user names a kit you have; text (title, text) for a short note worth keeping on screen.
+- actions: only what the user asks for or clearly means, usually none; unused fields "" or 0. navigate (to: ${routes.join(' ')}) · setSamples (value) · setReplicates (value 1–${MAX_REPLICATES}; samples and standards) · nextStep · previousStep · markDone (id: a standard's letter, a sample's number or a step id; several at once separated by commas: "A,B,C,D") · redo (id: a standard's letter or a sample's number to make or load again, several by commas; the app redoes the vials made from it too) · moveWell (id: the well that went wrong, as "B3"; query: the well the user names for its contents, else "" and the app picks a free one) · addWell (query: what the extra well is for, as the user said it, or "sample 3" / "B" for one more well of that sample or standard; id: the well, only if the user named one) · addCondition (query: the new condition's name as the user said it: one more sample with this run's replicates) · startTimer (id: the step id, value 0: the app knows its length) · setStepTime (id: a timed step's id, value: the new length in seconds, as the user said it): whenever the user asks to change how long a step takes, send it at once; the app shows them a card to confirm (this run only), so say only asks ("Make step 4 24 hours for this run?") · findProtocol (query: the kit as the user named it: vendor, kit name, catalog number). A change the user did not plainly ask for becomes a button they tap. For redo, moveWell, addWell and addCondition the app picks the wells and shows what to do, so say only acknowledges ("Got it, here's where it goes.") and names no well the user did not say.
+${A2UI_RULES(current ? dataPaths(stepsOf(current, context)) : null)}
 - The user names a kit to run, or asks for a kit's manual or protocol, whether you have it or not: findProtocol for that kit and say you are looking up its manual; no navigate, the app opens the search. Don't ask first. "Yes" or "find it" after a kit was named earlier in the conversation means that kit. A greeting: greet back and suggest what to say next.
 - Plate readings that are sample data are an example, not the user's results: say so when you talk about them.
 
 Protocols you have: ${library.map(p => `${p.id} (${p.kit.name}, ${p.kit.vendor})`).join('; ') || 'none yet'}.${current ? `\n\n${protocolBrief(current, context)}` : '\n\nNo kit is open in this conversation: don\'t assume one.'}
 
-Right now: ${rightNow(context)}.`;
+Right now: ${rightNow(context)}.${text ? `\n\nAnswer in ${replyLanguage(text)}.` : ''}`;
 }
 
-/** The wire's flat action → the app's Action, or null for a type the app does not know. */
+/** "A,B, C" → each id: one markDone or redo per vial or tube named. */
+const ids = (id: string) => id.split(/[,，、\s]+/).map(x => x.trim()).filter(Boolean);
+
+/** The wire's flat action → the app's Actions (one per id named), or [] for a type the app does not know. */
+function toActions(a: Wire['actions'][number]): (Action | null)[] {
+  if (a.type === 'markDone') return ids(a.id).map(id => ({ type: 'markDone', id }));
+  if (a.type === 'redo') return ids(a.id).map(id => ({ type: 'redo', id }));
+  return [toAction(a)];
+}
+
 function toAction(a: Wire['actions'][number]): Action | null {
   switch (a.type) {
     case 'navigate': return { type: 'navigate', to: a.to };
     case 'setSamples': return { type: 'setSamples', samples: a.value };
     case 'setReplicates': return { type: 'setReplicates', replicates: a.value };
-    case 'markDone': return { type: 'markDone', id: a.id };
-    case 'startTimer': return { type: 'startTimer', id: a.id, seconds: a.value };
+    case 'moveWell': return { type: 'moveWell', from: a.id.trim().toUpperCase(), ...(a.query.trim() ? { to: a.query.trim().toUpperCase() } : {}) };
+    case 'addWell': return a.query.trim() ? { type: 'addWell', what: a.query.trim(), ...(a.id.trim() ? { well: a.id.trim().toUpperCase() } : {}) } : null;
+    case 'addCondition': return a.query.trim() ? { type: 'addCondition', name: a.query.trim() } : null;
+    // The length is the app's (authorize.ts): a 0 here is filled in from the step.
+    case 'startTimer': return { type: 'startTimer', id: a.id, seconds: Math.max(1, a.value) };
+    case 'setStepTime': return { type: 'setStepTime', id: a.id, seconds: a.value };
     case 'nextStep': return { type: 'nextStep' };
     case 'previousStep': return { type: 'previousStep' };
     case 'findProtocol': return a.query.trim() ? { type: 'findProtocol', query: a.query.trim() } : null;
@@ -169,7 +206,7 @@ function toAction(a: Wire['actions'][number]): Action | null {
   }
 }
 
-/** Cuts a long answer at the last sentence that fits, so what is read aloud still ends cleanly. */
+/** Cuts a long answer at the last sentence that fits, so it still ends cleanly. */
 function fit(say: string, max = 600): string {
   const text = say.trim();
   if (text.length <= max) return text;
@@ -178,30 +215,130 @@ function fit(say: string, max = 600): string {
   return end > 0 ? cut.slice(0, end + 1) : `${cut.slice(0, max - 1)}…`;
 }
 
+/** The run's plan from what the app sent (the defaults where it sent none). */
+const planOf = (context: ConverseContext, protocol: Protocol): RunPlan => ({
+  procedure: procedureFor(protocol, context.procedure).id,
+  samples: context.samples || 12,
+  replicates: context.replicates || 2,
+  standardReplicates: context.standardReplicates || context.replicates || 2,
+  standards: context.standards ?? 'kit',
+});
+
+/**
+ * The numbers Chapp may say: the facts and run numbers it was given (the prompt), the user's words, and what the app
+ * works out for the plans its card shows (the run's, and samples or replicates the card names), so the words and the
+ * card always agree.
+ */
+export function sayableNumbers(prompt: string, question: string, protocol: Protocol | null, context: ConverseContext, a2ui: A2uiMessage[]): Set<number> {
+  const numbers = new Set([...numbersIn(prompt), ...numbersIn(question, true)]);
+  if (protocol) {
+    const run = planOf(context, protocol);
+    const shown = context.shown ? [{ ...run, samples: context.shown.samples, replicates: context.shown.replicates, standardReplicates: context.shown.replicates }] : [];
+    const plans = [run, ...shown, ...[...componentsOf(a2ui).values()].filter(c => typeof c.samples === 'number' || typeof c.replicates === 'number').map(c => ({
+      ...run,
+      ...(typeof c.samples === 'number' ? { samples: c.samples } : {}),
+      ...(typeof c.replicates === 'number' ? { replicates: c.replicates, standardReplicates: c.replicates } : {}),
+    }))];
+    for (const plan of plans) for (const n of numbersIn(JSON.stringify(dataModel(protocol, plan)))) numbers.add(n);
+  }
+  return numbers;
+}
+
+/**
+ * Say only numbers that can be checked (sayableNumbers). A sentence with any other number is taken out, rather than
+ * shown next to a card that says something else; if nothing is left, a line that points at the card (or says Chapp
+ * won't guess) takes its place. Returns the words and how many sentences went.
+ */
+export function checkSay(say: string, sayable: Set<number>, drawn: boolean): { say: string; removed: number } {
+  const sentences = say.split(/(?<=[.!?。！？])\s*/).filter(s => s.trim());
+  const kept = sentences.filter(s => numbersIn(s).every(n => sayable.has(n)));
+  if (kept.length === sentences.length) return { say, removed: 0 };
+  const zh = /[㐀-鿿]/.test(say);
+  const fallback = drawn
+    ? zh ? '在這裡，照你的計畫算好了。' : 'Here it is, worked out for your plan.'
+    : zh ? '這個數字我沒辦法從說明書確認，所以不猜。' : "I can't check that number against the manual, so I won't guess it.";
+  return { say: kept.length ? kept.join(zh ? '' : ' ') : fallback, removed: sentences.length - kept.length };
+}
+
+/** What a change may name in the protocol on screen: its steps, its timed steps with their lengths, its vials. */
+function rulesFor(protocol: Protocol | null, context: ConverseContext): Rules {
+  const steps = stepsOf(protocol, context);
+  const seconds = { s: 1, min: 60, h: 3600 } as const;
+  return {
+    steps: steps.map(s => s.id),
+    timed: steps.flatMap(s => (s.timer ? [{ id: s.id, seconds: s.timer.duration.value * seconds[s.timer.duration.unit] }] : [])),
+    vials: protocol?.standardCurves.flatMap(c => c.points.map(p => p.id.toUpperCase())) ?? [],
+    lengths: context.lengths,
+    samples: (context.samples ?? 0) + (context.edits?.added.filter(a => !a.of).length ?? 0),
+  };
+}
+
+/**
+ * Take out the sentences that say a change was made when the app made none (claimsChange): the app shows what it
+ * did, and Chapp never says it did what the app did not. If nothing is left, a line that says where things stand.
+ */
+export function checkClaims(say: string, applied: number, waiting: number): { say: string; removed: number } {
+  if (applied) return { say, removed: 0 };
+  const sentences = say.split(/(?<=[.!?。！？])\s*/).filter(s => s.trim());
+  const kept = sentences.filter(s => !claimsChange(s));
+  if (kept.length === sentences.length) return { say, removed: 0 };
+  const zh = /[㐀-鿿]/.test(say);
+  const fallback = waiting ? (zh ? '要我這樣改嗎？' : 'Want me to make that change?') : zh ? '這個我還沒有改。' : "I haven't changed that.";
+  return { say: kept.length ? kept.join(zh ? '' : ' ') : fallback, removed: sentences.length - kept.length };
+}
+
 /** The reply the app gets, and what was dropped from the model's on the way (for the log: kinds only, never words). */
-function fromWire(wire: Wire, context: ConverseContext, question: string): { reply: ConverseReply; dropped: string[] } {
+function fromWire(wire: Wire, context: ConverseContext, question: string, prompt: string): { reply: ConverseReply; dropped: string[] } {
   const dropped: string[] = [];
-  const actions = wire.actions.flatMap(a => {
-    const action = ActionSchema.safeParse(toAction(a));
-    if (action.success) return [action.data as Action];
-    dropped.push(`action ${a.type}`);
-    return [];
-  });
-  // A protocol card for a kit we have no document for would be a dead end, so it is dropped like a broken one.
-  const cards = wire.cards.flatMap(c => {
-    const card = CardSchema.safeParse(c.kind === 'protocol' ? { kind: 'protocol', protocolId: c.protocolId } : { kind: c.kind, ...(c.title ? { title: c.title } : {}), text: c.text });
-    if (card.success && (card.data.kind === 'text' || loadProtocol(card.data.protocolId))) return [card.data as Card];
-    dropped.push(`card ${c.kind}`);
-    return [];
-  });
+  const open = context.protocolId ? loadProtocol(context.protocolId) : null;
+
+  // Each change checked against what the user said (authorize.ts): made now, waiting for a tap, or not at all.
+  const rules = rulesFor(open, context);
+  const actions: Action[] = [];
+  const confirm: Action[] = [];
+  for (const one of wire.actions.flatMap(w => toActions(w).map(action => ({ w, action })))) {
+    const a = one.w;
+    const parsed = ActionSchema.safeParse(one.action);
+    if (!parsed.success) {
+      dropped.push(`action ${a.type}`);
+      continue;
+    }
+    const { verdict, action } = authorize(parsed.data as Action, question, rules);
+    if (verdict === 'apply') actions.push(action);
+    else if (verdict === 'confirm') {
+      confirm.push(action);
+      dropped.push(`action ${a.type} waits for a tap`);
+    } else dropped.push(`action ${a.type} not the user's`);
+  }
+
+  // The surface: checked against the protocol on screen (its steps and data paths) and the user's words. No kit open:
+  // nothing to bind to, so only words and a choice.
+  // The card the user changed by hand counts as their words: a card may show its samples and replicates again.
+  const saidOrShown = context.shown ? `${question} (${context.shown.samples} samples × ${context.shown.replicates})` : question;
+  const checked = checkA2ui(wire.a2ui, { steps: stepsOf(open, context), said: saidOrShown, kit: Boolean(open) });
+  dropped.push(...checked.dropped.map(d => `a2ui ${d}`));
+  const a2ui = checked.messages;
+  // A plan card drawn without numbers of its own shows the card the user changed by hand: that is what they asked about.
+  if (context.shown)
+    for (const c of componentsOf(a2ui).values())
+      if (['ReagentCard', 'PlateCard', 'Compare'].includes(c.component) && c.samples === undefined && c.replicates === undefined) {
+        c.samples = context.shown.samples;
+        c.replicates = context.shown.replicates;
+      }
+
+  // The words agree with the card: numbers only from the facts, the user, or what the app worked out; and no change
+  // claimed that the app did not make.
+  const numbers = checkSay(fit(wire.say), sayableNumbers(prompt, question, open, context, a2ui), a2ui.length > 0);
+  if (numbers.removed) dropped.push(`say ${numbers.removed} sentence(s) with an unchecked number`);
+  const said = checkClaims(numbers.say, actions.filter(a => a.type !== 'navigate' && a.type !== 'findProtocol').length, confirm.length);
+  if (said.removed) dropped.push(`say ${said.removed} sentence(s) claiming a change not made`);
 
   // Sources are never the model's words: they are the manual of the protocol on screen (the pages it named, the one
-  // whose note matches the question first, with the manual's own words) and of any protocol card it shows.
+  // whose note matches the question first, with the manual's own words).
   const sources: Source[] = [];
-  const current = context.protocolId ? loadProtocol(context.protocolId) : null;
-  if (current && wire.manualPages.length) {
-    const cited = manualSources(current, wire.manualPages);
-    const note = answerFromManual(current, question, { procedureId: context.procedure });
+  if (open && wire.manualPages.length) {
+    const cited = manualSources(open, wire.manualPages);
+    const note = answerFromManual(open, question, { procedureId: context.procedure });
     const at = note ? cited.findIndex(s => s.page === note.source.page) : -1;
     if (note && at >= 0) {
       cited.splice(at, 1);
@@ -209,21 +346,27 @@ function fromWire(wire: Wire, context: ConverseContext, question: string): { rep
     }
     sources.push(...cited);
   }
-  for (const card of cards) {
-    const doc = card.kind === 'protocol' ? loadProtocol(card.protocolId) : null;
-    if (doc && !sources.some(s => s.url === doc.source.url)) sources.push(...manualSources(doc));
-  }
   const expression = (replyExpressions as readonly string[]).includes(wire.expression ?? '') ? (wire.expression as Expression) : undefined;
   return {
-    reply: { say: fit(wire.say), ...(expression ? { expression } : {}), actions: actions.slice(0, 5), cards: cards.slice(0, 3), sources: sources.slice(0, 8) },
+    reply: {
+      say: said.say,
+      ...(expression ? { expression } : {}),
+      actions: actions.slice(0, 12),
+      ...(confirm.length ? { confirm: confirm.slice(0, 12) } : {}),
+      ...(a2ui.length ? { a2ui } : {}),
+      sources: sources.slice(0, 8),
+    },
     dropped,
   };
 }
 
 type Checked = { ok: true; reply: ConverseReply; dropped: string[] } | { ok: false; issue: string; say?: string };
 
-/** The model's raw content → a ConverseReply that passes ConverseReplySchema (minus anything broken), or why not. */
-export function checkReply(content: unknown, context: ConverseContext, question = ''): Checked {
+/**
+ * The model's raw content → a ConverseReply that passes ConverseReplySchema (minus anything broken), or why not.
+ * `prompt` is the system prompt the model was given (its numbers are the ones it may say); built here when not given.
+ */
+export function checkReply(content: unknown, context: ConverseContext, question = '', prompt = systemPrompt(context)): Checked {
   if (typeof content !== 'string') return { ok: false, issue: 'no content' };
   let parsed: unknown;
   try {
@@ -234,7 +377,7 @@ export function checkReply(content: unknown, context: ConverseContext, question 
   const wire = Wire.safeParse(parsed);
   const say = typeof (parsed as Json)?.say === 'string' && (parsed as Json).say.trim() ? (parsed as Json).say.trim() as string : undefined;
   if (!wire.success) return { ok: false, issue: describeIssues(wire.error), say };
-  const { reply: built, dropped } = fromWire(wire.data, context, question);
+  const { reply: built, dropped } = fromWire(wire.data, context, question, prompt);
   const reply = ConverseReplySchema.safeParse(built);
   if (!reply.success) return { ok: false, issue: describeIssues(reply.error), say };
   return { ok: true, reply: reply.data, dropped };
@@ -517,7 +660,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       const deadline = Date.now() + timeouts.converse;
       // The conversation so far (the app sends the last few turns), so a short answer like "yes" has its question.
       const earlier = history.map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text }));
-      const messages: Json[] = [{ role: 'system', content: systemPrompt(context) }, ...earlier, { role: 'user', content: text }];
+      const messages: Json[] = [{ role: 'system', content: systemPrompt(context, text) }, ...earlier, { role: 'user', content: text }];
       let first: Checked | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
         const left = deadline - Date.now();
@@ -533,8 +676,10 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           throw error;
         }
         const content = body.choices?.[0]?.message?.content;
-        const checked = checkReply(content, context, text);
+        const checked = checkReply(content, context, text, messages[0].content);
         if (checked.ok) {
+          const drawn = checked.reply.a2ui?.flatMap(m => ('updateComponents' in m ? m.updateComponents.components.map(c => c.component) : [])) ?? [];
+          log(`[meta] converse a2ui: ${drawn.length ? drawn.join(' ') : 'none'}`);
           if (checked.dropped.length) log(`[meta] converse dropped ${checked.dropped.join(', ')}`);
           return checked.reply;
         }
@@ -549,7 +694,6 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
         say: say || "Sorry, I lost my train of thought. Could you say that again?",
         expression: say ? 'neutral' : 'thinking',
         actions: [],
-        cards: [],
         sources: [],
       };
     },

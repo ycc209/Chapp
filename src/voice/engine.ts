@@ -16,8 +16,11 @@ export const MAX_TURN_MS = 30000;
 /** Wait after Chapp stops talking before listening again, so the tail of its voice is not heard. */
 export const AFTER_SPEAKING_MS = 300;
 
-/** tap: one thing said, then stop · talk: turn after turn until the user ends it. */
-export type Mode = 'tap' | 'talk';
+/**
+ * tap: one thing said, then stop · hold: everything said while Tap to speak is held, sent when it is let go (a pause
+ * does not end it) · talk: turn after turn until the user ends it.
+ */
+export type Mode = 'tap' | 'hold' | 'talk';
 
 /** Why an engine stopped early. */
 export type Problem = 'mic-off' | 'no-mic' | 'insecure' | 'unavailable' | 'network' | 'no-speech' | 'failed';
@@ -47,8 +50,10 @@ export type EngineEvents = {
 export interface Engine {
   /** Opens the microphone. Call it inside the user's tap: browsers only open it for a gesture. */
   start(): void;
-  /** The user tapped: tap mode sends what was said so far; talk mode drops it. */
+  /** The user tapped (or let go of a hold): tap and hold send what was said so far; talk mode drops it. */
   finish(): void;
+  /** A press let go too soon to be a hold: go on as a tap, ending the turn at the next pause. */
+  toTap(): void;
   /** Chapp is about to speak: stop hearing. */
   pause(): void;
   resume(): void;

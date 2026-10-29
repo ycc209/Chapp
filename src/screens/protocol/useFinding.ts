@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FoundProtocol, ProtocolIntro } from '../../../shared/ai.ts';
+import { otherCatalog } from '../../../shared/catalog.ts';
 import { api } from '../../api/client.ts';
 import { useSession } from '../../state/session.ts';
 
@@ -28,6 +29,8 @@ export type Finding = {
    * ProtocolIntro). The Overview shows its answer and At a glance from it until the protocol is there.
    */
   intro?: ProtocolIntro;
+  /** The catalog number the user said, when the kit found has another ("EEA 302" said, EEA032 found): shown as a check. */
+  said?: { number: string; found: string };
 };
 
 const STEP_MS = 1400;
@@ -72,7 +75,7 @@ export function useFinding(ask: string | null, hold: Stage | null, exchange: obj
     const reveal = (progress: string[], protocolId?: string) => {
       const go = (stage: Stage) => {
         const s = cap(stage);
-        setFinding(f => ({ stage: s, progress, notFound: null, ...(protocolId ? { protocolId } : {}), ...(f.intro ? { intro: f.intro } : {}) }));
+        setFinding(f => ({ stage: s, progress, notFound: null, ...(protocolId ? { protocolId } : {}), ...(f.intro ? { intro: f.intro } : {}), ...(f.said ? { said: f.said } : {}) }));
         status(s);
         if (s === 3 && exchange) shown.add(exchange);
         if (s === stage && stage < 3) after(STEP_MS, () => go((stage + 1) as Stage));
@@ -95,6 +98,9 @@ export function useFinding(ask: string | null, hold: Stage | null, exchange: obj
     api.findProtocolLive(ask, heard, abort.signal, told).then(
       (found: FoundProtocol) => {
         if (!live) return;
+        // A number said that is not the kit found: kept with whatever is shown next.
+        const number = found.found ? otherCatalog(`${useSession.getState().exchange?.ask ?? ''} ${ask}`, found.kit?.catalog) : null;
+        if (number && found.kit) setFinding(f => ({ ...f, said: { number, found: found.kit!.catalog } }));
         if (!found.found) {
           setFinding({ stage: 1, progress: found.progress, notFound: found.answer || "I couldn't find that kit's manual." });
           session.setStatus('');
@@ -109,6 +115,7 @@ export function useFinding(ask: string | null, hold: Stage | null, exchange: obj
             progress: found.progress,
             notFound: `I found ${what}, but I couldn't turn it into steps here. You can open the vendor's copy.`,
             ...(found.document?.url ? { manual: found.document.url } : {}),
+            ...(number && found.kit ? { said: { number, found: found.kit.catalog } } : {}),
           });
           session.setStatus('');
           session.setExpression('neutral');
