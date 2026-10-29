@@ -185,7 +185,7 @@ describe.skipIf(!existsSync(new URL('../data/protocols/pierce-bca.json', import.
 
   it('draws a plan card for the card the user changed by hand, when the model gave it no numbers', () => {
     const a2ui = JSON.stringify([{ version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'Compare', need: { path: '/reagent/make' }, have: '10 mL' }] } }]);
-    const checked = checkReply(JSON.stringify({ say: 'Here is the check.', expression: 'neutral', actions: [], a2ui, manualPages: [] }), { ...context, shown: { samples: 15, replicates: 2 } }, 'I only have 10 mL. Is that enough?');
+    const checked = checkReply(JSON.stringify({ say: 'Here is the check.', expression: 'neutral', actions: [], a2ui, manualPages: [] }), { ...context, screen: 'chat', shown: { samples: 15, replicates: 2 } }, 'I only have 10 mL. Is that enough?');
     if (!checked.ok) throw new Error(checked.issue);
     expect(componentsOf(checked.reply.a2ui!).get('root')).toMatchObject({ component: 'Compare', samples: 15, replicates: 2, have: '10 mL' });
   });

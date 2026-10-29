@@ -4,7 +4,7 @@
  * controller does not care which one runs.
  */
 
-/** What Chapp listens in. One constant, so a zh-TW setting can switch it later. */
+/** What the browser's recognizer listens in (?voice=browser). Muse Voice Transcribe, the default, hears Chinese too. */
 export const LISTEN_LANG = 'en-US';
 
 /** Quiet after speech that ends a turn. */
@@ -74,9 +74,7 @@ function fromStorage() {
   }
 }
 
-/** ?voice=browser|server, else localStorage chapp.voice, else the browser's recognizer when there is one. */
-export function chooseEngine(hasBrowserRecognition: boolean): EngineKind {
-  const wanted = fromUrl ?? fromStorage();
-  if (wanted === 'browser' || wanted === 'server') return wanted;
-  return hasBrowserRecognition ? 'browser' : 'server';
+/** ?voice=browser|server, else localStorage chapp.voice, else Muse Voice Transcribe (it hears Chinese and English). */
+export function chooseEngine(): EngineKind {
+  return (fromUrl ?? fromStorage()) === 'browser' ? 'browser' : 'server';
 }

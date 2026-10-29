@@ -1,5 +1,5 @@
 import { useSession, type Voice } from '../state/session.ts';
-import { BrowserEngine, recognitionClass } from './browser.ts';
+import { BrowserEngine } from './browser.ts';
 import { AFTER_SPEAKING_MS, chooseEngine, PROBLEM_TEXT, type Engine, type EngineKind, type Mode, type Problem } from './engine.ts';
 import { fixLabWords } from './labWords.ts';
 import { ServerEngine } from './server.ts';
@@ -60,7 +60,7 @@ export function startListening(next: Mode) {
   setVoice(VOICE[next]);
   // Before the engine starts: one that fails at once closes everything, this included.
   if (next === 'talk') unwatchSpeaking = isSpeaking.subscribe(onSpeaking);
-  run(serverFromNowOn ? 'server' : chooseEngine(recognitionClass() !== null));
+  run(serverFromNowOn ? 'server' : chooseEngine());
 }
 
 const VOICE: Record<Mode, Voice> = { tap: 'listening', hold: 'holding', talk: 'talking' };

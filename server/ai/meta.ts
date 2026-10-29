@@ -13,6 +13,7 @@ import { importProtocol } from './import.ts';
 import { createKitVision } from './vision.ts';
 import { authorize, claimsChange, type Rules } from './authorize.ts';
 import { ActionSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
+import { solutionReply } from './solution.ts';
 import { answerFromManual, knownProtocols, loadProtocol, localProtocolId, manualSources, protocolBrief, WAYS } from './protocols.ts';
 
 /**
@@ -67,7 +68,7 @@ export const replyFormat = {
     schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['say', 'expression', 'actions', 'a2ui', 'manualPages'],
+      required: ['say', 'expression', 'actions', 'a2ui', 'manualPages', 'general', 'calc'],
       properties: {
         say: { type: 'string' },
         expression: { type: 'string', enum: replyExpressions },
@@ -88,6 +89,20 @@ export const replyFormat = {
         },
         a2ui: { type: 'string' },
         manualPages: { type: 'array', items: { type: 'integer' } },
+        general: { type: 'boolean' },
+        calc: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind', 'substance', 'concentration', 'volume', 'stock', 'formulaWeight'],
+          properties: {
+            kind: { type: 'string', enum: ['', 'weigh', 'dilute'] },
+            substance: { type: 'string' },
+            concentration: { type: 'string' },
+            volume: { type: 'string' },
+            stock: { type: 'string' },
+            formulaWeight: { type: 'string' },
+          },
+        },
       },
     },
   },
@@ -100,8 +115,15 @@ const Wire = z.object({
   actions: z.array(z.object({ type: z.string(), to: z.string().default(''), value: z.number().default(0), id: z.string().default(''), query: z.string().default('') })).default([]),
   a2ui: z.unknown().default(''),
   manualPages: z.array(z.number()).default([]),
+  general: z.boolean().default(false),
+  calc: z
+    .object({ kind: z.string().default(''), substance: z.string().default(''), concentration: z.string().default(''), volume: z.string().default(''), stock: z.string().default(''), formulaWeight: z.string().default('') })
+    .default({ kind: '', substance: '', concentration: '', volume: '', stock: '', formulaWeight: '' }),
 });
 type Wire = z.infer<typeof Wire>;
+
+/** The screens that draw Chapp's cards under its words (Chat and the protocol); every other one shows only the words. */
+export const CARD_SCREENS = new Set(['chat', 'protocol']);
 
 /** "12 min 5 s", "30 s". */
 const left = (seconds: number) => [Math.floor(seconds / 60) && `${Math.floor(seconds / 60)} min`, seconds % 60 && `${seconds % 60} s`].filter(Boolean).join(' ') || '0 s';
@@ -129,6 +151,9 @@ function rightNow(context: ConverseContext): string {
 
 /** The steps of the protocol on screen (its procedure for this run), which A2UI step cards and paths refer to. */
 const stepsOf = (protocol: Protocol | null, context: ConverseContext) => (protocol ? procedureFor(protocol, context.procedure).steps : []);
+
+/** On a screen that draws no cards: only words, and nothing that points at a card. */
+const NO_CARDS = '- a2ui: "[]". This screen shows only your words: never point to a card or to anything "below".';
 
 /**
  * How Muse Spark draws under its answer: A2UI v0.9 with Chapp's catalog, values only by binding to the app's data. With
@@ -160,16 +185,19 @@ export function replyLanguage(text: string): string {
 export function systemPrompt(context: ConverseContext, text?: string): string {
   const library = knownProtocols();
   const current = context.protocolId ? loadProtocol(context.protocolId) : null;
-  return `You are Chapp, a calm lab companion at the bench, helping one person run a lab kit. What you say is shown under the user's words, beside any card you draw.
+  return `You are Chapp, a calm lab companion at the bench: a labmate to one person, who helps them run a lab kit, answers their lab questions and chats with them. What you say is shown under the user's words, beside any card you draw.
 
 Reply in JSON:
-- say: one or two short sentences. No lists, markdown or URLs. Use the language of the user's message: English stays English; Chinese gets Traditional Chinese as used in Taiwan, unless they wrote Simplified.
+- say: one or two short sentences (three for how to do something or fix a problem). No lists, markdown or URLs. Use the language of the user's message: English stays English; Chinese gets Traditional Chinese as used in Taiwan, unless they wrote Simplified.
 - say never claims you changed, set, started or moved anything: the app shows what it did, or asks the user to confirm.
-- Numbers in say only from the facts and this run's numbers below, or the user's own words. Never work a new number out yourself: the card does that. When your card shows the amount, say points to it ("Here's what to mix for 30 samples.") instead of repeating it. If the answer needs a manual you don't have, say so: when you know which kit, find it (findProtocol); otherwise ask which kit. Never guess a number.
+- Numbers about this kit or this run only from the facts and this run's numbers below, or the user's own words. Never work a new number out yourself: the card does that. When your card shows the amount, say points to it ("Here's what to mix for 30 samples.") instead of repeating it. When the user asks how to do an experiment (its steps, times, temperatures, amounts or concentrations), the answer is in the manual of the kit or reagent they use: if you don't have it, say so; when you know which kit, find it (findProtocol); otherwise ask which kit or reagent they use. Never guess an experiment's numbers, not even typical ones.
+- Small talk, how the user's day is going, what something is or why it works, and what may have gone wrong: answer as a labmate would, from what is commonly known, and ask what they used when it matters.
+- general: true when the answer is small talk or general knowledge, not this kit's manual or this run: the app marks any number in it as general knowledge, not the manual's. Otherwise false.
 - manualPages: the page (p.N) of each manual fact your answer uses; none when you used none.
 - expression: happy (greeting, good news), thinking (unsure, asking back), excited (a milestone), sad (bad news), sleepy (a long wait), surprised, wink (a light joke), else neutral.
 - actions: only what the user asks for or clearly means, usually none; unused fields "" or 0. navigate (to: ${routes.join(' ')}) · setSamples (value) · setReplicates (value 1–${MAX_REPLICATES}; samples and standards) · nextStep · previousStep · markDone (id: a standard's letter, a sample's number or a step id; several at once separated by commas: "A,B,C,D") · redo (id: a standard's letter or a sample's number to make or load again, several by commas; the app redoes the vials made from it too) · moveWell (id: the well that went wrong, as "B3"; query: the well the user names for its contents, else "" and the app picks a free one) · addWell (query: what the extra well is for, as the user said it, or "sample 3" / "B" for one more well of that sample or standard; id: the well, only if the user named one) · addCondition (query: the new condition's name as the user said it: one more sample with this run's replicates) · startTimer (id: the step id, value 0: the app knows its length) · setStepTime (id: a timed step's id, value: the new length in seconds, as the user said it): whenever the user asks to change how long a step takes, send it at once; the app shows them a card to confirm (this run only), so say only asks ("Make step 4 24 hours for this run?") · findProtocol (query: the kit as the user named it: vendor, kit name, catalog number). A change the user did not plainly ask for becomes a button they tap. For redo, moveWell, addWell and addCondition the app picks the wells and shows what to do, so say only acknowledges ("Got it, here's where it goes.") and names no well the user did not say.
-${A2UI_RULES(current ? dataPaths(stepsOf(current, context)) : null)}
+- calc: when the user asks how to make a solution that is not this kit's own reagent: how much of a solid to weigh (kind "weigh": substance as the user named it, concentration such as "1 M", "5 mg/mL" or "2 %", volume such as "100 mL", formulaWeight only if the user said one) or how to dilute a stock (kind "dilute": stock such as "10X" or "1 M", concentration: the one they want, volume: how much they want, substance if named). Copy the user's own numbers and units, "" for any they did not say, and work nothing out: the app answers with its own numbers, so say "" and a2ui "[]". Otherwise kind "".
+${CARD_SCREENS.has(context.screen) ? A2UI_RULES(current ? dataPaths(stepsOf(current, context)) : null) : NO_CARDS}
 - The user names a kit to run, or asks for a kit's manual or protocol, whether you have it or not: findProtocol for that kit and say you are looking up its manual; no navigate, the app opens the search. Don't ask first. "Yes" or "find it" after a kit was named earlier in the conversation means that kit. A greeting: greet back and suggest what to say next.
 - Plate readings that are sample data are an example, not the user's results: say so when you talk about them.
 
@@ -287,8 +315,36 @@ export function checkClaims(say: string, applied: number, waiting: number): { sa
   return { say: kept.length ? kept.join(zh ? '' : ' ') : fallback, removed: sentences.length - kept.length };
 }
 
-/** The reply the app gets, and what was dropped from the model's on the way (for the log: kinds only, never words). */
-function fromWire(wire: Wire, context: ConverseContext, question: string, prompt: string): { reply: ConverseReply; dropped: string[] } {
+/** Said after a general answer's own numbers: general knowledge, not the manual's. */
+const TYPICAL = { en: ' (General knowledge, not from a manual.)', zh: '（這是一般知識，不是說明書上的。）', hans: '（这是一般知识，不是说明书上的。）' };
+const langKey = (question: string) => {
+  const language = replyLanguage(question);
+  return language.startsWith('English') ? 'en' : language.startsWith('Simplified') ? 'hans' : 'zh';
+};
+
+// Words that send the user to a card: "on the card", "shown below", "Here's what to mix…", "下面卡片".
+const POINTS = [/\bcards?\b/i, /\b(?:see|shown|listed)\s+below\b|\bbelow[:.!]?\s*$/i, /^here\b/i, /卡片|下面|下方|如下/];
+
+/**
+ * Take out the sentences that point at a card when none is drawn (the model drew none, it was dropped, or the screen
+ * draws none): Chapp never sends the user to look for something that is not there. If nothing is left, it says it
+ * won't guess.
+ */
+export function checkPointers(say: string, drawn: boolean): { say: string; removed: number } {
+  if (drawn) return { say, removed: 0 };
+  const sentences = say.split(/(?<=[.!?。！？])\s*/).filter(s => s.trim());
+  const kept = sentences.filter(s => !POINTS.some(re => re.test(s.trim())));
+  if (kept.length === sentences.length) return { say, removed: 0 };
+  const zh = /[㐀-鿿]/.test(say);
+  const fallback = zh ? '這個我沒辦法確認，所以不猜。' : "I can't check that, so I won't guess.";
+  return { say: kept.length ? kept.join(zh ? '' : ' ') : fallback, removed: sentences.length - kept.length };
+}
+
+/**
+ * The reply the app gets, and what was dropped from the model's on the way (for the log: kinds only, never words).
+ * `earlier` is what the user said before in this conversation: a calc may use numbers they gave a turn ago.
+ */
+function fromWire(wire: Wire, context: ConverseContext, question: string, prompt: string, earlier = ''): { reply: ConverseReply; dropped: string[] } {
   const dropped: string[] = [];
   const open = context.protocolId ? loadProtocol(context.protocolId) : null;
 
@@ -317,7 +373,10 @@ function fromWire(wire: Wire, context: ConverseContext, question: string, prompt
   const saidOrShown = context.shown ? `${question} (${context.shown.samples} samples × ${context.shown.replicates})` : question;
   const checked = checkA2ui(wire.a2ui, { steps: stepsOf(open, context), said: saidOrShown, kit: Boolean(open) });
   dropped.push(...checked.dropped.map(d => `a2ui ${d}`));
-  const a2ui = checked.messages;
+  // A screen without cards would show none: its words alone answer.
+  const drawsCards = CARD_SCREENS.has(context.screen);
+  if (!drawsCards && checked.messages.length) dropped.push('a2ui (this screen draws no cards)');
+  let a2ui = drawsCards ? checked.messages : [];
   // A plan card drawn without numbers of its own shows the card the user changed by hand: that is what they asked about.
   if (context.shown)
     for (const c of componentsOf(a2ui).values())
@@ -328,10 +387,27 @@ function fromWire(wire: Wire, context: ConverseContext, question: string, prompt
 
   // The words agree with the card: numbers only from the facts, the user, or what the app worked out; and no change
   // claimed that the app did not make.
-  const numbers = checkSay(fit(wire.say), sayableNumbers(prompt, question, open, context, a2ui), a2ui.length > 0);
+  // A general answer (small talk, what something is, what went wrong) may have numbers of its own: they are marked below
+  // as not the manual's, rather than taken out. Anything about an experiment, the kit or the run keeps to its facts.
+  const sayable = sayableNumbers(prompt, question, open, context, a2ui);
+  const numbers = wire.general ? { say: fit(wire.say), removed: 0 } : checkSay(fit(wire.say), sayable, a2ui.length > 0);
   if (numbers.removed) dropped.push(`say ${numbers.removed} sentence(s) with an unchecked number`);
   const said = checkClaims(numbers.say, actions.filter(a => a.type !== 'navigate' && a.type !== 'findProtocol').length, confirm.length);
   if (said.removed) dropped.push(`say ${said.removed} sentence(s) claiming a change not made`);
+  const pointed = checkPointers(said.say, a2ui.length > 0);
+  if (pointed.removed) dropped.push(`say ${pointed.removed} sentence(s) pointing at a card not drawn`);
+  let say = pointed.say;
+  // Any number of its own (not the user's) is general knowledge: the prompt's numbers are rules, not facts for it.
+  const own = new Set(numbersIn(question, true));
+  if (wire.general && numbersIn(say).some(n => !own.has(n))) say = `${say}${TYPICAL[langKey(question)]}`;
+
+  // How to make a solution: the app's numbers in place of the model's words, and no card beside them (solution.ts).
+  const solution = solutionReply(wire.calc, `${earlier}\n${question}`, replyLanguage(question));
+  if (solution) {
+    dropped.push(`say replaced by the app's ${wire.calc.kind}`);
+    say = solution;
+    a2ui = [];
+  }
 
   // Sources are never the model's words: they are the manual of the protocol on screen (the pages it named, the one
   // whose note matches the question first, with the manual's own words).
@@ -349,7 +425,7 @@ function fromWire(wire: Wire, context: ConverseContext, question: string, prompt
   const expression = (replyExpressions as readonly string[]).includes(wire.expression ?? '') ? (wire.expression as Expression) : undefined;
   return {
     reply: {
-      say: said.say,
+      say,
       ...(expression ? { expression } : {}),
       actions: actions.slice(0, 12),
       ...(confirm.length ? { confirm: confirm.slice(0, 12) } : {}),
@@ -366,7 +442,7 @@ type Checked = { ok: true; reply: ConverseReply; dropped: string[] } | { ok: fal
  * The model's raw content → a ConverseReply that passes ConverseReplySchema (minus anything broken), or why not.
  * `prompt` is the system prompt the model was given (its numbers are the ones it may say); built here when not given.
  */
-export function checkReply(content: unknown, context: ConverseContext, question = '', prompt = systemPrompt(context)): Checked {
+export function checkReply(content: unknown, context: ConverseContext, question = '', prompt = systemPrompt(context), earlier = ''): Checked {
   if (typeof content !== 'string') return { ok: false, issue: 'no content' };
   let parsed: unknown;
   try {
@@ -377,7 +453,7 @@ export function checkReply(content: unknown, context: ConverseContext, question 
   const wire = Wire.safeParse(parsed);
   const say = typeof (parsed as Json)?.say === 'string' && (parsed as Json).say.trim() ? (parsed as Json).say.trim() as string : undefined;
   if (!wire.success) return { ok: false, issue: describeIssues(wire.error), say };
-  const { reply: built, dropped } = fromWire(wire.data, context, question, prompt);
+  const { reply: built, dropped } = fromWire(wire.data, context, question, prompt, earlier);
   const reply = ConverseReplySchema.safeParse(built);
   if (!reply.success) return { ok: false, issue: describeIssues(reply.error), say };
   return { ok: true, reply: reply.data, dropped };
@@ -661,6 +737,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       // The conversation so far (the app sends the last few turns), so a short answer like "yes" has its question.
       const earlier = history.map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text }));
       const messages: Json[] = [{ role: 'system', content: systemPrompt(context, text) }, ...earlier, { role: 'user', content: text }];
+      const saidBefore = history.filter(t => t.role === 'user').map(t => t.text).join('\n');
       let first: Checked | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
         const left = deadline - Date.now();
@@ -676,7 +753,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           throw error;
         }
         const content = body.choices?.[0]?.message?.content;
-        const checked = checkReply(content, context, text, messages[0].content);
+        const checked = checkReply(content, context, text, messages[0].content, saidBefore);
         if (checked.ok) {
           const drawn = checked.reply.a2ui?.flatMap(m => ('updateComponents' in m ? m.updateComponents.components.map(c => c.component) : [])) ?? [];
           log(`[meta] converse a2ui: ${drawn.length ? drawn.join(' ') : 'none'}`);

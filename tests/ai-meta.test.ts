@@ -146,7 +146,8 @@ describe('meta converse prompt', () => {
   it('states the rules and the screen, and lists the protocols on this machine', () => {
     const prompt = systemPrompt({ screen: 'plan', protocolId: null, samples: 12, replicates: 2 });
     expect(prompt).toMatch(/one or two short sentences/);
-    expect(prompt).toMatch(/Never guess a number/);
+    expect(prompt).toMatch(/Never guess an experiment's numbers, not even typical ones/);
+    expect(prompt).toMatch(/Small talk, how the user's day is going, what something is or why it works, and what may have gone wrong: answer as a labmate would/);
     expect(prompt).toContain('Right now: screen "plan", protocol none, 12 samples, 2 replicates.');
     expect(prompt).not.toContain('Steps (index');
     if (local) expect(prompt).toContain('pierce-bca (Pierce BCA Protein Assay Kit, Thermo Scientific)');

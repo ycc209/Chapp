@@ -56,7 +56,7 @@ testing on iPhones and the demo video.
 |---|---|
 | Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards) |
 | SAM 3.1 | Segmenting every bottle in one photo of the kit |
-| Muse Voice Transcribe | Speech to text at the bench, with lab words fixed afterwards (`?voice=server`; phones use the browser's own recognizer by default) |
+| Muse Voice Transcribe | Speech to text at the bench, in Chinese or English, with lab words fixed afterwards (`?voice=browser` uses the phone's own recognizer instead, English only) |
 | Muse Image | Planned for a consistent set of equipment icons; not in the app yet (`npm run smoke` checks it) |
 
 ## How Chapp asks Muse Spark to read a manual
