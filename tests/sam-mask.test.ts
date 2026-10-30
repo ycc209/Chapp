@@ -1,5 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { outlineOf, polygonArea, ringsOf, simplify } from '../server/ai/samMask.ts';
+import { outlineOf, polygonArea, ringsOf, samOutline, simplify } from '../server/ai/samMask.ts';
+import { parseSamRecords } from '../server/ai/vision.ts';
 
 // SAM's mask as an outline (server/ai/samMask.ts): the parser's polygonal path → its biggest ring, simplified to the
 // pixel, in fractions of the photo. The decoding itself is Meta's package; this is what is done with its path.
@@ -73,5 +75,29 @@ describe('outlineOf', () => {
         [0, 3],
       ]),
     ).toBe(12);
+  });
+});
+
+// SAM 3.1's real reply on the 23225 product shot (data/smoke/kit/raw/, git-ignored), decoded by Meta's parser, when
+// both are on this machine.
+const SAVED = new URL('../data/smoke/kit/raw/sam-govsci-23225-bottle.json', import.meta.url);
+const PACKAGE: string = '@meta-sam/parser';
+const parser = await import(PACKAGE).then(() => true, () => false);
+
+describe.runIf(existsSync(SAVED) && parser)('samOutline with Meta\'s parser', () => {
+  it('outlines every bottle of a real reply, inside its box', async () => {
+    const find = (o: unknown): string => (typeof o === 'string' && o.includes('<|box') ? o : o && typeof o === 'object' ? (Object.values(o).map(find).find(Boolean) ?? '') : '');
+    const records = parseSamRecords(find(JSON.parse(readFileSync(SAVED, 'utf8'))));
+    const outlines = await Promise.all(records.map(r => samOutline(r.mask!)));
+    expect(outlines.every(Boolean)).toBe(true);
+    // Each outline's points sit in its box, give or take the half pixel the parser traces along.
+    records.forEach((r, i) => {
+      for (const [x, y] of ringsOf(outlines[i]!)[0]!) {
+        expect(x).toBeGreaterThanOrEqual(r.box.x - 0.01);
+        expect(x).toBeLessThanOrEqual(r.box.x + r.box.width + 0.01);
+        expect(y).toBeGreaterThanOrEqual(r.box.y - 0.01);
+        expect(y).toBeLessThanOrEqual(r.box.y + r.box.height + 0.01);
+      }
+    });
   });
 });

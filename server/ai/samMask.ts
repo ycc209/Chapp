@@ -22,7 +22,10 @@ export async function samOutline(mask: SamMask): Promise<string | undefined> {
   if (!p) return undefined;
   let path: string;
   try {
-    path = p.decodeMaskToSVGPath({ encoding: mask.encoding, width: mask.width, height: mask.height, payload: mask.payload });
+    // The parser takes the payload with its marker on the front, as SAM wrote it (~ lossless, ! one-bit): version
+    // 0.1.0 refuses it without ("lossless mask payloads must start with ~"), whatever its type comment says.
+    const marker = mask.encoding === 'one_bit' ? '!' : '~';
+    path = p.decodeMaskToSVGPath({ encoding: mask.encoding, width: mask.width, height: mask.height, payload: marker + mask.payload });
   } catch {
     return undefined;
   }
