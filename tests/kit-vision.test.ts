@@ -133,6 +133,26 @@ describe('labels', () => {
     expect(() => parseLabels('not json', targets, 1)).toThrow(UpstreamError);
   });
 
+  it('reads a label the photo cuts off when what shows fits one bottle alone and the model picked it', () => {
+    // The ATP kit on 2026-10-30: the blue-capped tube turned, its label showing "Converter M".
+    const atp: LabelTarget[] = [
+      { id: 'converter-mix-b', name: 'Converter Mix B', role: 'reagent', kit: true, labels: ['Converter Mix B', 'Converter Enzyme I', 'ATP Converter'] },
+      { id: 'developer-mix-n', name: 'Developer Mix N', role: 'reagent', kit: true, labels: ['Developer Mix N', 'Developer IV', 'Developer Mix'] },
+      { id: 'atp-iv', name: 'ATP IV', role: 'standard', kit: true, labels: ['ATP IV', 'ATP Standard II', 'ATP Standard'] },
+    ];
+    const item = (over: object) => ({ crop: 1, name: '', looks: 'blue capped vial', component: '', guess: '', ...over });
+    const one = (over: object) => parseLabels(JSON.stringify({ items: [item(over)] }), atp, 1).labels[0];
+    expect(one({ name: 'Converter M', component: 'converter-mix-b' })).toMatchObject({ componentId: 'converter-mix-b', match: 'read' });
+    expect(one({ name: 'Converter M', guess: 'converter-mix-b' })).toMatchObject({ componentId: 'converter-mix-b', match: 'read' });
+    // Cut on the left too.
+    expect(one({ name: 'verter Mix B', component: 'converter-mix-b' })).toMatchObject({ match: 'read' });
+    // Words that fit two bottles ("Mix"), only a fragment ("Conv"), or a pick they do not fit: still a guess.
+    expect(one({ name: 'Mix', component: 'converter-mix-b' })).toMatchObject({ match: 'guess' });
+    expect(one({ name: 'ATP', component: 'atp-iv' })).toMatchObject({ match: 'guess' });
+    expect(one({ name: 'Conv', component: 'converter-mix-b' })).toMatchObject({ match: 'guess' });
+    expect(one({ name: 'Converter M', component: 'developer-mix-n' })).toMatchObject({ componentId: 'developer-mix-n', match: 'guess' });
+  });
+
   it('matches label words whole', () => {
     expect(namedBy('Pierce® BCA™ Protein Assay Reagent A, 500 ml', targets).map(t => t.id)).toEqual(['reagent-a']);
     expect(namedBy('Reagent AB', targets)).toEqual([]);

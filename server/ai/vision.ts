@@ -271,6 +271,33 @@ export function namedBy(text: string, targets: LabelTarget[]): LabelTarget[] {
   return targets.filter(t => t.labels.some(l => plain(l) !== '' && said.includes(spaced(l))));
 }
 
+/**
+ * The components a label still names where the photo cuts it off: the words read are a run of one of its names' words,
+ * the first and last perhaps cut short where the label turns out of sight ("Converter M" on a tube is "Converter Mix
+ * B"), with at least one word of three letters or more read whole.
+ */
+export function partlyNamedBy(text: string, targets: LabelTarget[]): LabelTarget[] {
+  const words = (s: string) => plain(s.normalize('NFKC')).split(' ').filter(Boolean);
+  const read = words(text);
+  if (!read.length) return [];
+  const within = (name: string[]) => {
+    for (let at = 0; at + read.length <= name.length; at++) {
+      let whole = false;
+      const fits = read.every((w, i) => {
+        const n = name[at + i]!;
+        if (w === n) {
+          whole ||= w.length >= 3;
+          return true;
+        }
+        return (i === read.length - 1 && n.startsWith(w)) || (i === 0 && n.endsWith(w));
+      });
+      if (fits && whole) return true;
+    }
+    return false;
+  };
+  return targets.filter(t => t.labels.some(l => within(words(l))));
+}
+
 /** "glass ampule": two or three plain words, never empty. */
 const looksOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9µ\- ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || 'bottle';
 
@@ -290,12 +317,16 @@ export function parseLabels(content: unknown, targets: LabelTarget[], count: num
     const claimed = targets.find(t => t.id === item.component);
     const guessed = targets.find(t => t.id === item.guess);
     const named = text ? namedBy(text, targets) : [];
+    // A label cut off by the photo: read when what shows fits one bottle of this run alone and the model picked it.
+    const partly = !named.length && text ? partlyNamedBy(text, targets) : [];
+    const picked = claimed ?? guessed;
     let componentId: string | null = null;
     let match: LabelMatch = 'none';
     // What the label says wins over what the model picked; a pick the words don't back is a guess.
     if (named.length === 1) [componentId, match] = [named[0].id, 'read'];
     else if (claimed && named.includes(claimed)) [componentId, match] = [claimed.id, 'read'];
-    else if (claimed ?? guessed) [componentId, match] = [(claimed ?? guessed)!.id, 'guess'];
+    else if (picked && partly.length === 1 && partly[0] === picked) [componentId, match] = [picked.id, 'read'];
+    else if (picked) [componentId, match] = [picked.id, 'guess'];
     else if (text) match = 'other';
     return { text, looks: looksOf(item.looks), componentId, match };
   });
