@@ -7,6 +7,7 @@ import {
 import { intro, parts } from './import-fixture.ts';
 import { compareProtocols } from '../server/ai/import-check.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
+import { meter } from '../server/ai/usage.ts';
 import type { ProtocolIntro } from '../shared/ai.ts';
 import { isAssay, Protocol, problems } from '../shared/protocol.ts';
 
@@ -52,6 +53,29 @@ describe('assembling the wire rows into a protocol', () => {
     expect(p.standardCurves[0]!.points.map(x => [x.id, x.from, x.take.value, x.diluent.value, x.concentration.value, x.blank ?? false]))
       .toEqual([['A', 'stock', 100, 0, 1000, false], ['B', 'A', 50, 50, 500, false], ['C', null, 0, 100, 0, true]]);
     expect(problems(p)).toEqual([]);
+  });
+
+  it('makes standards in the wells up to what the procedure puts in each well, when no row says the volume', () => {
+    // As Muse Spark read the ATP manual on 2026-10-30: "adjust volume to 50 µL/well" left out of every row, the
+    // blank's too; the procedure loads 50 µL of standards and samples.
+    const atp = parts();
+    atp.inventory.curves = [{ id: 'col', name: 'ATP standards', stock: 'std', diluent: 'buffer', range: '0-10 nmol/well', cite: 'p9: 0, 2, 4 nmol/well' }];
+    atp.inventory.procedures = [{ ...atp.inventory.procedures[0]!, curve: 'col', sample: '50 uL', range: '0-10 nmol/well' }];
+    atp.curves.points = [
+      { curve: 'col', id: 'col-1mm', diluent: '90 uL', from: 'stock', take: '10 uL', concentration: '1 mM', blank: false },
+      { curve: 'col', id: 'col-1', diluent: '', from: 'col-1mm', take: '0 uL', concentration: '0 nmol/well', blank: true },
+      { curve: 'col', id: 'col-2', diluent: '', from: 'col-1mm', take: '2 uL', concentration: '2 nmol/well', blank: false },
+      { curve: 'col', id: 'col-3', diluent: '', from: 'col-1mm', take: '4 uL', concentration: '', blank: false },
+    ];
+    const { protocol, problems: dropped } = assemble(atp, meta);
+    expect(protocol.standardCurves[0]!.points.map(x => [x.id, x.take.value, x.diluent.value, `${x.concentration.value} ${x.concentration.unit}`, x.blank ?? false, x.intermediate ?? false])).toEqual([
+      ['1mm', 10, 90, '1 mM', false, true],
+      ['1', 0, 50, '0 nmol/well', true, false],
+      ['2', 2, 48, '2 nmol/well', false, false],
+      // No concentration: 4 µL of the 1 mM working dilution.
+      ['3', 4, 46, '4 nmol/well', false, false],
+    ]);
+    expect(dropped.filter(x => /not a whole row/.test(x))).toEqual([]);
   });
 
   it('puts each note where it belongs and reports what it dropped', () => {
@@ -197,11 +221,28 @@ describe('the wire format', () => {
   });
 });
 
-/** A fake /responses endpoint answering each call from `replies` (by its text.format name), and what it was sent. */
-function fakeMeta(replies: Record<string, unknown>) {
+/**
+ * A fake /responses endpoint answering each call from `replies` (by its text.format name), and what it was sent. With
+ * `files`, it also takes an upload (POST /files → file-1) and its deletion; without, it has no Files API (404). With
+ * `tokens`, it counts input (POST /responses/input_tokens).
+ */
+function fakeMeta(replies: Record<string, unknown>, { files = false, tokens = 0 } = {}) {
   const sent: { name: string; body: any; at: number }[] = [];
+  const other: string[] = [];
   let clock = 0;
-  const fetch = (async (_url: string, init: RequestInit) => {
+  const fetch = (async (url: string, init: RequestInit) => {
+    if (url.endsWith('/files')) {
+      other.push(`upload ${(init.body as FormData).get('purpose')} ${(init.body as FormData).get('expires_after[seconds]')}`);
+      return files ? new Response(JSON.stringify({ id: 'file-1', object: 'file' })) : new Response('{"error":{"message":"not found"}}', { status: 404 });
+    }
+    if (init.method === 'DELETE') {
+      other.push(`delete ${url.split('/').pop()}`);
+      return new Response('{}');
+    }
+    if (url.endsWith('/responses/input_tokens')) {
+      other.push('count');
+      return new Response(JSON.stringify({ object: 'response.input_tokens', input_tokens: tokens }));
+    }
     const body = JSON.parse(String(init.body));
     const name = body.text.format.name as string;
     sent.push({ name, body, at: clock++ });
@@ -210,7 +251,7 @@ function fakeMeta(replies: Record<string, unknown>) {
     const output = [{ type: 'reasoning' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(reply) }] }];
     return new Response(JSON.stringify({ status: 'completed', output }), { status: 200 });
   }) as typeof globalThis.fetch;
-  return { fetch, sent };
+  return { fetch, sent, other };
 }
 
 const PDF = new TextEncoder().encode('%PDF-1.7\n<< /Type /Page >>\n<< /Type /Page >>\n%%EOF');
@@ -265,6 +306,52 @@ describe('importProtocol', () => {
     const none = fakeMeta(replies);
     await importProtocol(PDF, {}, { apiKey: 'k', fetch: none.fetch, log: () => {}, textOf: () => null });
     expect(none.sent.every(s => s.body.input[1].content[0].type === 'input_file')).toBe(true);
+  });
+
+  it('gives every call on one manual the same cache key, so the rules and the manual they share can be reused', async () => {
+    const { fetch, sent } = fakeMeta(replies);
+    await importProtocol(PDF, {}, { apiKey: 'k', fetch, log: () => {}, textOf: () => '--- Page 1 ---\nDemo manual text' });
+    const keys = new Set(sent.map(s => s.body.prompt_cache_key));
+    expect([...keys]).toEqual([expect.stringMatching(/^chapp-manual-[0-9a-f]{16}$/)]);
+    expect(sent.every(s => s.body.prompt_cache_retention === '24h')).toBe(true);
+    // The shared part comes first: the rules, then the manual; each call's own task last.
+    expect(sent.every(s => s.body.input[0].role === 'system' && s.body.input[1].content.at(-1).type === 'input_text')).toBe(true);
+  });
+
+  it('uploads a scanned manual once for all its calls, and deletes it once read; a manual with text goes inline', async () => {
+    const scanned = fakeMeta(replies, { files: true });
+    await importProtocol(PDF, {}, { apiKey: 'k', fetch: scanned.fetch, log: () => {}, textOf: () => null });
+    expect(scanned.sent.map(s => s.body.input[1].content[0])).toEqual(scanned.sent.map(() => ({ type: 'input_file', file_id: 'file-1' })));
+    await new Promise(r => setTimeout(r, 0));
+    expect(scanned.other).toEqual(['upload user_data 3600', 'delete file-1']);
+    // Only the intro takes the PDF: no upload.
+    const text = fakeMeta(replies, { files: true });
+    await importProtocol(PDF, {}, { apiKey: 'k', fetch: text.fetch, log: () => {}, textOf: () => '--- Page 1 ---\nDemo manual text' });
+    expect(text.other).toEqual([]);
+    expect(text.sent.find(s => s.name === 'ChappIntro')!.body.input[1].content[0]).toMatchObject({ file_data: expect.stringMatching(/^data:application\/pdf;base64,/) });
+    // An upload the API refuses: inline, as before.
+    const refused = fakeMeta(replies);
+    await importProtocol(PDF, {}, { apiKey: 'k', fetch: refused.fetch, log: () => {}, textOf: () => null });
+    expect(refused.sent.every(s => s.body.input[1].content[0].file_data)).toBe(true);
+  });
+
+  it('with a daily cap, counts the manual first and refuses a read that would pass it', async () => {
+    try {
+      meter.setCap(0.5);
+      // About 5 × 20,000 tokens of input plus the output: well under $0.50.
+      const small = fakeMeta(replies, { tokens: 20_000 });
+      await importProtocol(PDF, {}, { apiKey: 'k', fetch: small.fetch, log: () => {}, textOf: () => '--- Page 1 ---\nDemo manual text' });
+      expect(small.other).toEqual(['count', 'count']);
+      expect(small.sent).toHaveLength(5);
+      // 5 × 200,000 tokens is $1.25 before it writes a word: nothing is read.
+      const big = fakeMeta(replies, { tokens: 200_000 });
+      const error = await importProtocol(PDF, {}, { apiKey: 'k', fetch: big.fetch, log: () => {}, textOf: () => '--- Page 1 ---\nDemo manual text' }).catch(e => e);
+      expect(error).toBeInstanceOf(UpstreamError);
+      expect(error.message).toMatch(/past today's allowance/);
+      expect(big.sent).toEqual([]);
+    } finally {
+      meter.setCap(0);
+    }
   });
 
   it('reads the protocol all the same when the intro fails, in the deep read\'s own words', async () => {

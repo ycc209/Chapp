@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ImportedProtocol, ProtocolIntro, Source } from '../../shared/ai.ts';
 import { Protocol, Stage, problems as checkProblems, type Cite, type Note } from '../../shared/protocol.ts';
 import { UpstreamError } from './provider.ts';
+import { costOf, inputCost, meter, outputCost, usageLine } from './usage.ts';
 import { convert, normalizeUnit, toMicroliters, unitKind } from '../../shared/units.ts';
 
 /**
@@ -670,11 +671,14 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
         Object.assign(stockPart, { concentration: stockStrength });
         dropped.push(`component ${stockPart.id}: strength from the dilution table, as printed`);
       }
-      // Standards made in the wells are topped up to what the blank's well holds ("adjust to 50 uL"): a row that
-      // says no diluent gets the rest of that volume; one that says no concentration gets what its take of the
-      // working dilution holds (2 uL of 1 mM is 2 nmol). Both are the manual's own numbers, put together.
+      // Standards made in the wells are topped up to what a well holds ("adjust to 50 uL"): a row that says no
+      // diluent gets the rest of that volume; one that says no concentration gets what its take of the working
+      // dilution holds (2 uL of 1 mM is 2 nmol). What a well holds is the blank's volume, or else what the procedure
+      // plating this table puts in each well ("Load 50 uL standards and samples"). All the manual's own numbers.
+      const perWell = r ? /\/well$/i.test(normalizeUnit(r.unit)) : false;
       const blankRow = rows.find(p => p.blank || (p.from.trim() === '' && p !== stockRow));
-      const wellVolume = blankRow ? ((parseVolume(blankRow.diluent) ?? toppedUp(blankRow.diluent, null)) ?? null) : null;
+      const plating = inv.procedures.find(pr => ref(pr.curve) === id);
+      const wellVolume = (blankRow ? (parseVolume(blankRow.diluent) ?? toppedUp(blankRow.diluent, null)) : null) ?? (perWell && plating ? parseVolume(plating.sample) : null);
       const byId = new Map(rows.map(p => [vialId(p.id) ?? p.id.trim(), p]));
       const points = rows
         .filter(p => p !== stockRow)
@@ -684,13 +688,14 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
           // blank, nothing is taken and there is no standard, so an empty take or concentration is that zero.
           const isBlank = p.blank || p.from.trim() === '';
           const zero = (text: string) => /^\s*0(?:\.0+)?\s*$/.test(text) || (isBlank && text.trim() === '');
-          const t = parseVolume(p.take);
-          // "adjust to 50 uL", "up to 50 uL with buffer": the final volume, so the diluent is what the take leaves.
-          const perWell = r ? /\/well$/i.test(normalizeUnit(r.unit)) : false;
-          const d = parseVolume(p.diluent) ?? toppedUp(p.diluent, t) ?? (perWell && !isBlank && p.diluent.trim() === '' && t && wellVolume ? toppedUp(`to ${wellVolume.value} ${wellVolume.unit}`, t) : null);
+          const printed = parseVolume(p.diluent);
+          const t = parseVolume(p.take) ?? (zero(p.take) ? { value: 0, unit: printed?.unit ?? 'µL' } : null);
+          // "adjust to 50 uL", "up to 50 uL with buffer": the final volume, so the diluent is what the take leaves. In
+          // a well, an empty diluent is that too, the blank's included (nothing taken: the whole well of buffer).
+          const d = printed ?? toppedUp(p.diluent, t) ?? (perWell && p.diluent.trim() === '' && t && wellVolume ? toppedUp(`to ${wellVolume.value} ${wellVolume.unit}`, t) : null);
           const volumeUnit = d?.unit ?? t?.unit ?? 'µL';
           const diluent = d ?? (zero(p.diluent) ? { value: 0, unit: volumeUnit } : null);
-          const take = t ?? (zero(p.take) ? { value: 0, unit: volumeUnit } : null);
+          const take = t;
           const source = byId.get(vialId(p.from) ?? p.from.trim());
           const working = source && !isBlank ? parseConcentration(source.concentration) : null;
           const held = perWell && p.concentration.trim() === '' && take && working ? convert(working, normalizeUnit(r!.unit), { perWell: toMicroliters(take) ?? undefined }) : null;
@@ -1012,17 +1017,45 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
   const seconds = (from = started) => ((Date.now() - from) / 1000).toFixed(1);
   const textCalls = new Set(options.asText ?? TEXT_CALLS);
   const text = textCalls.size ? (options.textOf ?? manualText)(pdf) : null;
-  const pdfFile = { type: 'input_file', filename: source.filename?.replace(/[^\w.-]+/g, '_') || 'manual.pdf', file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString('base64')}` };
-  const manual = (call: CallName) => (text && textCalls.has(call) ? { type: 'input_text', text: `The manual, page by page:\n\n${text}` } : pdfFile);
+  const filename = source.filename?.replace(/[^\w.-]+/g, '_') || 'manual.pdf';
+  const authorization = `Bearer ${apiKey}`;
   const record = options.record ?? recorder(options.now?.() ?? new Date());
+  // Every call on this manual starts with the same rules and the same manual, so the API can reuse that start from
+  // its cache; the key keeps the calls together (dev.meta.ai/docs/prompt-caching).
+  const cacheKey = `chapp-manual-${sha256(pdf).slice(0, 16)}`;
+
+  // A scanned manual (no text to read) goes to every call as the PDF: uploaded once (Files API, deleted again once
+  // read, and expiring in an hour regardless) and named by its id. One call alone takes it inline.
+  const pdfCalls = (['intro', 'inventory', 'steps', 'curves', 'notes'] as const).filter(c => !(text && textCalls.has(c)));
+  const fileId = pdfCalls.length > 1 ? await uploadPdf(pdf, filename, { baseUrl, authorization, fetchFn, log }) : null;
+  const pdfFile = fileId ? { type: 'input_file', file_id: fileId } : { type: 'input_file', filename, file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString('base64')}` };
+  const manual = (call: CallName) => (text && textCalls.has(call) ? { type: 'input_text', text: `The manual, page by page:\n\n${text}` } : pdfFile);
+  const inputOf = (call: CallName, task: string) => [{ role: 'system', content: RULES }, { role: 'user', content: [manual(call), { type: 'input_text', text: task }] }];
+
+  /**
+   * With a daily cap set (usage.ts), the manual's tokens are counted before anything is read (one PDF call, one text
+   * call, by the API's own count) and the read is refused when it would take the day past the cap.
+   */
+  async function withinCap() {
+    if (!meter.cap()) return;
+    const count = (call: CallName, task: string) => countTokens(inputOf(call, task), { baseUrl, authorization, fetchFn });
+    const [pdfTokens, textTokens] = await Promise.all([count('intro', INTRO_TASK), text ? count('inventory', INVENTORY_TASK) : Promise.resolve(null)]);
+    const textCount = 5 - pdfCalls.length;
+    const input = (pdfTokens ?? 0) * pdfCalls.length + (textTokens ?? 0) * textCount;
+    const estimate = inputCost(IMPORT_MODEL, input) + outputCost(IMPORT_MODEL, READ_OUTPUT_TOKENS);
+    log(`[meta] import counted ${pdfTokens ?? '?'} tokens with the PDF, ${textTokens ?? '?'} with the text: about $${estimate.toFixed(3)}`);
+    meter.check(estimate);
+  }
 
   async function ask<S extends Spec>(call: CallName, spec: S, task: string, thinking = efforts[call]): Promise<WireOf<S>> {
     const name = `Chapp${call[0]!.toUpperCase()}${call.slice(1)}`;
     const body = JSON.stringify({
       model: IMPORT_MODEL,
       reasoning: { effort: thinking },
-      input: [{ role: 'system', content: RULES }, { role: 'user', content: [manual(call), { type: 'input_text', text: task }] }],
+      input: inputOf(call, task),
       text: { format: formatOf(name, spec) },
+      prompt_cache_key: cacheKey,
+      prompt_cache_retention: '24h',
     });
     for (let attempt = 0; ; attempt++) {
       const from = Date.now();
@@ -1030,7 +1063,7 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
       try {
         const res = await fetchFn(`${baseUrl}/responses`, {
           method: 'POST',
-          headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+          headers: { authorization, 'content-type': 'application/json' },
           body,
           signal: AbortSignal.timeout(timeoutMs),
         });
@@ -1053,7 +1086,9 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
         throw new UpstreamError(`Meta import (${call}) answered with something that is not JSON`);
       }
       record?.(call, reply, (Date.now() - from) / 1000);
-      log(`[meta] import ${call} ${seconds(from)} s`);
+      meter.spend(costOf(IMPORT_MODEL, reply));
+      const used = usageLine(IMPORT_MODEL, reply);
+      log(`[meta] import ${call} ${seconds(from)} s${used ? ` · ${used}` : ''}`);
       if (reply.status === 'failed' || reply.error) throw new UpstreamError(`Meta import (${call}) failed: ${scrub(JSON.stringify(reply.error ?? {}), apiKey) || 'no reason given'}`);
       try {
         return readWire(spec, renameLegacy(call, JSON.parse(replyText(reply))));
@@ -1064,34 +1099,96 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
     }
   }
 
-  options.onProgress?.('Reading the manual');
-  // The intro runs beside the deep read and is heard as soon as it is back; without it the deep read still stands.
-  const intro = ask('intro', INTRO, INTRO_TASK).then(
-    wire => {
-      const said = introOf(wire, source.url);
-      log(`[meta] import intro heard after ${seconds()} s${said ? '' : ' (too little to show)'}`);
-      if (said) options.onIntro?.(said);
-      return wire;
-    },
-    (error: unknown) => {
-      log(`[meta] import intro failed after ${seconds()} s${error instanceof UpstreamError ? '' : ' (not the model)'}`);
-      return null;
-    },
-  );
-  const inventory = await ask('inventory', INVENTORY, INVENTORY_TASK);
-  options.onProgress?.('Turning it into steps');
-  const brief = `\n\nThe inventory:\n${inventoryBrief(inventory)}`;
-  const [steps, curves, notes] = await Promise.all([
-    ask('steps', STEPS, STEPS_TASK + brief),
-    inventory.curves.length ? ask('curves', CURVES, CURVES_TASK + `\n\nThe standard curves:\n${JSON.stringify(inventory.curves.map(c => ({ id: c.id, name: c.name })))}`) : Promise.resolve({ points: [] }),
-    ask('notes', NOTES, NOTES_TASK + brief),
-  ]);
-  const now = options.now?.() ?? new Date();
-  const { protocol, problems } = assemble(
-    { inventory, steps, curves, notes, intro: await intro },
-    { sha256: sha256(pdf), pages: countPages(pdf), ...(source.url ? { url: source.url } : {}), fetchedAt: now.toISOString(), seconds: Math.round((Date.now() - started) / 100) / 10 },
-  );
-  log(`[meta] import ${seconds()} s, ${problems.length} problem(s)`);
-  const sources: Source[] = /^https?:\/\//.test(protocol.source.url) ? [{ url: protocol.source.url, title: protocol.source.title }] : [];
-  return { protocol, problems, sources };
+  async function read(): Promise<ImportedProtocol> {
+    options.onProgress?.('Reading the manual');
+    // The intro runs beside the deep read and is heard as soon as it is back; without it the deep read still stands.
+    const intro = ask('intro', INTRO, INTRO_TASK).then(
+      wire => {
+        const said = introOf(wire, source.url);
+        log(`[meta] import intro heard after ${seconds()} s${said ? '' : ' (too little to show)'}`);
+        if (said) options.onIntro?.(said);
+        return wire;
+      },
+      (error: unknown) => {
+        log(`[meta] import intro failed after ${seconds()} s${error instanceof UpstreamError ? '' : ' (not the model)'}`);
+        return null;
+      },
+    );
+    const inventory = await ask('inventory', INVENTORY, INVENTORY_TASK);
+    options.onProgress?.('Turning it into steps');
+    const brief = `\n\nThe inventory:\n${inventoryBrief(inventory)}`;
+    const [steps, curves, notes] = await Promise.all([
+      ask('steps', STEPS, STEPS_TASK + brief),
+      inventory.curves.length ? ask('curves', CURVES, CURVES_TASK + `\n\nThe standard curves:\n${JSON.stringify(inventory.curves.map(c => ({ id: c.id, name: c.name })))}`) : Promise.resolve({ points: [] }),
+      ask('notes', NOTES, NOTES_TASK + brief),
+    ]);
+    const now = options.now?.() ?? new Date();
+    const { protocol, problems } = assemble(
+      { inventory, steps, curves, notes, intro: await intro },
+      { sha256: sha256(pdf), pages: countPages(pdf), ...(source.url ? { url: source.url } : {}), fetchedAt: now.toISOString(), seconds: Math.round((Date.now() - started) / 100) / 10 },
+    );
+    log(`[meta] import ${seconds()} s, ${problems.length} problem(s)`);
+    const sources: Source[] = /^https?:\/\//.test(protocol.source.url) ? [{ url: protocol.source.url, title: protocol.source.title }] : [];
+    return { protocol, problems, sources };
+  }
+
+  try {
+    await withinCap();
+    return await read();
+  } finally {
+    if (fileId) void deleteFile(fileId, { baseUrl, authorization, fetchFn, log });
+  }
+}
+
+/** A whole read's output, for the estimate before it: the ATP manual's five calls wrote 13,193 tokens on 2026-10-30. */
+const READ_OUTPUT_TOKENS = 15_000;
+
+type Upstream = { baseUrl: string; authorization: string; fetchFn: typeof fetch; log?: (line: string) => void };
+
+/** The PDF uploaded for this read (POST /files, purpose user_data, expiring in an hour); null when the upload fails. */
+export async function uploadPdf(pdf: Uint8Array, filename: string, { baseUrl, authorization, fetchFn, log }: Upstream): Promise<string | null> {
+  const started = Date.now();
+  const form = new FormData();
+  // The fields before the file, as the docs ask, so the upload is checked before its bytes arrive.
+  form.append('purpose', 'user_data');
+  form.append('expires_after[anchor]', 'created_at');
+  form.append('expires_after[seconds]', '3600');
+  form.append('file', new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }), filename);
+  try {
+    const res = await fetchFn(`${baseUrl}/files`, { method: 'POST', headers: { authorization }, body: form, signal: AbortSignal.timeout(60_000) });
+    const body = (await res.json().catch(() => ({}))) as Json;
+    const id = res.ok && typeof body.id === 'string' ? body.id : null;
+    log?.(`[meta] import upload ${id ? `${((Date.now() - started) / 1000).toFixed(1)} s` : `failed (${res.status}): the PDF goes inline`}`);
+    return id;
+  } catch {
+    log?.('[meta] import upload could not connect: the PDF goes inline');
+    return null;
+  }
+}
+
+/** The uploaded PDF removed once read; the hour's expiry removes it anyway. */
+async function deleteFile(id: string, { baseUrl, authorization, fetchFn, log }: Upstream): Promise<void> {
+  try {
+    const res = await fetchFn(`${baseUrl}/files/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { authorization }, signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) log?.(`[meta] import file not deleted (${res.status}); it expires within the hour`);
+  } catch {
+    log?.('[meta] import file not deleted; it expires within the hour');
+  }
+}
+
+/** The API's own count of a Responses input (POST /responses/input_tokens, nothing generated); null when it cannot. */
+export async function countTokens(input: Json[], { baseUrl, authorization, fetchFn }: Upstream): Promise<number | null> {
+  try {
+    const res = await fetchFn(`${baseUrl}/responses/input_tokens`, {
+      method: 'POST',
+      headers: { authorization, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: IMPORT_MODEL, input }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as Json;
+    const n = body.input_tokens ?? body.total_tokens;
+    return res.ok && typeof n === 'number' && Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }

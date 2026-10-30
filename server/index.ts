@@ -2,10 +2,17 @@ import { createServer } from 'node:http';
 import { createHandler } from './app.ts';
 import { createProvider } from './ai/select.ts';
 import { createLiveVoice } from './live.ts';
+import { meter } from './ai/usage.ts';
+import { fileURLToPath } from 'node:url';
 
 // The API and the built app. Routes live in app.ts; AI_PROVIDER (mock | meta) picks who answers (server/ai/provider.ts).
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3003);
+
+// CHAPP_DAILY_USD caps a day's spending on Meta's models (server/ai/usage.ts); today's total survives a restart.
+meter.setCap(Number(process.env.CHAPP_DAILY_USD));
+meter.keepIn(fileURLToPath(new URL('../data/usage.json', import.meta.url)));
+if (meter.cap()) console.log(`Meta models: up to $${meter.cap().toFixed(2)} a day ($${meter.spent().toFixed(2)} used today)`);
 
 let ai: ReturnType<typeof createProvider>;
 try {

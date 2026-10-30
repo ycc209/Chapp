@@ -11,7 +11,7 @@ import { imageType } from '../server/kit.ts';
 import { createMockProvider } from '../server/ai/mock.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { loadProtocol } from '../server/ai/protocols.ts';
-import { boxesAt, createKitVision, createMockKitVision, namedBy, parseLabels, parseRecognized, parseSam, parseSamRecords, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
+import { boxesAt, createKitVision, createMockKitVision, imageSize, namedBy, parseLabels, parseRecognized, parseSam, parseSamRecords, samPointPrompt, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
 import { labelTargets } from '../src/screens/kit/found.ts';
 
 // Kit photos on the server: SAM 3.1's and Muse Spark's real replies (copied from data/smoke/kit/raw/, masks cut
@@ -50,6 +50,8 @@ const RECOGNIZED_23227 = '{"catalog": "23227", "found": true, "name": "Pierce BC
 const RECOGNIZED_BOTTLE = '{"catalog":"","found":true,"name":"Pierce BCA Protein Assay","read":"Prod # 23228 Pierce BCA Protein Assay Reagent A 500 ml Thermo Scientific","vendor":"Thermo Scientific"}';
 
 const jpeg: Photo = { type: 'image/jpeg', data: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0]) };
+/** The same JPEG with its frame header: 500 × 461 pixels, as the 23225 shot. */
+const sized: Photo = { type: 'image/jpeg', data: new Uint8Array([...jpeg.data, 0xff, 0xc0, 0, 11, 8, 0x01, 0xcd, 0x01, 0xf4, 1, 1, 0x11, 0, 0xff, 0xd9]) };
 
 describe('SAM 3.1 boxes', () => {
   it('reads every box of the real reply as fractions of the photo', () => {
@@ -68,6 +70,27 @@ describe('SAM 3.1 boxes', () => {
     // Tidying keeps each box's mask with it (only the first record of the sample has its payload in full).
     expect(tidyBottles(parseSamRecords(SAM_23225)).find(r => r.mask?.left === 215)?.mask?.payload).toBe('!!!%N!O');
     expect(parseSam('<|box;x1=5;y1=5;x2=5;y2=9;w=10;h=10|><|box;x1=1;y1=1;x2=3;y2=3;w=0;h=10|>')).toEqual([]);
+  });
+
+  it('reads fields by key: the id each object came under, the confidence when asked for, and a payload with ">" in it', () => {
+    const text = '<0f>1<|box;x1=444;y1=625;x2=679;y2=850;w=1800;h=1200;c=0.9609375|><|mask;x=0;y=0;c=0.9609375;data=226,236,!a>b|c~|>,2<|box;x1=1;y1=1;x2=9;y2=9;w=1800;h=1200|>';
+    const [one, two] = parseSamRecords(text);
+    expect(one).toMatchObject({ id: 1, score: 0.9609375, mask: { encoding: 'one_bit', height: 226, width: 236, payload: 'a>b|c~', left: 444, top: 625 } });
+    expect(one!.box.x).toBeCloseTo(444 / 1800);
+    expect(two).toEqual({ id: 2, box: expect.any(Object) });
+  });
+
+  it('asks about taps as SAM’s point prompts, in the photo’s own pixels', () => {
+    expect(samPointPrompt([{ x: 0.5, y: 0.25 }, { x: 1, y: 0 }], { width: 500, height: 461 })).toBe('<0f>1<|point;x=250;y=115;w=500;h=461|>,2<|point;x=499;y=0;w=500;h=461|>');
+  });
+
+  it('reads a photo’s size from its header', () => {
+    expect(imageSize(sized.data)).toEqual({ width: 500, height: 461 });
+    expect(imageSize(jpeg.data)).toBeNull();
+    const png = new Uint8Array(24);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 3, 0x20, 0, 0, 2, 0x58]);
+    expect(imageSize(png)).toEqual({ width: 800, height: 600 });
+    expect(imageSize(new Uint8Array([1, 2, 3]))).toBeNull();
   });
 
   it('keeps bottles left to right, drops specks and a box inside a bigger one, and keeps the biggest when there are too many', () => {
@@ -166,7 +189,20 @@ describe('meta kit vision', () => {
     expect(calls[0].body.input[0].content[1].image_url).toMatch(/^data:image\/jpeg;base64,\/9j\//);
   });
 
-  it('keeps only the bottles under the points asked about', async () => {
+  it('sends a tap to SAM as a point prompt and returns what it outlines there, with how sure it is', async () => {
+    const reply = '<0f>1<|box;x1=345;y1=98;x2=477;y2=395;w=500;h=461;c=0.91|><|mask;x=0;y=0;c=0.91;data=…|>';
+    const { fn, calls } = fakeFetch({ output: [{ type: 'message', content: [{ type: 'output_text', text: reply }] }] });
+    const found = await vision(fn).segmentBottles(sized, [{ x: 0.82, y: 0.5 }]);
+    expect(calls[0].body.input[0].content[0]).toEqual({ type: 'input_text', text: '<0f>1<|point;x=410;y=231;w=500;h=461|>' });
+    expect(calls[0].body.metadata).toEqual({ include_confidence: 'true' });
+    expect(found.bottles).toEqual([{ box: expect.any(Object), score: 0.91 }]);
+    expect(Math.round(found.bottles[0]!.box.x * 500)).toBe(345);
+    // A tap on nothing: nothing.
+    const none = fakeFetch({ output: [] });
+    expect((await vision(none.fn).segmentBottles(sized, [{ x: 0.1, y: 0.1 }])).bottles).toEqual([]);
+  });
+
+  it('keeps only the bottles under the points asked about when the photo’s size cannot be read', async () => {
     const { fn } = fakeFetch({ output: [{ type: 'message', content: [{ type: 'output_text', text: SAM_23225 }] }] });
     const found = await vision(fn).segmentBottles(jpeg, [{ x: 0.82, y: 0.5 }]);
     expect(found.bottles.map(b => Math.round(b.box.x * 500))).toEqual([345]);

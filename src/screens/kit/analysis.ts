@@ -1,4 +1,4 @@
-import type { Box, PhotoData, ReadLabels } from '../../../shared/ai.ts';
+import type { Box, PhotoData, Point, ReadLabels } from '../../../shared/ai.ts';
 import { labelCrop, squareOn } from '../../../shared/kit.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { api } from '../../api/client.ts';
@@ -65,6 +65,29 @@ export function findBottles() {
       .then(r => useKit.getState().look(shot.id, { state: 'found', boxes: r.bottles.map(b => b.box), outlines: r.bottles.map(b => b.outline) }))
       .catch(() => useKit.getState().look(shot.id, { state: 'failed', boxes: [] }));
   });
+}
+
+/** How long a tap waits for SAM before the square around it is used instead. */
+const TAP_WAIT_MS = 8000;
+
+/**
+ * What SAM outlines under a tap where it had found no bottle (a tube, an ampule, two bottles touching): its box,
+ * added to the photo's bottles with its outline, so the bottle is cut out along it like any other. Null when SAM
+ * finds nothing there or cannot be asked; the tap's square is used then.
+ */
+export async function bottleAt(shot: Shot, at: Point): Promise<Box | null> {
+  try {
+    const r = await api.segmentBottles({ photo: photoData(analysisSrc(shot)), points: [at] }, AbortSignal.timeout(TAP_WAIT_MS));
+    const b = r.bottles[0];
+    if (!b) return null;
+    const look = useKit.getState().seen[shot.id];
+    const boxes = look?.boxes ?? [];
+    const outlines = look?.outlines ?? boxes.map(() => undefined);
+    useKit.getState().look(shot.id, { state: look?.state ?? 'read', boxes: [...boxes, b.box], outlines: [...outlines, b.outline] });
+    return b.box;
+  } catch {
+    return null;
+  }
 }
 
 /** True while the models still have something to say: a photo with SAM, or bottles whose labels are not read yet. */

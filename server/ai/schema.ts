@@ -42,6 +42,7 @@ export const ConverseRequestSchema = z.object({
       .optional(),
   }),
   history: z.array(z.object({ role: z.enum(['user', 'chapp']), text: z.string().max(1000) })).max(8).optional(),
+  previousResponseId: z.string().trim().min(1).max(200).optional(),
 }) satisfies z.ZodType<ConverseRequest>;
 
 export const FindProtocolRequestSchema = z.object({
@@ -89,6 +90,7 @@ export const ConverseReplySchema = z.object({
   // Built by shared/a2ui.ts checkA2ui: a createSurface and one updateComponents.
   a2ui: z.array(A2uiMessageSchema).max(2).optional(),
   sources: z.array(SourceSchema).max(8),
+  responseId: z.string().max(200).optional(),
 }) satisfies z.ZodType<ConverseReply>;
 
 /** "text: Too small…; context.screen: Required": short enough for a 400 body. */

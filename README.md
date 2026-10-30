@@ -14,8 +14,8 @@ Everything in this repository was written during the hackathon, starting October
 ## Status
 
 The whole story runs end to end on Meta's models: find a kit's manual, read it, recognize the kit, plan the plate, run
-it hands-free, read the plate, see the results, share by QR. Still to do before submission: hosting, a usage cap,
-testing on iPhones and the demo video.
+it hands-free, read the plate, see the results, share by QR. Still to do before submission: hosting, testing on
+iPhones and the demo video.
 
 ## What it does
 
@@ -57,10 +57,13 @@ bottle, cut out along SAM's mask, stands in the step pictures.
 
 | Model | What Chapp uses it for |
 |---|---|
-| Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards) |
-| SAM 3.1 | Finding every bottle in one photo of the kit. Its masks are the outlines on the kit photos, and the cut-out of each bottle (`server/ai/samMask.ts`) |
+| Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards; Meta keeps the conversation, so each turn sends only the new words) |
+| SAM 3.1 | Finding every bottle in one photo of the kit. A tap on something it missed is a point prompt. Its masks are the outlines on the kit photos, and the cut-out of each bottle (`server/ai/samMask.ts`) |
 | Muse Voice Transcribe | Live speech to text at the bench: the phone streams through the server to the realtime endpoint, words show as they are said and the model decides when you have finished. Chinese and English in one sentence, the lab's words as keywords, Chinese written as Taiwan writes it (`?voice=server` sends a recording per turn instead; `?voice=browser` uses the phone's own recognizer, English only) |
 | Muse Image | Planned for a consistent set of equipment icons; not in the app yet (`npm run smoke` checks it) |
+
+Cost: every call logs its tokens, how many the API's prompt cache had, and its price; `CHAPP_DAILY_USD` caps a day,
+and a manual's tokens are counted before it is read (`server/ai/usage.ts`).
 
 ## How Chapp asks Muse Spark to read a manual
 

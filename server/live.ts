@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { fixLabWords, labTerms } from '../src/voice/labWords.ts';
 import { knownProtocols } from './ai/protocols.ts';
 import { ASR_MODEL, keywords, LANGUAGES, toTaiwan } from './ai/speech.ts';
+import { meter, PER } from './ai/usage.ts';
 
 /**
  * Live speech: the phone streams its microphone here (WebSocket /api/voice/live, raw 16 kHz 16-bit mono PCM) and this
@@ -36,6 +37,8 @@ export function createLiveVoice({ apiKey, url = META_REALTIME, log = line => con
   server.on('connection', phone => relay(phone, { apiKey, url, log }));
   return (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (new URL(req.url ?? '/', 'http://local').pathname !== '/api/voice/live') return false;
+    // Past today's allowance (usage.ts) there is no live speech; the phone falls back to recordings, which say why.
+    if (meter.cap() && meter.spent() >= meter.cap()) return false;
     server.handleUpgrade(req, socket, head, ws => server.emit('connection', ws, req));
     return true;
   };
@@ -113,6 +116,7 @@ function relay(phone: WebSocket, { apiKey, url, log }: Required<LiveOptions>) {
   });
 
   meta.on('close', code => {
+    meter.spend((heardBytes / BYTES_PER_MS / 3_600_000) * PER.speechHour);
     const words = firstWords ? `, first words after ${((firstWords - started) / 1000).toFixed(1)} s` : ', no words';
     log(`[live] ${((Date.now() - started) / 1000).toFixed(1)} s, ${(heardBytes / BYTES_PER_MS / 1000).toFixed(1)} s of audio${words}, closed ${code}`);
     close(code === 1000 ? 1000 : 1011);

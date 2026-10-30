@@ -84,9 +84,8 @@ describe('what Chapp is told', () => {
   });
 
   it('sends the conversation so far, so "yes, find it" knows the kit', async () => {
-    const { fn, calls } = fakeFetch(
-      json({ choices: [{ message: { content: JSON.stringify({ say: 'Looking up its manual.', expression: 'thinking', actions: [{ type: 'findProtocol', to: '', value: 0, id: '', query: 'Pierce Bradford Protein Assay Kit' }], a2ui: '[]', manualPages: [] }) } }] }),
-    );
+    const said = JSON.stringify({ say: 'Looking up its manual.', expression: 'thinking', actions: [{ type: 'findProtocol', to: '', value: 0, id: '', query: 'Pierce Bradford Protein Assay Kit' }], a2ui: '[]', manualPages: [] });
+    const { fn, calls } = fakeFetch(json({ id: 'resp_1', output: [{ type: 'message', content: [{ type: 'output_text', text: said }] }] }));
     const reply = await provider(fn).converse({
       text: 'Yes, find it',
       context: { screen: 'home' },
@@ -94,12 +93,12 @@ describe('what Chapp is told', () => {
     });
     expect(reply.actions).toEqual([{ type: 'findProtocol', query: 'Pierce Bradford Protein Assay Kit' }]);
     const sent = JSON.parse(String(calls[0]!.init.body));
-    expect(sent.messages.slice(1).map((m: { role: string; content: string }) => [m.role, m.content])).toEqual([
+    expect(sent.input.map((m: { role: string; content: string }) => [m.role, m.content])).toEqual([
       ['user', 'I got a Pierce Bradford kit'],
       ['assistant', 'Want me to look it up?'],
       ['user', 'Yes, find it'],
     ]);
-    expect(sent.response_format.json_schema.schema.properties.actions.items.required).toContain('query');
+    expect(sent.text.format.schema.properties.actions.items.required).toContain('query');
   });
 
   it('opens the Overview on the kit Chapp chose to look up, under what the user said', () => {
@@ -112,6 +111,27 @@ describe('what Chapp is told', () => {
     useSession.getState().addTurns({ role: 'user', text: 'hi' });
     useSession.getState().newConversation();
     expect(useSession.getState()).toMatchObject({ history: [], exchange: null });
+  });
+
+  it('continues Meta’s copy of the conversation, until a turn answered on the phone or a few replies start it afresh', () => {
+    const s = () => useSession.getState();
+    s().newConversation();
+    s().answered('resp_1', { role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' });
+    expect(s().thread).toEqual({ id: 'resp_1', replies: 1 });
+    s().answered('resp_2', { role: 'user', text: 'and?' }, { role: 'chapp', text: 'Yes.' });
+    expect(s().thread).toEqual({ id: 'resp_2', replies: 2 });
+    // "Next" answered on the phone: Meta never saw it, so the next question goes with the recent turns.
+    s().addTurns({ role: 'user', text: 'next' }, { role: 'chapp', text: 'Step 3.' });
+    expect(s().thread).toBeNull();
+    expect(s().history).toHaveLength(6);
+    // Eight replies on one copy, then the next question starts afresh.
+    for (let i = 1; i <= 7; i++) s().answered(`resp_${i}`, { role: 'user', text: String(i) });
+    expect(s().thread).toEqual({ id: 'resp_7', replies: 7 });
+    s().answered('resp_8', { role: 'user', text: '8' });
+    expect(s().thread).toBeNull();
+    s().answered(undefined, { role: 'user', text: 'mock' });
+    expect(s().thread).toBeNull();
+    s().newConversation();
   });
 
   it('puts the run state in the prompt, after what never changes', () => {

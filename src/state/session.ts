@@ -27,12 +27,20 @@ type Session = {
   exchange: Exchange | null;
   /** This conversation's turns, oldest first, the last few of which go with each question. New conversation clears it. */
   history: ConverseTurn[];
+  /**
+   * Meta's copy of this conversation: the last reply's id, sent with the next question so only the new words go and
+   * Chapp's reasoning carries on. Dropped after a few replies, and by a turn answered on the phone (Meta has not seen
+   * it): the next question then goes with `history` instead.
+   */
+  thread: { id: string; replies: number } | null;
   setVoice: (voice: Voice) => void;
   setHeard: (heard: string, interim?: string) => void;
   setExpression: (expression: Expression) => void;
   setStatus: (status: string) => void;
   setExchange: (exchange: Exchange | null) => void;
   addTurns: (...turns: ConverseTurn[]) => void;
+  /** The same for a question Meta answered: the next question continues from its reply. */
+  answered: (responseId: string | undefined, ...turns: ConverseTurn[]) => void;
   /** A new conversation: no history, nothing said. */
   newConversation: () => void;
 };
@@ -41,6 +49,8 @@ export type Exchange = { ask: string; say: string; query?: string };
 
 // Turns kept: enough for the last few questions and answers.
 const HISTORY = 8;
+// Replies Meta's copy runs to before the next question starts afresh from `history`, so it does not grow all day.
+const THREAD = 8;
 
 export const useSession = create<Session>()(set => ({
   voice: 'idle',
@@ -50,11 +60,17 @@ export const useSession = create<Session>()(set => ({
   status: '',
   exchange: null,
   history: [],
+  thread: null,
   setVoice: voice => set({ voice }),
   setHeard: (heard, interim = '') => set({ heard, interim }),
   setExpression: expression => set({ expression }),
   setStatus: status => set({ status }),
   setExchange: exchange => set({ exchange }),
-  addTurns: (...turns) => set(s => ({ history: [...s.history, ...turns].slice(-HISTORY) })),
-  newConversation: () => set({ history: [], exchange: null, heard: '', interim: '' }),
+  addTurns: (...turns) => set(s => ({ history: [...s.history, ...turns].slice(-HISTORY), thread: null })),
+  answered: (responseId, ...turns) =>
+    set(s => {
+      const replies = (s.thread?.replies ?? 0) + 1;
+      return { history: [...s.history, ...turns].slice(-HISTORY), thread: responseId && replies < THREAD ? { id: responseId, replies } : null };
+    }),
+  newConversation: () => set({ history: [], thread: null, exchange: null, heard: '', interim: '' }),
 }));

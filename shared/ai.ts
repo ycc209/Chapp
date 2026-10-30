@@ -62,7 +62,13 @@ export type ConverseContext = {
 /** A turn of this conversation, oldest first: so "yes, find it" knows which kit was meant. */
 export type ConverseTurn = { role: 'user' | 'chapp'; text: string };
 
-export type ConverseRequest = { text: string; context: ConverseContext; history?: ConverseTurn[] };
+export type ConverseRequest = {
+  text: string;
+  context: ConverseContext;
+  history?: ConverseTurn[];
+  /** The last reply's responseId: Meta keeps the conversation from there (and its reasoning carries on). */
+  previousResponseId?: string;
+};
 
 /** Changes Chapp asks the app to make; the app applies them to its state (src/state/actions.ts). */
 export type Action =
@@ -104,6 +110,8 @@ export type ConverseReply = {
    */
   a2ui?: A2uiMessage[];
   sources: Source[];
+  /** Meta's id for this reply, sent back as the next turn's previousResponseId; absent from the mock. */
+  responseId?: string;
 };
 
 export type FoundProtocol = {

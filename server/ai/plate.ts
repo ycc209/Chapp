@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AIProvider, Photo, PlateInput, PlateReading, ReadPlateRequest } from '../../shared/ai.ts';
 import { decodeText, parsePlateText, readingOf, wellId } from '../../shared/plate.ts';
 import { UpstreamError } from './provider.ts';
+import { costOf, meter, usageLine } from './usage.ts';
 
 /**
  * Plate-reader values into the app (POST /api/read-plate):
@@ -213,6 +214,7 @@ export function metaReadPlate(options: MetaPlateOptions): (input: PlateInput) =>
       'photo' in input
         ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: dataUrl(input.photo) } }]
         : `${prompt}\n\n--- ${input.file.name} ---\n${input.file.text.slice(0, MAX_MODEL_TEXT)}`;
+    meter.check();
     const started = Date.now();
     const seconds = () => ((Date.now() - started) / 1000).toFixed(1);
     let text: string;
@@ -220,7 +222,7 @@ export function metaReadPlate(options: MetaPlateOptions): (input: PlateInput) =>
       const res = await fetchFn(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content }], response_format: plateFormat }),
+        body: JSON.stringify({ model: MODEL, messages: [{ role: 'user', content }], response_format: plateFormat, prompt_cache_key: 'chapp-read-plate' }),
         signal: AbortSignal.timeout(timeoutMs),
       });
       text = await res.text();
@@ -241,13 +243,15 @@ export function metaReadPlate(options: MetaPlateOptions): (input: PlateInput) =>
       log(`[meta] read-plate ${timedOut ? 'timed out' : 'could not connect'} after ${seconds()} s`);
       throw new UpstreamError(timedOut ? `Meta read-plate timed out after ${Math.round(timeoutMs / 1000)} s` : 'Could not reach the Meta API to read the plate');
     }
-    log(`[meta] read-plate (${'photo' in input ? 'photo' : 'file'}) ${seconds()} s`);
     let body: Json;
     try {
       body = JSON.parse(text);
     } catch {
       throw new UpstreamError('Meta read-plate answered with something that is not JSON');
     }
+    meter.spend(costOf(MODEL, body));
+    const used = usageLine(MODEL, body);
+    log(`[meta] read-plate (${'photo' in input ? 'photo' : 'file'}) ${seconds()} s${used ? ` · ${used}` : ''}`);
     return plateFromModel(body.choices?.[0]?.message?.content, input);
   };
 }

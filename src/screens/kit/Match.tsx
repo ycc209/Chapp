@@ -11,7 +11,7 @@ import { TypingBar } from '../home/TypingBar.tsx';
 import { useConverse } from '../home/useConverse.ts';
 import { SampleBadge } from '../protocol/Body.tsx';
 import { AskBadge, CheckBadge, ForwardIcon } from '../protocol/icons.tsx';
-import { analyzing, readFound } from './analysis.ts';
+import { analyzing, bottleAt, readFound } from './analysis.ts';
 import {
   amounts,
   cantLook,
@@ -23,6 +23,7 @@ import {
   noPhoto,
   offered,
   open,
+  outlining,
   opening,
   rowDetail,
   slotsOf,
@@ -100,6 +101,8 @@ export function Match({ protocol, onCamera }: MatchProps) {
   // once everything else is in: a photo of just that bottle, or keep it.
   const cuts = useCutouts(useMemo(() => Object.fromEntries(needs.flatMap(n => (kit.picks[n.id] ? [[n.id, kit.picks[n.id]!.crop]] : []))), [needs, kit.picks]));
   const [kept, setKept] = useState<Record<string, true>>({});
+  // SAM looking at a tap where it had found no bottle.
+  const [tapped, setTapped] = useState(false);
   const retake = complete && !kit.sample ? (needs.find(n => kit.picks[n.id] && cuts[n.id] && !cuts[n.id]!.ok && !kept[n.id]) ?? null) : null;
   // The bottle a tap on a photo is for: the one asked about, else the first still open.
   const target = subject && subject.kind !== 'unknown' ? subject.need : (left[0] ?? null);
@@ -160,7 +163,13 @@ export function Match({ protocol, onCamera }: MatchProps) {
   const pick = async (shot: number, at: { x: number; y: number }, need: Need, bottle: Box | null) => {
     setPicker(null);
     try {
-      const { crop, box } = await cropAt(kit.shots[shot], at, bottle);
+      // A tap where SAM had found no bottle: SAM is asked what is under the finger.
+      let found = bottle;
+      if (!found && !kit.sample) {
+        setTapped(true);
+        found = await bottleAt(kit.shots[shot], at).finally(() => setTapped(false));
+      }
+      const { crop, box } = await cropAt(kit.shots[shot], at, found);
       useKit.getState().propose(need.id, { shot: kit.shots[shot].id, box, crop });
     } catch {
       toast('That photo could not be opened. Try another one?');
@@ -192,7 +201,9 @@ export function Match({ protocol, onCamera }: MatchProps) {
   };
 
   const photoOf = (id: string) => (shotNumber(id) > 0 ? `photo ${shotNumber(id)}` : 'the photo');
-  const line: ReactNode = reply ?? (retake ? (
+  const line: ReactNode = reply ?? (tapped ? (
+    outlining()
+  ) : retake ? (
     <>
       I couldn’t cut the <b className="font-bold">{retake.name}</b> out of {photoOf(kit.picks[retake.id]!.shot)} cleanly: {cuts[retake.id]!.why}.
     </>

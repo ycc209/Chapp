@@ -26,12 +26,13 @@ function fakeFetch(...answers: (unknown | { status: number; body: unknown } | Er
   return { fn, calls };
 }
 const provider = (fetch: typeof globalThis.fetch, timeouts = {}) => createMetaProvider({ apiKey: KEY, fetch, log: () => {}, timeouts });
-const chat = (content: unknown) => ({ choices: [{ message: { role: 'assistant', content: typeof content === 'string' ? content : JSON.stringify(content) } }] });
+/** A Responses API reply whose message is `content`, as Muse Spark answers converse. */
+const said = (content: unknown, id = 'resp_1') => ({ id, status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: typeof content === 'string' ? content : JSON.stringify(content) }] }] });
 const wire = (over: object = {}) => ({ say: 'Hello!', expression: 'happy', actions: [], a2ui: '[]', manualPages: [], ...over });
 
 describe('meta converse', () => {
   it('asks Muse Spark for strict JSON and turns the flat wire format into a ConverseReply', async () => {
-    const { fn, calls } = fakeFetch(chat(wire({
+    const { fn, calls } = fakeFetch(said(wire({
       say: 'I found the manual.',
       actions: [
         { type: 'navigate', to: '/protocol', value: 0, id: '' },
@@ -51,26 +52,49 @@ describe('meta converse', () => {
         { type: 'nextStep' },
       ],
       sources: [],
+      responseId: 'resp_1',
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe('https://api.meta.ai/v1/chat/completions');
+    expect(calls[0].url).toBe('https://api.meta.ai/v1/responses');
     expect((calls[0].init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
     const body = JSON.parse(calls[0].init.body as string);
     expect(body.model).toBe('muse-spark-1.3');
-    expect(body.response_format).toEqual(replyFormat);
-    expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user']);
-    expect(body.messages[1].content).toBe('Open it: 12 samples in triplicate, then the next step.');
+    expect(body.text.format).toEqual({ type: 'json_schema', ...replyFormat.json_schema });
+    expect(body.instructions).toMatch(/You are Chapp/);
+    expect(body.input).toEqual([{ role: 'user', content: 'Open it: 12 samples in triplicate, then the next step.' }]);
+    expect(body.previous_response_id).toBeUndefined();
+    // Every turn shares one cache key and keeps its cached start for a day.
+    expect([body.prompt_cache_key, body.prompt_cache_retention]).toEqual(['chapp-converse', '24h']);
+  });
+
+  it('carries on Meta’s copy of the conversation: only the new words go, and the reply’s id comes back', async () => {
+    const { fn, calls } = fakeFetch(said(wire({ say: 'Yes.' }), 'resp_2'));
+    const reply = await provider(fn).converse({ text: 'and then?', context: home, history: [{ role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' }], previousResponseId: 'resp_1' });
+    expect(reply.responseId).toBe('resp_2');
+    const body = JSON.parse(calls[0].init.body as string);
+    expect(body.previous_response_id).toBe('resp_1');
+    expect(body.input).toEqual([{ role: 'user', content: 'and then?' }]);
+  });
+
+  it('sends the recent turns instead when Meta no longer has the conversation', async () => {
+    const { fn, calls } = fakeFetch({ status: 404, body: { error: { message: 'Previous response not found' } } }, said(wire({ say: 'Yes.' })));
+    const reply = await provider(fn).converse({ text: 'and then?', context: home, history: [{ role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' }], previousResponseId: 'resp_gone' });
+    expect(reply.say).toBe('Yes.');
+    expect(calls).toHaveLength(2);
+    const body = JSON.parse(calls[1].init.body as string);
+    expect(body.previous_response_id).toBeUndefined();
+    expect(body.input.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'user']);
   });
 
   it.skipIf(!local)('cites the manual: the pages named for the protocol on screen', async () => {
-    const { fn } = fakeFetch(chat(wire({ say: 'Add 25 µL per well.', manualPages: [3, 3, 99] })));
+    const { fn } = fakeFetch(said(wire({ say: 'Add 25 µL per well.', manualPages: [3, 3, 99] })));
     const onScreen = await provider(fn).converse({ text: 'how much sample?', context: { screen: 'run', protocolId: 'pierce-bca', step: 2 } });
     expect(onScreen.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title, page: 3 }]);
   });
 
   it('draws nothing when no kit is open: there is nothing to work the numbers out from', async () => {
     const a2ui = JSON.stringify([{ version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: 'chapp' } }, { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard' }] } }]);
-    const { fn } = fakeFetch(chat(wire({ a2ui })));
+    const { fn } = fakeFetch(said(wire({ a2ui })));
     expect((await provider(fn).converse({ text: 'x', context: home })).a2ui).toBeUndefined();
   });
 
@@ -81,43 +105,45 @@ describe('meta converse', () => {
       actions: [{ type: 'navigate', to: '', value: 0, id: '' }, { type: 'setSamples', to: '', value: 12, id: '' }, { type: 'launchRocket', to: '', value: 0, id: '' }],
       a2ui: 'not even JSON',
     });
-    const { fn, calls } = fakeFetch(chat(bad));
-    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', actions: [{ type: 'setSamples', samples: 12 }], sources: [] });
+    const { fn, calls } = fakeFetch(said(bad));
+    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', actions: [{ type: 'setSamples', samples: 12 }], sources: [], responseId: 'resp_1' });
     expect(calls).toHaveLength(1);
   });
 
   it('asks Muse Spark at minimal effort, so thinking does not eat the wait', async () => {
-    const { fn, calls } = fakeFetch(chat(wire()));
+    const { fn, calls } = fakeFetch(said(wire()));
     await provider(fn).converse({ text: 'hi', context: home });
-    expect(JSON.parse(calls[0].init.body as string).reasoning_effort).toBe('minimal');
+    expect(JSON.parse(calls[0].init.body as string).reasoning).toEqual({ effort: 'minimal' });
   });
 
   it('retries once on a reply with nothing usable, telling the model what was wrong', async () => {
-    const { fn, calls } = fakeFetch(chat('{"say": "Sure", "actions": "all of them"}'), chat(wire({ say: 'Fixed.' })));
+    const { fn, calls } = fakeFetch(said('{"say": "Sure", "actions": "all of them"}', 'resp_bad'), said(wire({ say: 'Fixed.' })));
     const reply = await provider(fn).converse({ text: 'go', context: home });
     expect(reply.say).toBe('Fixed.');
     expect(calls).toHaveLength(2);
-    const retry = JSON.parse(calls[1].init.body as string).messages;
-    expect(retry.map((m: { role: string }) => m.role)).toEqual(['system', 'user', 'assistant', 'user']);
-    expect(retry[3].content).toMatch(/actions/);
+    // On top of the reply it gave, which Meta keeps.
+    const retry = JSON.parse(calls[1].init.body as string);
+    expect(retry.previous_response_id).toBe('resp_bad');
+    expect(retry.input).toHaveLength(1);
+    expect(retry.input[0].content).toMatch(/actions/);
   });
 
   it('falls back to the words alone when the retry is no better', async () => {
     const bad = wire({ say: 'Twelve it is.', actions: 'twelve' });
-    const { fn, calls } = fakeFetch(chat(bad), chat('not json at all'));
+    const { fn, calls } = fakeFetch(said(bad), said('not json at all'));
     expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', expression: 'neutral', actions: [], sources: [] });
     expect(calls).toHaveLength(2);
   });
 
   it('says it lost track when neither reply has words', async () => {
-    const { fn } = fakeFetch(chat('{}'), chat(''));
+    const { fn } = fakeFetch(said('{}'), said(''));
     const reply = await provider(fn).converse({ text: 'x', context: home });
     expect(reply.say).toMatch(/say that again/);
     expect(reply.actions).toEqual([]);
   });
 
   it('keeps the first answer’s words when the retry itself fails', async () => {
-    const { fn } = fakeFetch(chat(wire({ say: 'Sure.', actions: 'none' })), { status: 500, body: { error: { message: 'oops' } } });
+    const { fn } = fakeFetch(said(wire({ say: 'Sure.', actions: 'none' })), { status: 500, body: { error: { message: 'oops' } } });
     expect((await provider(fn).converse({ text: 'x', context: home })).say).toBe('Sure.');
   });
 
@@ -140,7 +166,7 @@ describe('meta converse', () => {
     let calls = 0;
     const fn = (async (_url: string, init: RequestInit) => {
       if (calls++ === 0) return new Promise((_, fail) => init.signal!.addEventListener('abort', () => fail(init.signal!.reason)));
-      return new Response(JSON.stringify(chat(wire({ say: 'Here now.' }))));
+      return new Response(JSON.stringify(said(wire({ say: 'Here now.' }))));
     }) as unknown as typeof fetch;
     const reply = await provider(fn, { converse: 5000, attempt: 50 }).converse({ text: 'x', context: home });
     expect(reply.say).toBe('Here now.');

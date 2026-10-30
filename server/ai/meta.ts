@@ -9,8 +9,9 @@ import { readEvents } from '../../shared/sse.ts';
 import { distance, fixLabWords, labTerms, needsModelFix } from '../../src/voice/labWords.ts';
 import { UpstreamError } from './provider.ts';
 import { metaReadPlate } from './plate.ts';
-import { importProtocol } from './import.ts';
+import { importProtocol, replyText } from './import.ts';
 import { createKitVision } from './vision.ts';
+import { costOf, meter, PER, usageLine } from './usage.ts';
 import { authorize, claimsChange, type Rules } from './authorize.ts';
 import { ActionSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
 import { solutionReply } from './solution.ts';
@@ -114,6 +115,9 @@ export const replyFormat = {
     },
   },
 };
+
+/** The same schema as the Responses API takes it (text.format: name, strict and schema beside type). */
+export const replyTextFormat = { type: 'json_schema', ...replyFormat.json_schema };
 
 // Lenient on purpose: one bad action or component is dropped (fromWire) rather than costing the whole reply a retry.
 const Wire = z.object({
@@ -662,6 +666,8 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   type Request = {
     body: string | FormData;
     json?: boolean;
+    /** The model the call goes to, for its cost (usage.ts). */
+    model?: string;
     /** The caller giving up (the user left): the request is dropped like a timeout. */
     signal?: AbortSignal;
     /** Streams the reply: each server-sent event, parsed, as it arrives; the call returns the finished response. */
@@ -669,6 +675,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   };
 
   async function call(what: string, path: string, init: Request, timeoutMs: number): Promise<Json> {
+    meter.check();
     const started = Date.now();
     const seconds = () => ((Date.now() - started) / 1000).toFixed(1);
     const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
@@ -703,13 +710,18 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       log(`[meta] ${what} ${timedOut ? 'timed out' : 'could not connect'} after ${seconds()} s`);
       throw new UpstreamError(timedOut ? `Meta ${what} timed out after ${Math.round(timeoutMs / 1000)} s` : `Could not reach the Meta API for ${what}`);
     }
-    log(`[meta] ${what} ${seconds()} s`);
-    if (streamed) return streamed;
+    let body: Json;
     try {
-      return JSON.parse(text);
+      body = streamed ?? JSON.parse(text);
     } catch {
+      log(`[meta] ${what} ${seconds()} s`);
       throw new UpstreamError(`Meta ${what} answered with something that is not JSON`);
     }
+    const model = init.model ?? '';
+    meter.spend(costOf(model, body));
+    const used = usageLine(model, body);
+    log(`[meta] ${what} ${seconds()} s${used ? ` · ${used}` : ''}`);
+    return body;
   }
 
   /** Muse Spark's correction of a transcript the local fixes left unsure; the local text when it fails or overreaches. */
@@ -721,8 +733,10 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           reasoning_effort: effort.fixTranscript,
           messages: [{ role: 'system', content: fixInstructions(terms) }, { role: 'user', content: text }],
           response_format: fixFormat,
+          prompt_cache_key: 'chapp-fix-transcript',
         }),
         json: true,
+        model: MODEL,
       }, timeoutMs);
       const fixed = JSON.parse(body.choices?.[0]?.message?.content ?? '{}').text;
       // A fix rewrites a name or two, not the sentence.
@@ -741,6 +755,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       form.append('request', new Blob([JSON.stringify(request)], { type: 'application/json' }));
       form.append('audio', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'speech.wav');
       const body = await call('transcribe', '/asr/transcribe', { body: form }, timeouts.transcribe);
+      if (typeof body.audioDurationMs === 'number') meter.spend((body.audioDurationMs / 3_600_000) * PER.speechHour);
       if (typeof body.transcript !== 'string') throw new UpstreamError('Meta transcribe returned no transcript');
       // Lab names misheard ("pierced BCA protein acetate"): fixed here, and by Muse Spark only when still unsure.
       const terms = labTerms(knownProtocols());
@@ -749,11 +764,15 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       return { transcript: needsModelFix(fixed, terms) && left > 1000 ? await fixTranscript(fixed, terms, Math.min(left, 8000)) : fixed };
     },
 
-    async converse({ text, context, history = [] }) {
+    async converse({ text, context, history = [], previousResponseId }) {
       const deadline = Date.now() + timeouts.converse;
-      // The conversation so far (the app sends the last few turns), so a short answer like "yes" has its question.
+      const instructions = systemPrompt(context, text);
+      // The conversation so far, so a short answer like "yes" has its question: kept on Meta's side when the app sends
+      // the last reply's id (only the new words go, and the model's reasoning carries on from the turn before), else
+      // the last few turns the app keeps.
+      let chain = previousResponseId;
       const earlier = history.map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text }));
-      const messages: Json[] = [{ role: 'system', content: systemPrompt(context, text) }, ...earlier, { role: 'user', content: text }];
+      let input: Json[] = [{ role: 'user', content: text }];
       const saidBefore = history.filter(t => t.role === 'user').map(t => t.text).join('\n');
       let first: Checked | undefined;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -761,11 +780,28 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
         if (attempt > 0 && left < 3000) break;
         let body: Json;
         try {
-          body = await call('converse', '/chat/completions', {
-            body: JSON.stringify({ model: MODEL, reasoning_effort: effort.converse, messages, response_format: replyFormat }),
+          body = await call('converse', '/responses', {
+            body: JSON.stringify({
+              model: MODEL,
+              reasoning: { effort: effort.converse },
+              instructions,
+              input: chain ? input : [...earlier, ...input],
+              ...(chain ? { previous_response_id: chain } : {}),
+              text: { format: replyTextFormat },
+              prompt_cache_key: 'chapp-converse',
+              prompt_cache_retention: '24h',
+            }),
             json: true,
+            model: MODEL,
           }, Math.min(left, timeouts.attempt));
         } catch (error) {
+          // Meta no longer has the conversation (deleted or expired): the same turn, from the app's own turns.
+          if (chain && error instanceof UpstreamError && / failed \(40[04]\)/.test(error.message)) {
+            log('[meta] converse could not continue on Meta’s side; sending the recent turns instead');
+            chain = undefined;
+            attempt--;
+            continue;
+          }
           if (first && !first.ok && first.say) break; // The retry failed; fall back to the first answer's words.
           // Only a call that hung or that the API failed itself (5xx); a refused key or a bad request would fail again.
           const passing = error instanceof UpstreamError && / timed out after |failed \(5\d\d\)/.test(error.message);
@@ -775,19 +811,29 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           }
           throw error;
         }
-        const content = body.choices?.[0]?.message?.content;
-        const checked = checkReply(content, context, text, messages[0].content, saidBefore);
+        if (body.status === 'failed' || body.error) throw new UpstreamError(`Meta converse failed: ${upstreamMessage(JSON.stringify(body.error ?? {}), apiKey) || 'no reason given'}`);
+        const content = replyText(body);
+        const checked = checkReply(content, context, text, instructions, saidBefore);
+        const responseId = typeof body.id === 'string' && body.id ? body.id : undefined;
         if (checked.ok) {
           const drawn = checked.reply.a2ui?.flatMap(m => ('updateComponents' in m ? m.updateComponents.components.map(c => c.component) : [])) ?? [];
           log(`[meta] converse a2ui: ${drawn.length ? drawn.join(' ') : 'none'}`);
           if (checked.dropped.length) log(`[meta] converse dropped ${checked.dropped.join(', ')}`);
-          return checked.reply;
+          return responseId ? { ...checked.reply, responseId } : checked.reply;
         }
         log(`[meta] converse reply rejected: ${checked.issue.slice(0, 160)}`);
         first ??= checked;
         // Broken actions and cards are dropped above; only a reply with nothing usable is asked for again, showing the
-        // model what was wrong.
-        messages.push({ role: 'assistant', content: typeof content === 'string' ? content : '' }, { role: 'user', content: `That reply did not fit the format (${checked.issue}). Answer my last message again.` });
+        // model what was wrong: on top of the reply it gave, or after it when Meta does not keep it.
+        const again = { role: 'user', content: `That reply did not fit the format (${checked.issue}). Answer my last message again.` };
+        if (responseId) {
+          chain = responseId;
+          input = [again];
+        } else {
+          chain = undefined;
+          earlier.push({ role: 'user', content: text }, { role: 'assistant', content });
+          input = [again];
+        }
       }
       const say = first && !first.ok && first.say;
       return {
@@ -817,8 +863,11 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           reasoning: { effort: effort.findProtocol },
           tools: [{ type: 'web_search' }],
           input: [{ role: 'system', content: findInstructions }, { role: 'user', content: query }],
+          prompt_cache_key: 'chapp-find-protocol',
+          prompt_cache_retention: '24h',
         }),
         json: true,
+        model: MODEL,
         signal: live.signal,
         events,
       }, timeouts.findProtocol);
@@ -833,8 +882,9 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
     /** A step card's picture: Muse Spark writes it as SVG from the step's facts, kept only if it is plain drawing. */
     async drawStep(facts) {
       const body = await call('draw-step', '/chat/completions', {
-        body: JSON.stringify({ model: MODEL, reasoning_effort: effort.drawStep, messages: [{ role: 'system', content: DRAW_INSTRUCTIONS }, { role: 'user', content: JSON.stringify({ ...facts, layout: layoutFor(facts) }) }] }),
+        body: JSON.stringify({ model: MODEL, reasoning_effort: effort.drawStep, messages: [{ role: 'system', content: DRAW_INSTRUCTIONS }, { role: 'user', content: JSON.stringify({ ...facts, layout: layoutFor(facts) }) }], prompt_cache_key: 'chapp-draw-step' }),
         json: true,
+        model: MODEL,
       }, timeouts.draw);
       const svg = cleanSvg(String(body.choices?.[0]?.message?.content ?? ''));
       if (!svg) throw new UpstreamError('Meta draw-step returned no usable SVG');

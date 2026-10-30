@@ -4,6 +4,7 @@ import { area, boxAt, overlap, sampleLayout } from '../../shared/kit.ts';
 import { UpstreamError } from './provider.ts';
 import { bcaFacts, knownProtocols, localProtocolId } from './protocols.ts';
 import { samOutline, type SamMask } from './samMask.ts';
+import { costOf, meter, PER, usageLine } from './usage.ts';
 
 /**
  * Kit photos behind KitVision (shared/ai.ts): Muse Spark reads a kit's box (recognizeKit) and each bottle's label
@@ -29,40 +30,104 @@ type Json = Record<string, any>;
 // ---------------------------------------------------------------------------------------------------------------
 // SAM 3.1
 
-/** One object SAM found: its box as fractions of the photo, and its mask as it came, for samMask.ts to decode. */
-export type SamRecord = { box: Box; mask?: SamMask };
+/**
+ * One object SAM found: its box as fractions of the photo, its mask as it came (for samMask.ts to decode), the id it
+ * came under (a prompted object keeps the id the prompt gave it) and, when asked for, how sure SAM is (0–1).
+ */
+export type SamRecord = { box: Box; mask?: SamMask; id?: number; score?: number };
+
+/** "x1=215;y1=318;c=0.96" → each field by its key, so a token reads the same with or without the confidence. */
+function fieldsOf(text: string): Record<string, string> {
+  const f: Record<string, string> = {};
+  for (const pair of text.split(';')) {
+    const at = pair.indexOf('=');
+    if (at > 0) f[pair.slice(0, at).trim()] = pair.slice(at + 1);
+  }
+  return f;
+}
 
 /**
  * SAM 3.1's reply text → each object's box as fractions of the photo, with its mask. It answers /responses with one
  * output_text like
- *   <0f>0<|box;x1=215;y1=318;x2=233;y2=391;w=500;h=461|><|mask;x=0;y=0;data=74,19,~…|>,1<|box;…|><|mask;…|>
+ *   <0f>0<|box;x1=215;y1=318;x2=233;y2=391;w=500;h=461;c=0.96|><|mask;x=0;y=0;c=0.96;data=74,19,~…|>,1<|box;…|><|mask;…|>
  * one box per object in pixels of the photo it was sent (w × h), then its mask: the raster's height and width (the
- * box's), one character saying how it is coded (~ lossless, ! one-bit) and the base85 payload. No scores.
+ * box's), one character saying how it is coded (~ lossless, ! one-bit) and the payload, read to the token's end since
+ * the payload's alphabet has ">" in it. `c` comes only when asked for (dev.meta.ai/docs/sam/reading-segmentation).
  */
 export function parseSamRecords(text: string): SamRecord[] {
   const records: SamRecord[] = [];
-  for (const m of text.matchAll(/<\|box;([^|>]*)\|>(?:<\|mask;x=\d+;y=\d+;data=(\d+),(\d+),([^|>]*)\|>)?/g)) {
-    const f: Record<string, number> = {};
-    for (const pair of m[1].split(';')) {
-      const [k, v] = pair.split('=');
-      if (k && v !== undefined) f[k.trim()] = Number(v);
-    }
-    const { x1, y1, x2, y2, w, h } = f;
+  for (const m of text.matchAll(/(?:<\d+f>)?(\d+)?<\|box;([^|>]*)\|>(?:<\|mask;(.*?)\|>)?/g)) {
+    const b = fieldsOf(m[2]);
+    const [x1, y1, x2, y2, w, h] = ['x1', 'y1', 'x2', 'y2', 'w', 'h'].map(k => Number(b[k]));
     if (![x1, y1, x2, y2, w, h].every(Number.isFinite) || w <= 0 || h <= 0) continue;
     const left = Math.max(0, Math.min(x1, x2)) / w;
     const top = Math.max(0, Math.min(y1, y2)) / h;
     const right = Math.min(w, Math.max(x1, x2)) / w;
     const bottom = Math.min(h, Math.max(y1, y2)) / h;
     if (!(right > left && bottom > top)) continue;
-    const box = { x: left, y: top, width: right - left, height: bottom - top };
-    const [height, width, data] = [Number(m[2]), Number(m[3]), m[4]];
-    const mask: SamMask | undefined =
-      data && data.length > 1 && height > 0 && width > 0
-        ? { encoding: data[0] === '!' ? 'one_bit' : 'lossless', width, height, payload: data.slice(1), left: Math.max(0, Math.min(x1, x2)), top: Math.max(0, Math.min(y1, y2)), frameWidth: w, frameHeight: h }
-        : undefined;
-    records.push(mask ? { box, mask } : { box });
+    const record: SamRecord = { box: { x: left, y: top, width: right - left, height: bottom - top } };
+    if (m[1] !== undefined) record.id = Number(m[1]);
+    const score = Number(b.c);
+    if (b.c !== undefined && Number.isFinite(score)) record.score = score;
+    const raster = m[3] !== undefined ? /^(\d+),(\d+),(.+)$/s.exec(fieldsOf(m[3]).data ?? '') : null;
+    if (raster) {
+      const [height, width, data] = [Number(raster[1]), Number(raster[2]), raster[3]];
+      if (height > 0 && width > 0 && data.length > 1) {
+        record.mask = { encoding: data[0] === '!' ? 'one_bit' : 'lossless', width, height, payload: data.slice(1), left: Math.max(0, Math.min(x1, x2)), top: Math.max(0, Math.min(y1, y2)), frameWidth: w, frameHeight: h };
+      }
+    }
+    records.push(record);
   }
   return records;
+}
+
+/**
+ * Where the user tapped, as SAM's point prompt: one object per tap, in the photo's own pixels
+ * (dev.meta.ai/docs/sam/segmenting): <0f>1<|point;x=120;y=300;w=500;h=461|>,2<|point;…|>
+ */
+export function samPointPrompt(points: Point[], size: { width: number; height: number }): string {
+  const { width: w, height: h } = size;
+  const at = (v: number, max: number) => Math.min(max - 1, Math.max(0, Math.round(v * max)));
+  return `<0f>${points.map((p, i) => `${i + 1}<|point;x=${at(p.x, w)};y=${at(p.y, h)};w=${w};h=${h}|>`).join(',')}`;
+}
+
+/** A JPEG's, PNG's or WebP's size in pixels, read from its header; null when it cannot be read. */
+export function imageSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const b = bytes;
+  const u16 = (i: number) => (b[i]! << 8) | b[i + 1]!;
+  const le16 = (i: number) => b[i]! | (b[i + 1]! << 8);
+  const le24 = (i: number) => b[i]! | (b[i + 1]! << 8) | (b[i + 2]! << 16);
+  const ok = (width: number, height: number) => (width > 0 && height > 0 ? { width, height } : null);
+  // PNG: the IHDR chunk's width and height.
+  if (b.length >= 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    return ok(((b[16]! << 24) | (b[17]! << 16) | (b[18]! << 8) | b[19]!) >>> 0, ((b[20]! << 24) | (b[21]! << 16) | (b[22]! << 8) | b[23]!) >>> 0);
+  }
+  // JPEG: the first start-of-frame marker (C0–CF, but not the C4, C8 and CC tables).
+  if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+    for (let i = 2; i + 9 < b.length; ) {
+      if (b[i] !== 0xff) return null;
+      const marker = b[i + 1]!;
+      if (marker === 0xff) {
+        i++;
+        continue;
+      }
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return ok(u16(i + 7), u16(i + 5));
+      if (marker === 0xd9 || marker === 0xda) return null;
+      i += 2 + u16(i + 2);
+    }
+    return null;
+  }
+  // WebP: lossy (VP8 ), lossless (VP8L) or extended (VP8X).
+  if (b.length >= 30 && String.fromCharCode(...b.subarray(0, 4)) === 'RIFF' && String.fromCharCode(...b.subarray(8, 12)) === 'WEBP') {
+    const chunk = String.fromCharCode(...b.subarray(12, 16));
+    if (chunk === 'VP8 ') return ok(le16(26) & 0x3fff, le16(28) & 0x3fff);
+    if (chunk === 'VP8L') {
+      const bits = b[21]! | (b[22]! << 8) | (b[23]! << 16) | (b[24]! << 24);
+      return ok((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1);
+    }
+    if (chunk === 'VP8X') return ok(le24(24) + 1, le24(27) + 1);
+  }
+  return null;
 }
 
 /** SAM 3.1's reply text → the boxes alone. */
@@ -271,6 +336,7 @@ export function createKitVision(options: VisionOptions): KitVision {
   const timeouts = { recognize: 30_000, segment: 20_000, labels: 45_000, ...options.timeouts };
 
   async function call(what: string, path: string, body: Json, timeoutMs: number): Promise<Json> {
+    meter.check();
     const started = Date.now();
     const seconds = () => ((Date.now() - started) / 1000).toFixed(1);
     let text: string;
@@ -292,12 +358,19 @@ export function createKitVision(options: VisionOptions): KitVision {
       log(`[meta] ${what} ${timedOut ? 'timed out' : 'could not connect'} after ${seconds()} s`);
       throw new UpstreamError(timedOut ? `Meta ${what} timed out after ${Math.round(timeoutMs / 1000)} s` : `Could not reach the Meta API for ${what}`);
     }
-    log(`[meta] ${what} ${seconds()} s`);
+    let reply: Json;
     try {
-      return JSON.parse(text);
+      reply = JSON.parse(text);
     } catch {
+      log(`[meta] ${what} ${seconds()} s`);
       throw new UpstreamError(`Meta ${what} answered with something that is not JSON`);
     }
+    // SAM is paid by the image; Muse Spark by its tokens.
+    const cost = body.model === SAM_MODEL ? PER.samImage : costOf(String(body.model), reply);
+    meter.spend(cost);
+    const used = body.model === SAM_MODEL ? `$${cost.toFixed(4)}` : usageLine(String(body.model), reply);
+    log(`[meta] ${what} ${seconds()} s${used ? ` · ${used}` : ''}`);
+    return reply;
   }
 
   const spark = async (what: string, system: string, content: Json[], format: Json, timeoutMs: number) => {
@@ -306,6 +379,7 @@ export function createKitVision(options: VisionOptions): KitVision {
       reasoning_effort: 'low',
       messages: [{ role: 'system', content: system }, { role: 'user', content }],
       response_format: format,
+      prompt_cache_key: `chapp-${what}`,
     }, timeoutMs);
     return body.choices?.[0]?.message?.content;
   };
@@ -317,9 +391,14 @@ export function createKitVision(options: VisionOptions): KitVision {
     },
 
     async segmentBottles(photo, points) {
-      const body = await call('segment', '/responses', {
+      // A tap is a point prompt: SAM outlines the thing under the finger, whatever it is (a tube, an ampule, a bottle
+      // the word "bottle" missed). Without taps, or when the photo's size cannot be read, the noun finds every bottle.
+      const size = points?.length ? imageSize(photo.data) : null;
+      const prompt = size && points?.length ? samPointPrompt(points.slice(0, MAX_BOTTLES), size) : SAM_PROMPT;
+      const body = await call(size ? 'segment-at' : 'segment', '/responses', {
         model: SAM_MODEL,
-        input: [{ role: 'user', content: [{ type: 'input_text', text: SAM_PROMPT }, { type: 'input_image', image_url: dataUrl(photo) }] }],
+        input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: dataUrl(photo) }] }],
+        metadata: { include_confidence: 'true' },
       }, timeouts.segment);
       if (body.status === 'failed' || body.error) throw new UpstreamError(`Meta segment failed: ${upstreamMessage(JSON.stringify(body.error ?? {}), apiKey) || 'no reason given'}`);
       const text = (Array.isArray(body.output) ? body.output : [])
@@ -327,12 +406,17 @@ export function createKitVision(options: VisionOptions): KitVision {
         .filter((c: Json) => c.type === 'output_text' && typeof c.text === 'string')
         .map((c: Json) => c.text as string)
         .join('');
-      const records = tidyBottles(parseSamRecords(text));
-      const chosen = points?.length ? boxesAt(records.map(r => r.box), points).map(box => records.find(r => r.box === box)!) : records;
+      const found = parseSamRecords(text);
+      // Prompted objects come back under the ids the prompt gave them (1, 2, … in tap order); a tap on nothing, not at all.
+      const chosen = size
+        ? found.filter(r => r.id !== undefined).sort((a, b) => a.id! - b.id!).filter((r, i, all) => all.findIndex(o => o.id === r.id) === i)
+        : points?.length
+          ? boxesAt(tidyBottles(found).map(r => r.box), points).map(box => found.find(r => r.box === box)!)
+          : tidyBottles(found);
       // Each mask as an outline the phone draws and cuts along (samMask.ts); none when it cannot be decoded.
       const bottles = await Promise.all(chosen.map(async r => {
         const outline = r.mask ? await samOutline(r.mask) : undefined;
-        return outline ? { box: r.box, outline } : { box: r.box };
+        return { box: r.box, ...(r.score !== undefined ? { score: r.score } : {}), ...(outline ? { outline } : {}) };
       }));
       return { bottles };
     },

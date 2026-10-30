@@ -202,7 +202,7 @@ export function useChat() {
       inflight.current.add(abort);
       let reply: ConverseReply;
       try {
-        reply = await api.converse({ text, context: converseContext('chat', protocolRef.current), history: session.history }, abort.signal);
+        reply = await api.converse({ text, context: converseContext('chat', protocolRef.current), history: session.history, previousResponseId: session.thread?.id }, abort.signal);
       } catch {
         if (abort.signal.aborted) return;
         useChatLog.getState().set(id, { phase: 'error' });
@@ -223,7 +223,7 @@ export function useChat() {
       const face = reply.expression ?? 'neutral';
       if (reply.a2ui) useShown.getState().clear();
       useChatLog.getState().set(id, { phase: 'reply', say: reply.say, done, ...(reply.a2ui ? { a2ui: reply.a2ui } : {}), ...(reply.confirm ? { confirm: reply.confirm } : {}), go });
-      session.addTurns({ role: 'user', text }, { role: 'chapp', text: reply.say });
+      session.answered(reply.responseId, { role: 'user', text }, { role: 'chapp', text: reply.say });
       session.setExpression(face);
       settle(id, face);
       const lookUp = reply.actions.find((a): a is Extract<Action, { type: 'findProtocol' }> => a.type === 'findProtocol');

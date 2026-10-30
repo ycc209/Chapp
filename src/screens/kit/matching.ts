@@ -90,6 +90,9 @@ export function looking(shots: number): string {
   return `${SAM} is finding the bottles in your ${shots === 1 ? 'photo' : nPhotos(shots)}…`;
 }
 
+/** While SAM looks at a tap where it had found no bottle: "SAM 3.1 is outlining what you tapped…" */
+export const outlining = () => `${SAM} is outlining what you tapped…`;
+
 /** While Muse Spark reads what SAM found: "SAM 3.1 found 5 bottles. Muse Spark is reading their labels…" */
 export function reading(found: number): string {
   return `${SAM} found ${nBottles(found)}. ${SPARK} is reading ${found === 1 ? 'its label' : 'their labels'}…`;

@@ -91,7 +91,7 @@ export function useConverse(screen: string) {
 
       let reply: ConverseReply;
       try {
-        reply = await api.converse({ text, context: converseContext(screen, protocolRef.current), history: session.history }, abort.signal);
+        reply = await api.converse({ text, context: converseContext(screen, protocolRef.current), history: session.history, previousResponseId: session.thread?.id }, abort.signal);
       } catch {
         if (id !== latest.current) return;
         session.setStatus('');
@@ -106,7 +106,7 @@ export function useConverse(screen: string) {
       session.setStatus('');
       session.setExpression(face);
       session.setExchange({ ask: text, say: reply.say });
-      session.addTurns({ role: 'user', text }, { role: 'chapp', text: reply.say });
+      session.answered(reply.responseId, { role: 'user', text }, { role: 'chapp', text: reply.say });
       if (reply.a2ui) useShown.getState().clear();
       setTurn({ id, text, phase: 'reply', say: reply.say, ...(reply.a2ui ? { a2ui: reply.a2ui } : {}), ...(reply.confirm ? { confirm: reply.confirm } : {}) });
       applyActions(reply.actions, navigate, protocolRef.current);
