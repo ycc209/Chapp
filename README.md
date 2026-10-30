@@ -136,7 +136,8 @@ from, and the tests check that every quoted sentence appears word for word on th
   round lumps of gel, with the cage's 14 windows open, rounded into a ball and wearing a face, one animation per
   expression; three quick taps on the big 3D Chapp take it apart for a moment) and its
   stills; `node scripts/chapp-model/body.ts` rebuilds the body from the PDB file, and with Vite running
-  `node scripts/chapp-model/stills.ts` renders the stills (and `--icons`, the app icons) from the app's own 3D scene
+  `node scripts/chapp-model/stills.ts` renders the stills from the app's own 3D scene and
+  `node scripts/chapp-model/icons.ts` the app icons (the cage without its face, down a four-fold axis, on black)
 - `scripts/smoke-meta.ts`: checks each Meta model Chapp depends on; the other scripts try one feature against the real
   models (finding, importing, kit photos, voice, conversation), and `scripts/bench/` compares models at reading manuals
 - `tests/`: the protocol format, the numbers, model replies (recorded, replayed without a network), voice, the cards and

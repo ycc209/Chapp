@@ -4,9 +4,9 @@
  *
  *   node scripts/chapp-model/stills.ts [vite url, default http://localhost:5175] [--only chapp.webp,chapp-happy.webp]
  *   node scripts/chapp-model/stills.ts http://localhost:5194 --out /tmp/stills --png   (lossless, for comparing)
- *   node scripts/chapp-model/stills.ts https://localhost:5175 --icons   (npm run dev:phone; also the app icons)
+ *   node scripts/chapp-model/stills.ts https://localhost:5175   (npm run dev:phone)
  *
- * --icons: the home-screen and manifest icons (icon-180/192/512.png), the neutral still on white, opaque as iOS needs.
+ * The app icons are drawn by icons.ts (the cage without its face, through unit.html).
  * WebGL runs on SwiftShader, as in scripts/shot.ts: the same pictures on any machine, no GPU needed.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -19,7 +19,6 @@ const flag = (name: string) => {
   return i >= 0 ? args.splice(i, 2)[1] : undefined;
 };
 const png = args.includes('--png') ? (args.splice(args.indexOf('--png'), 1), true) : false;
-const icons = args.includes('--icons') ? (args.splice(args.indexOf('--icons'), 1), true) : false;
 const only = flag('only')?.split(',');
 const out = resolve(flag('out') ?? resolve(import.meta.dirname, '../../public/chapp'));
 const base = (args[0] ?? 'http://localhost:5175').replace(/\/$/, '');
@@ -57,31 +56,6 @@ try {
     const bytes = Buffer.from(data.slice(data.indexOf(',') + 1), 'base64');
     writeFileSync(file, bytes);
     console.log(`${file}  ${(bytes.length / 1024).toFixed(1)} KB`);
-  }
-  if (icons) {
-    const still = await page.evaluate(() => (window as unknown as { lookdev: Lookdev }).lookdev.renderPng('chapp.webp'));
-    for (const size of [180, 192, 512]) {
-      const data = await page.evaluate(
-        async (src, s) => {
-          const img = new Image();
-          img.src = src;
-          await img.decode();
-          const canvas = document.createElement('canvas');
-          canvas.width = canvas.height = s;
-          const g = canvas.getContext('2d')!;
-          g.fillStyle = '#fff';
-          g.fillRect(0, 0, s, s);
-          g.imageSmoothingQuality = 'high';
-          g.drawImage(img, 0, 0, s, s);
-          return canvas.toDataURL('image/png');
-        },
-        still,
-        size,
-      );
-      const file = resolve(out, `icon-${size}.png`);
-      writeFileSync(file, Buffer.from(data.slice(data.indexOf(',') + 1), 'base64'));
-      console.log(file);
-    }
   }
 } finally {
   await browser.close();
