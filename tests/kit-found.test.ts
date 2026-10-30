@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Box, ReadLabels } from '../shared/ai.ts';
 import { boxAt, labelCrop, padded, SAMPLE, sampleLayout, squareOn } from '../shared/kit.ts';
 import { groupLabels, planFound, type Seen } from '../src/screens/kit/found.ts';
-import { cantLook, looking, noneFound, offered, recognized, rowDetail, slotsOf, subjectOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
+import { cantLook, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
 
 // From what the models found to what the kit screen shows (Recognized, Kit, Kit-Filled): groups, matches, the things
 // Chapp asks about, the rows, and the boxes and crops behind them. Pure; no browser.
@@ -121,12 +121,14 @@ describe('the questions and rows', () => {
   });
 
   it("words Chapp's lines like the designs", () => {
-    expect(recognized(4, 3, 2)).toBe('I found 4 things in 3 photos. I’m not sure about 2.');
-    expect(recognized(1, 1, 0)).toBe('I found 1 thing in 1 photo.');
-    expect(looking(3)).toBe('Looking at your 3 photos…');
-    expect(looking(1)).toBe('Looking at your photo…');
+    expect(recognized(12, 3, 2, 2)).toBe('SAM 3.1 found 12 bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2.');
+    expect(recognized(1, 1, 1, 0)).toBe('SAM 3.1 found 1 bottle in 1 photo. Muse Spark read 1 label.');
+    expect(recognized(3, 1, 0, 3)).toBe('SAM 3.1 found 3 bottles in 1 photo. I’m not sure about 3.');
+    expect(looking(3)).toBe('SAM 3.1 is finding the bottles in your 3 photos…');
+    expect(looking(1)).toBe('SAM 3.1 is finding the bottles in your photo…');
+    expect(reading(5)).toBe('SAM 3.1 found 5 bottles. Muse Spark is reading their labels…');
     expect(cantLook(4)).toBe('I can’t look at the photos right now. Show me the 4 bottles.');
-    expect(noneFound(1, 4)).toBe('I couldn’t find the bottles in this photo. Show me the 4 bottles.');
+    expect(noneFound(1, 4)).toBe('SAM 3.1 couldn’t find the bottles in this photo. Show me the 4 bottles.');
   });
 });
 

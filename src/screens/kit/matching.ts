@@ -80,14 +80,24 @@ export function rowDetail(need: Need, state: { pick?: Pick; pending?: Pick; skip
 /** "glass ampule" → "Glass ampule": a thing's row says what it looks like until it is named. */
 export const thingTitle = (thing: { looks: string }) => thing.looks.charAt(0).toUpperCase() + thing.looks.slice(1);
 
-/** While the models look: "Looking at your 3 photos…" */
+const SAM = 'SAM 3.1';
+const SPARK = 'Muse Spark';
+const nBottles = (n: number) => `${n} bottle${n === 1 ? '' : 's'}`;
+const nPhotos = (n: number) => `${n} photo${n === 1 ? '' : 's'}`;
+
+/** While SAM looks: "SAM 3.1 is finding the bottles in your 3 photos…" */
 export function looking(shots: number): string {
-  return `Looking at your ${shots === 1 ? 'photo' : `${shots} photos`}…`;
+  return `${SAM} is finding the bottles in your ${shots === 1 ? 'photo' : nPhotos(shots)}…`;
 }
 
-/** Recognized.dc.html: "I found 4 things in 3 photos. I’m not sure about 2." */
-export function recognized(things: number, shots: number, unsure: number): string {
-  return `I found ${things} thing${things === 1 ? '' : 's'} in ${shots} photo${shots === 1 ? '' : 's'}.${unsure ? ` I’m not sure about ${unsure}.` : ''}`;
+/** While Muse Spark reads what SAM found: "SAM 3.1 found 5 bottles. Muse Spark is reading their labels…" */
+export function reading(found: number): string {
+  return `${SAM} found ${nBottles(found)}. ${SPARK} is reading ${found === 1 ? 'its label' : 'their labels'}…`;
+}
+
+/** Recognized.dc.html, by who did what: "SAM 3.1 found 12 bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2." */
+export function recognized(found: number, shots: number, read: number, unsure: number): string {
+  return `${SAM} found ${nBottles(found)} in ${nPhotos(shots)}.${read ? ` ${SPARK} read ${read} label${read === 1 ? '' : 's'}.` : ''}${unsure ? ` I’m not sure about ${unsure}.` : ''}`;
 }
 
 /** The models could not look (offline, or they failed): over to the user's taps. */
@@ -97,7 +107,7 @@ export function cantLook(needs: number): string {
 
 /** The models looked and found none of the run's bottles. */
 export function noneFound(shots: number, needs: number): string {
-  return `I couldn’t find the bottles in ${shots === 1 ? 'this photo' : 'these photos'}. Show me the ${needs} bottle${needs === 1 ? '' : 's'}.`;
+  return `${SAM} couldn’t find the bottles in ${shots === 1 ? 'this photo' : 'these photos'}. Show me the ${needs} bottle${needs === 1 ? '' : 's'}.`;
 }
 
 /**

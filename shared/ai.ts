@@ -210,7 +210,8 @@ export type RecognizedKit = {
 };
 
 /** The bottles SAM 3.1 found on a photo, left to right. */
-export type SegmentedBottles = { bottles: { box: Box; score?: number }[] };
+/** What SAM found: each bottle's box, and its mask as an outline (an SVG path of M/L/Z in fractions of the photo). */
+export type SegmentedBottles = { bottles: { box: Box; score?: number; outline?: string }[] };
 
 /** A component of the run's protocol that a label can name: its id, name, role, who supplies it and its label's words. */
 export type LabelTarget = { id: string; name: string; role: string; kit: boolean; labels: string[] };

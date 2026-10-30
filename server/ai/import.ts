@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ImportedProtocol, ProtocolIntro, Source } from '../../shared/ai.ts';
 import { Protocol, Stage, problems as checkProblems, type Cite, type Note } from '../../shared/protocol.ts';
 import { UpstreamError } from './provider.ts';
-import { normalizeUnit } from '../../shared/units.ts';
+import { convert, normalizeUnit, toMicroliters, unitKind } from '../../shared/units.ts';
 
 /**
  * Reading a kit manual (PDF) into Chapp's protocol format (chapp.protocol/1, shared/protocol.ts) with Muse Spark.
@@ -338,6 +338,20 @@ export function parseQuantity(text: string): { value: number; unit: string } | n
 /** A volume as printed ("25 uL", "0.1 mL", "500 nL"); any unit is kept. */
 export const parseVolume = parseQuantity;
 
+/**
+ * A diluent given as the volume topped up to ("adjust to 50 uL", "to a final volume of 50 uL with buffer") → the
+ * volume added: the final volume less the take, when both are volumes on one scale. Null when it says no such thing.
+ */
+export function toppedUp(text: string, take: { value: number; unit: string } | null): { value: number; unit: string } | null {
+  const m = new RegExp(String.raw`(?:\bto|\bup to|final|total)\b[^\d]{0,24}${NUM}\s*${UNIT}`, 'i').exec(joined(text));
+  if (!m) return null;
+  const final = { value: Number(m[1]!.replace(/,/g, '')), unit: normalizeUnit(m[2]!) };
+  if (!take) return final;
+  const f = toMicroliters(final), k = toMicroliters(take);
+  if (f === null || k === null || f < k) return null;
+  return { value: Number((f - k).toPrecision(12)), unit: 'µL' };
+}
+
 /** A concentration as printed ("2 mg/mL", "10 pg/mL", "5 uM", "0.5 %"); any unit is kept. */
 export const parseConcentration = parseQuantity;
 
@@ -421,7 +435,11 @@ export const STEPS_TASK = `List every step of every procedure, in order, as rows
 - alternatives: the manual's other documented timings for a timed step ("2 hours for a stronger signal", "60°C for the enhanced range"), with their time and temperature, and the working range and curve id when they change those ("" otherwise), and a cite. They also hold the variants the inventory folded into one procedure ("Enhanced: 60°C for 30 minutes, working range 5–250 µg/mL" with that range and its standard table's curve id).
 - notes: short lines shown next to a step. kind "expected", "tip", "caution" or "info" (${KINDS}); text: one sentence in Chapp's own words; cite keeps the manual's words.`;
 
-export const CURVES_TASK = `For each standard curve below, list every vial of its dilution table in order: the curve id, the vial's letter alone ("A", "B", … as printed), the diluent volume ("125 uL"), where its standard comes from ("stock", the letter of an earlier vial, or "" for the blank), the volume taken ("375 uL"), the final concentration ("1500 ug/mL", "500 pg/mL"), and blank true for the vial with no standard. Every volume and concentration exactly as the table prints it, with its unit.`;
+export const CURVES_TASK = `For each standard curve below, list every standard in order, however the manual makes them: the curve id, the vial's letter or number alone ("A", "B", "1" as printed; number them 1, 2, 3… when the manual does not), the diluent volume ("125 uL"), where its standard comes from ("stock", the id of an earlier vial, or "" for the blank), the volume taken ("375 uL"), the final concentration ("1500 ug/mL", "500 pg/mL", "2 nmol/well"), and blank true for the one with no standard.
+- A dilution table: one row per vial, as printed.
+- Standards made in the wells ("add 0, 2, 4, 6, 8, 10 uL of the standard and adjust to 50 uL with buffer"): one row per well amount; take is the uL of standard, diluent the uL added, concentration the amount per well as the manual states it ("2 nmol/well").
+- A working dilution the manual makes first ("dilute 10 uL of the 10 mM stock with 90 uL water to 1 mM"): a row of its own, in the unit the manual gives it, that the standards then come from.
+Every volume and concentration exactly as the manual prints it, with its unit; never convert.`;
 
 export const NOTES_TASK = `Using the inventory below, fill:
 - title: the assay's name as Chapp would say it ("Pierce BCA Protein Assay", "3T3-L1 Adipocyte Differentiation"), without "Kit" or trademark signs.
@@ -550,7 +568,10 @@ function vialId(text: string): string | null {
   const l = letter(t);
   if (l) return l;
   const m = /(?:^|[-_\s])([A-Za-z]{0,4}\d{1,3})$/.exec(t);
-  return m ? m[1]![0]!.toUpperCase() + m[1]!.slice(1) : null;
+  if (m) return m[1]![0]!.toUpperCase() + m[1]!.slice(1);
+  // A named row ("colorimetric-working", "Std 1 mM"): its last word, when it is one the contract takes.
+  const w = /([A-Za-z0-9]{1,8})$/.exec(t);
+  return w ? w[1]![0]!.toUpperCase() + w[1]!.slice(1) : null;
 }
 
 /**
@@ -649,6 +670,12 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
         Object.assign(stockPart, { concentration: stockStrength });
         dropped.push(`component ${stockPart.id}: strength from the dilution table, as printed`);
       }
+      // Standards made in the wells are topped up to what the blank's well holds ("adjust to 50 uL"): a row that
+      // says no diluent gets the rest of that volume; one that says no concentration gets what its take of the
+      // working dilution holds (2 uL of 1 mM is 2 nmol). Both are the manual's own numbers, put together.
+      const blankRow = rows.find(p => p.blank || (p.from.trim() === '' && p !== stockRow));
+      const wellVolume = blankRow ? ((parseVolume(blankRow.diluent) ?? toppedUp(blankRow.diluent, null)) ?? null) : null;
+      const byId = new Map(rows.map(p => [vialId(p.id) ?? p.id.trim(), p]));
       const points = rows
         .filter(p => p !== stockRow)
         .flatMap(p => {
@@ -657,11 +684,17 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
           // blank, nothing is taken and there is no standard, so an empty take or concentration is that zero.
           const isBlank = p.blank || p.from.trim() === '';
           const zero = (text: string) => /^\s*0(?:\.0+)?\s*$/.test(text) || (isBlank && text.trim() === '');
-          const d = parseVolume(p.diluent), t = parseVolume(p.take);
+          const t = parseVolume(p.take);
+          // "adjust to 50 uL", "up to 50 uL with buffer": the final volume, so the diluent is what the take leaves.
+          const perWell = r ? /\/well$/i.test(normalizeUnit(r.unit)) : false;
+          const d = parseVolume(p.diluent) ?? toppedUp(p.diluent, t) ?? (perWell && !isBlank && p.diluent.trim() === '' && t && wellVolume ? toppedUp(`to ${wellVolume.value} ${wellVolume.unit}`, t) : null);
           const volumeUnit = d?.unit ?? t?.unit ?? 'µL';
           const diluent = d ?? (zero(p.diluent) ? { value: 0, unit: volumeUnit } : null);
           const take = t ?? (zero(p.take) ? { value: 0, unit: volumeUnit } : null);
-          const conc = parseConcentration(p.concentration) ?? (zero(p.concentration) && r ? { value: 0, unit: r.unit } : null);
+          const source = byId.get(vialId(p.from) ?? p.from.trim());
+          const working = source && !isBlank ? parseConcentration(source.concentration) : null;
+          const held = perWell && p.concentration.trim() === '' && take && working ? convert(working, normalizeUnit(r!.unit), { perWell: toMicroliters(take) ?? undefined }) : null;
+          const conc = parseConcentration(p.concentration) ?? (held !== null ? { value: held, unit: normalizeUnit(r!.unit) } : zero(p.concentration) && r ? { value: 0, unit: r.unit } : null);
           if (!vial || !diluent || !take || !conc) {
             dropped.push(`curve ${id} vial ${p.id || '?'}: not a whole row`);
             return [];
@@ -672,6 +705,13 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
       if (!r || points.length < 2) {
         dropped.push(`curve ${id}: ${r ? 'fewer than two vials' : 'no working range'}`);
         return [];
+      }
+      // A working dilution (in another kind of unit than the range: the stock at 1 mM for standards in nmol/well)
+      // that later vials draw from is made, but is not a standard on the plate.
+      const drawnFrom = new Set(points.map(pt => pt.from));
+      const rangeKind = unitKind(r.unit);
+      for (const pt of points) {
+        if (drawnFrom.has(pt.id) && pt.concentration.value > 0 && rangeKind !== null && unitKind(pt.concentration.unit) !== rangeKind) Object.assign(pt, { intermediate: true });
       }
       return [{ id, name: c.name || id, stock: ref(c.stock), diluent: ref(c.diluent), range: r, points, cite: citeOr(c.cite, `curve ${id}`) }];
     }),
@@ -722,7 +762,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
               duration,
               ...(temperature ? { temperature } : {}),
               ...(r ? { range: r } : {}),
-              ...(curve ? { standardCurve: curve } : {}),
+              ...(curve && curveIds.has(curve) ? { standardCurve: curve } : {}),
               cite: c,
             }];
           });
@@ -778,7 +818,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
         ...(sample && sample.value > 0 ? { sample } : {}),
         ...(mixPerSample && mixPerSample.value > 0 ? { mixPerSample } : {}),
         ...(assay && ref(p.mix) ? { mix: ref(p.mix) } : {}),
-        ...(assay && ref(p.curve) ? { standardCurve: ref(p.curve) } : {}),
+        ...(assay && curveIds.has(ref(p.curve)) ? { standardCurve: ref(p.curve) } : {}),
         ...(r ? { range: r } : {}),
         ...(prep.length ? { prep } : {}),
         steps,

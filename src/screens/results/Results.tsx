@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
+import { unitOf } from '../../../shared/calc.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
 import { analysisOf } from '../../../shared/protocol.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
@@ -133,6 +134,14 @@ export function ResultsScreen() {
   const sample = from === 'sample' && hasReadings;
   const same = useMemo(() => (analysis ? common(analysis, asked) : null), [analysis, asked]);
   const labels = useMemo(() => (protocol ? curveLabels(protocol, procedure) : null), [protocol, procedure]);
+  // The unit the standards and results are in: the kit's own (nmol/well), or µg/mL, which the mass pages need.
+  const unit = useMemo(() => {
+    try {
+      return protocol ? unitOf(protocol, procedure) : 'µg/mL';
+    } catch {
+      return 'µg/mL';
+    }
+  }, [protocol, procedure]);
   // Back goes to the run's Read step (Run-Read: Step 6 of 6 for the BCA plate); /run/:step counts from 1.
   const readStep = useMemo(() => {
     if (!protocol) return null;
@@ -248,7 +257,7 @@ export function ResultsScreen() {
   };
 
   const pageSay = (p: number): Say =>
-    !analysis ? [] : p === 0 ? concentrationSay(analysis) : p === 1 ? volumeSay(analysis, amount) : p === 2 ? commonSay(same) : curveSay(analysis);
+    !analysis ? [] : p === 0 ? concentrationSay(analysis, unit) : p === 1 ? volumeSay(analysis, amount) : p === 2 ? commonSay(same) : curveSay(analysis, unit);
 
   // Held, the words show in the bar's own bubble.
   const hearing = voice !== 'idle' && voice !== 'holding' && (heardSoFar || interim);
@@ -276,7 +285,7 @@ export function ResultsScreen() {
   );
 
   const rerun = analysis ? rerunLabel(analysis) : null;
-  const tabs = analysis ? tabLabels(amount, same) : null;
+  const tabs = analysis ? tabLabels(amount, same, unit) : null;
   const vols = analysis ? massRows(analysis, amount) : null;
   const amounts = [...new Set([...AMOUNTS, amount])].sort((x, y) => x - y);
   const targets = same ? [...new Set([same.ceiling, ...[1, 2, 3].map(k => same.ceiling - k * 100).filter(t => t > 0), same.target])].sort((x, y) => y - x) : [];
@@ -287,14 +296,14 @@ export function ResultsScreen() {
           label: 'Concentration',
           content: (
             <>
-              <SectionHead aside="µg/mL · CV">Your samples</SectionHead>
+              <SectionHead aside={`${unit} · CV`}>Your samples</SectionHead>
               <ResultRows rows={concentrationList(analysis)} side="cv" />
             </>
           ),
         },
         {
           label: `Volume for ${amountText(amount)} µg`,
-          content: (
+          content: unit !== 'µg/mL' ? massOnly(unit) : (
             <>
               <SectionHead aside={`µL for ${amountText(amount)} µg`}>Your samples</SectionHead>
               <ResultRows rows={vols!.rows} />
@@ -312,7 +321,7 @@ export function ResultsScreen() {
         },
         {
           label: same ? `All at ${mgText(same.target)} mg/mL` : 'All at one concentration',
-          content: (
+          content: unit !== 'µg/mL' ? massOnly(unit) : (
             <>
               <SectionHead aside="take · buffer, µL">Per {FINAL_VOLUME} µL</SectionHead>
               {same ? (
@@ -426,3 +435,6 @@ export function ResultsScreen() {
     </div>
   );
 }
+
+/** The mass pages (µL for an amount, all at one mg/mL) are for kits that read a mass concentration; this one reads otherwise. */
+const massOnly = (unit: string) => <p className="px-1 text-[15px] leading-5 text-text">This page works in µg and mg/mL. This kit reads in {unit}, so there is nothing to work out here.</p>;

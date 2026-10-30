@@ -17,6 +17,7 @@ import {
   shadeLevels,
   stepDetail,
   stepLabel,
+  vialLabel,
   vialRecipe,
   vialSay,
   wellRoles,
@@ -49,6 +50,13 @@ describe('vials', () => {
     expect(vialSay(v('stock', 120, 0))).toEqual(['120 µL of stock', 'no diluent']);
     expect(vialSay(v('B', 70, 70))).toEqual(['70 µL from B', '70 µL of diluent']);
     expect(vialSay(v(null, 0, 160, true))).toEqual(['160 µL of diluent', 'nothing else']);
+  });
+
+  it('labels a standard on the series’ scale and a working dilution as the manual prints it', () => {
+    expect(vialLabel({ ...v('1', 6, 144), concentration: 2 }, 'nmol/well')).toEqual(['2', 'nmol/well']);
+    expect(vialLabel({ ...v('stock', 10, 90), concentration: 50, intermediate: true, printed: { value: 1, unit: 'mM' } }, 'nmol/well')).toEqual(['1', 'mM']);
+    // One the app made itself has nothing printed, so it stays on the scale.
+    expect(vialLabel({ ...v('stock', 10, 90), concentration: 50, intermediate: true }, 'nmol/well')).toEqual(['50', 'nmol/well']);
   });
 
   it('halves from 2,000: five standards once (Plan-Heard: 100 µL BSA and 200 µL diluent, each vial keeps 50 µL)', () => {

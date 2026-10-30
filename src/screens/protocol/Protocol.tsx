@@ -30,7 +30,7 @@ import { useImporting } from './useImporting.ts';
 // The bar's wash (Overview.dc.html): the bar and the Plan / Start pills float over the page as it scrolls under.
 const BAR_WASH =
   'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
-const PILL = 'flex min-h-10 items-center rounded-[20px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
+const PILL = 'flex min-h-9 items-center rounded-[18px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const WHITE_PILL = 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
 // Where Protocol-Kit.dc.html draws the top of "In the kit", and the content's top padding there.
 const KIT_TOP = 474;
@@ -155,6 +155,7 @@ export function ProtocolScreen() {
     if (!done || !fromKit || !el || !kit) return;
     const offset = (kit.getBoundingClientRect().top - el.getBoundingClientRect().top) / scale + el.scrollTop;
     el.scrollTop = Math.max(0, offset - (KIT_TOP - 196 + parseFloat(getComputedStyle(el.firstElementChild ?? el).paddingTop)));
+    // (KIT_TOP is under the full header; the compact one is 80 px shorter, and "In the kit" moves up with it.)
   }, [done, fromKit]);
   const overview = ask !== null || importing !== null;
   // A manual new to Chapp: what it read of it first (the intro), until the protocol it becomes is on screen.
@@ -176,7 +177,7 @@ export function ProtocolScreen() {
       {/* The scroller only scrolls; the column inside it lays the page out. A flex column that also scrolled could get
           stuck on iPhone Safari (it measured the page as fitting and would not scroll). */}
       <div ref={scroller} className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [-webkit-overflow-scrolling:touch]">
-        <div className="flex min-h-full flex-col px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(168px+var(--screen-bottom))]">
+        <div className="flex min-h-full flex-col px-5 pt-[calc(116px+var(--screen-top))] pb-[calc(124px+var(--screen-bottom))]">
           {overview && <Bubble>{importing?.name ?? ask ?? ''}</Bubble>}
           {/* How Chapp found the manual, until what it read comes in: then the kit, its glance and steps take the screen. */}
           {overview && stage < 3 && !intro && finding.progress.length > 0 && <Progress lines={finding.progress} searching={stage === 0} />}
@@ -239,19 +240,6 @@ export function ProtocolScreen() {
       </div>
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
-        {done && voice !== 'talking' && (
-          <div aria-label="Next" className="pointer-events-none relative flex shrink-0 justify-center gap-2 px-5 pt-2 [&>*]:pointer-events-auto">
-            {plannable && (
-              <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-[18px]')}>
-                Plan
-              </Link>
-            )}
-            <Link to={protocol ? startPath(protocol, procedure, started) : '/run/1'} className={cn(PILL, 'gap-[7px] bg-ink pr-[18px] pl-[15px] text-white')}>
-              <PlayIcon />
-              Start
-            </Link>
-          </div>
-        )}
         <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
           {typing ? (
             <TypingBar
@@ -282,7 +270,27 @@ export function ProtocolScreen() {
       )}
 
       <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />
-      <ChappHeader onMenu={() => setSidebar(true)} subtitle={protocol && !finding.notFound ? shortName(protocol) : undefined} />
+      <ChappHeader
+        compact
+        onMenu={() => setSidebar(true)}
+        subtitle={protocol && !finding.notFound ? shortName(protocol) : undefined}
+        actions={
+          done && (
+            // Next: plan the run (when Chapp can work out its amounts) or start it.
+            <nav aria-label="Next" className="contents">
+              {plannable && (
+                <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-3.5')}>
+                  Plan
+                </Link>
+              )}
+              <Link to={protocol ? startPath(protocol, procedure, started) : '/run/1'} className={cn(PILL, 'gap-1.5 bg-ink pr-3.5 pl-3 text-white')}>
+                <PlayIcon />
+                Start
+              </Link>
+            </nav>
+          )
+        }
+      />
       <Sidebar
         open={sidebar}
         onOpenChange={setSidebar}

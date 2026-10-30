@@ -41,7 +41,7 @@ export function StandardsPage() {
           {error}
         </p>
       )}
-      {v && <VialRack vials={v.series.vials} ready={ready ? { need: v.series.need } : undefined} className="shrink-0" />}
+      {v && <VialRack unit={v.series.unit} vials={v.series.vials} ready={ready ? { need: v.series.need } : undefined} className="shrink-0" />}
       {v && !ready && (
         <section aria-label="What goes into the vials" className="flex shrink-0 flex-col gap-2.5">
           {stock && (

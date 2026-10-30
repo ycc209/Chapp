@@ -1,6 +1,6 @@
 import { standardSeries, toMicroliters } from '../../../shared/calc.ts';
 import { assayOf, type Protocol } from '../../../shared/protocol.ts';
-import { concentrationText, halvings, runSetup, samplesThatFit, standardsFor } from '../../components/lab/model.ts';
+import { concentrationText, halvings, runSetup, samplesThatFit, standardsFor, standardsOf } from '../../components/lab/model.ts';
 import type { RunState } from '../../state/run.ts';
 import { procedureFor, splitName } from '../protocol/content.ts';
 
@@ -18,7 +18,7 @@ export const halvingTop = (p: Protocol, procedureId: string) => assayOf(procedur
 /** How many vials each way makes, for reading "five standards" or "the kit's 9" against. */
 export function wayCounts(p: Protocol, procedureId: string): Record<'kit' | 'halve' | 'five', number> {
   return {
-    kit: standardSeries(p, procedureId, 1).vials.length,
+    kit: standardsOf(standardSeries(p, procedureId, 1).vials).length,
     halve: halvings(p, procedureId, 'halve') + 1,
     five: halvings(p, procedureId, 'five') + 1,
   };
@@ -44,8 +44,9 @@ export function planFor(p: Protocol, procedureId: string, plan: PlanNumbers) {
   const { samples: n, replicates: nr, standardReplicates: sr, standards: way } = plan;
   // The same layout Run loads, Results reads back and Share counts (runSetup).
   const { series, plate, reagent } = runSetup(p, { procedure: procedureId, ...plan });
-  const S = series.vials.length;
-  const kitCount = standardSeries(p, procedureId, 1).vials.length;
+  // Standards on the plate; a working dilution (ATP's 1 mM) is a vial to make, not a standard.
+  const S = standardsOf(series.vials).length;
+  const kitCount = standardsOf(standardSeries(p, procedureId, 1).vials).length;
   const firstSample = plate.tubes[S]?.wells ?? [];
   const shortLabel = (c?: (typeof p.components)[number]) =>
     c?.label?.length ? c.label.reduce((a, b) => (b.length < a.length ? b : a)) : c ? splitName(c.name).name : '';

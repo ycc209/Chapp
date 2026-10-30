@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cutPixels } from '../src/components/bench/cutout.ts';
+import { cutPixels, outlineInCrop } from '../src/components/bench/cutout.ts';
 
 // A bottle cut out of its kit photo (src/components/bench/cutout.ts), on made-up pixels: a dark shape on a light
 // table comes out whole; one against the crop's edge, or wider than tall, comes out but is said not to be whole.
@@ -56,5 +56,18 @@ describe('cutPixels', () => {
 
   it('finds nothing on an empty table', () => {
     expect(cutPixels(photo(), W, H)).toBeNull();
+  });
+});
+
+describe('outlineInCrop', () => {
+  it('puts SAM’s outline (fractions of the photo) onto the crop’s pixels, with its box clamped to the crop', () => {
+    // The crop is the photo's middle half, drawn 240 px square; the outline a bottle in the crop's middle.
+    const square = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+    const on = outlineInCrop('M0.4,0.3L0.6,0.3L0.6,0.7L0.4,0.7Z', square, 240, 240);
+    expect(on.d).toBe('M72.0,24.0L168.0,24.0L168.0,216.0L72.0,216.0Z');
+    expect([on.left, on.top, on.right, on.bottom]).toEqual([72, 24, 168, 216]);
+    // A point past the crop's edge is clamped.
+    expect(outlineInCrop('M0.1,0.1L0.9,0.1L0.9,0.9Z', square, 240, 240)).toMatchObject({ left: 0, top: 0, right: 239, bottom: 239 });
+    expect(outlineInCrop('', square, 240, 240).d).toBe('');
   });
 });

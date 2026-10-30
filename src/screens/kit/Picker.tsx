@@ -3,6 +3,7 @@ import type { Box, Point } from '../../../shared/ai.ts';
 import { boxAt } from '../../../shared/kit.ts';
 import { cn } from '../../lib/cn.ts';
 import { CloseIcon } from '../protocol/icons.tsx';
+import { Outline } from './Match.tsx';
 import { squareAround, type Shot } from './photo.ts';
 
 type PickerProps = {
@@ -13,6 +14,8 @@ type PickerProps = {
   name: string;
   /** The bottles SAM found on a photo (by shot id): a tap on one picks that bottle. */
   bottles?: (shot: string) => Box[];
+  /** SAM's outline of one of those bottles, when the server decoded its mask. */
+  outlineOf?: (shot: string, box: Box) => string | undefined;
   /** The tap, and the bottle SAM found under it, if any. */
   onPick: (shot: number, at: Point, bottle: Box | null) => void;
   onClose: () => void;
@@ -27,9 +30,10 @@ const SHOW_MS = 450;
  * yellow (still a question), then hands back to the list, which asks "Is this the BCA Reagent A?" (Kit.dc.html).
  * Thumbnails switch photos.
  */
-export function Picker({ shots, start, name, bottles, onPick, onClose }: PickerProps) {
+export function Picker({ shots, start, name, bottles, outlineOf, onPick, onClose }: PickerProps) {
   const [index, setIndex] = useState(Math.min(start, shots.length - 1));
   const [box, setBox] = useState<Box | null>(null);
+  const [lit, setLit] = useState<string | null>(null);
   const frame = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState({ width: 0, height: 0 });
   const shot = shots[index];
@@ -60,6 +64,8 @@ export function Picker({ shots, start, name, bottles, onPick, onClose }: PickerP
     const at = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
     if (at.x < 0 || at.x > 1 || at.y < 0 || at.y > 1) return;
     const bottle = boxAt(bottles?.(shot.id) ?? [], at);
+    const outline = bottle ? outlineOf?.(shot.id, bottle) : undefined;
+    setLit(outline ?? null);
     setBox(bottle ?? squareAround(at, shot.width, shot.height));
     window.setTimeout(() => onPick(index, at, bottle), SHOW_MS);
   };
@@ -92,7 +98,16 @@ export function Picker({ shots, start, name, bottles, onPick, onClose }: PickerP
           style={{ width: fit.width, height: fit.height }}
         >
           <img src={shot.src} alt={`Photo ${index + 1}`} draggable={false} className="block size-full select-none" />
-          {box && (
+          {(() => {
+            // SAM's outlines, faint, so the user sees what it found; the tapped one lights up yellow.
+            const outlines = (bottles?.(shot.id) ?? []).map(b => outlineOf?.(shot.id, b)).filter((d): d is string => Boolean(d));
+            return outlines.length > 0 ? (
+              <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full" viewBox="0 0 1 1" preserveAspectRatio="none">
+                {outlines.map((d, i) => (d === lit ? <Outline key={i} d={d} tone="yellow" /> : <path key={i} d={d} fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.75)" strokeWidth={1.2} vectorEffect="non-scaling-stroke" strokeLinejoin="round" />))}
+              </svg>
+            ) : null;
+          })()}
+          {box && !lit && (
             <span
               aria-hidden="true"
               className="absolute rounded-[8px] border-2 border-mark bg-[rgba(255,232,99,0.18)] animate-in zoom-in-90 fade-in duration-150"
@@ -113,6 +128,7 @@ export function Picker({ shots, start, name, bottles, onPick, onClose }: PickerP
               onClick={() => {
                 setIndex(i);
                 setBox(null);
+                setLit(null);
               }}
               className={cn(
                 'relative size-11 overflow-hidden rounded-[10px] outline-none focus-visible:ring-2 focus-visible:ring-blue',

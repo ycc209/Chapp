@@ -1,4 +1,4 @@
-import { formatVolume, standardSeries, toMicrogramsPerMl, toMicroliters, type StandardVial } from '../../../shared/calc.ts';
+import { formatVolume, onScale, standardSeries, toMicroliters, unitOf, type StandardVial } from '../../../shared/calc.ts';
 import { commonConcentration, laneFor, volumeForMass, type PlateAnalysis, type WellRole } from '../../../shared/fit.ts';
 import { assayOf, type Protocol, type Step } from '../../../shared/protocol.ts';
 
@@ -10,7 +10,10 @@ import { assayOf, type Protocol, type Step } from '../../../shared/protocol.ts';
 export type { StandardVial };
 
 /** A dilution series ready to draw: the vials, plus what the bench needs in total (µL). `standardSeries()` fits. */
-export type Series = { vials: StandardVial[]; stock: number; diluent: number; need: number; minLeft: number };
+/** The vials that are standards on the plate: every one but a working dilution (intermediate). */
+export const standardsOf = <T extends { intermediate?: boolean }>(vials: readonly T[]): T[] => vials.filter(v => !v.intermediate);
+
+export type Series = { vials: StandardVial[]; stock: number; diluent: number; need: number; minLeft: number; /** The concentrations' unit ("µg/mL", "nmol/well"). */ unit: string };
 
 // ─── Shades ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -47,6 +50,15 @@ export const concentrationText = (x: number) => x.toLocaleString('en-US', { maxi
 /** A result to three significant figures: 1238.6 → "1,240", 47.62 → "47.6". */
 export const threeFigures = (x: number) => Number(x.toPrecision(3)).toLocaleString('en-US', { maximumFractionDigits: 1 });
 
+/**
+ * A vial's concentration and its unit as the card and the table print them: on the series' scale ("2", "nmol/well"),
+ * or, for a working dilution, as the manual prints it ("1", "mM"), since it never goes in a well.
+ */
+export function vialLabel(v: StandardVial, unit: string): [string, string] {
+  if (v.intermediate && v.printed) return [concentrationText(v.printed.value), v.printed.unit];
+  return [concentrationText(v.concentration), unit];
+}
+
 /** Where a vial's volume comes from, as the table's From column says it: "Stock", "B", or "—" for the blank. */
 export const vialSource = (v: StandardVial) => (v.blank || !v.from ? '—' : v.from === 'stock' ? 'Stock' : v.from);
 
@@ -68,7 +80,7 @@ export function vialSay(v: StandardVial): [string, string] {
  * Plan.dc.html. Each vial passes `step` µL on and keeps `step`, where `step` is the plate's need (replicates plus one
  * spare well) rounded up to 50 µL; the first vial is undiluted stock.
  */
-export function halvingSeries(top: number, count: number, replicates: number, perWell: number): Series {
+export function halvingSeries(top: number, count: number, replicates: number, perWell: number, unit = 'µg/mL'): Series {
   const need = replicates * perWell;
   const step = Math.ceil((need + perWell) / 50) * 50;
   const ids = (i: number) => String.fromCharCode(65 + i);
@@ -84,6 +96,7 @@ export function halvingSeries(top: number, count: number, replicates: number, pe
   vials.push({ id: ids(count), concentration: 0, blank: true, from: null, take: 0, diluent: step, left: step });
   return {
     vials,
+    unit,
     need,
     stock: 2 * step,
     diluent: vials.reduce((s, v) => s + v.diluent, 0),
@@ -255,7 +268,8 @@ export function editPlate(plan: PlatePlan, edits: PlateEdits | undefined): Plate
 }
 
 /** The most samples that fit beside these standards ("Up to 36 samples fit beside the kit's 9"). */
-export function samplesThatFit(standards: Parameters<typeof plateMap>[0]['standards'], standardReplicates: number, sampleReplicates: number, rows = 8, cols = 12) {
+export function samplesThatFit(vials: readonly ({ intermediate?: boolean } & Parameters<typeof plateMap>[0]['standards'][number])[], standardReplicates: number, sampleReplicates: number, rows = 8, cols = 12) {
+  const standards = vials.filter(v => !v.intermediate);
   let n = 0;
   while (n < rows * cols && plateMap({ standards, standardReplicates, samples: n + 1, sampleReplicates, rows, cols }).fits) n++;
   return n;
@@ -366,9 +380,9 @@ export function halvings(p: Protocol, procedureId: string, way: 'halve' | 'five'
 export function standardsFor(p: Protocol, procedureId: string, way: StandardsWay, replicates: number): Series {
   if (way === 'halve' || way === 'five') {
     const proc = procedureOf(p, procedureId);
-    // The series is worked out in µg/mL, whatever unit the kit prints its range in.
-    const top = toMicrogramsPerMl({ value: proc.range.max, unit: proc.range.unit });
-    return halvingSeries(top, halvings(p, procedureId, way), replicates, toMicroliters(proc.sample));
+    // The series is worked out on the procedure's scale (shared/calc.ts), whatever unit the kit prints its range in.
+    const top = onScale(p, proc, { value: proc.range.max, unit: proc.range.unit });
+    return halvingSeries(top, halvings(p, procedureId, way), replicates, toMicroliters(proc.sample), unitOf(p, procedureId));
   }
   const s = standardSeries(p, procedureId, replicates);
   return way === 'ready' ? { ...s, stock: 0, diluent: 0 } : s;
@@ -381,7 +395,7 @@ export function standardsFor(p: Protocol, procedureId: string, way: StandardsWay
  */
 export function runSetup(p: Protocol, plan: RunPlan) {
   const series = standardsFor(p, plan.procedure, plan.standards, plan.standardReplicates);
-  const plate = editPlate(plateMap({ standards: series.vials, standardReplicates: plan.standardReplicates, samples: plan.samples, sampleReplicates: plan.replicates }), plan.edits);
+  const plate = editPlate(plateMap({ standards: series.vials.filter(v => !v.intermediate), standardReplicates: plan.standardReplicates, samples: plan.samples, sampleReplicates: plan.replicates }), plan.edits);
   return { series, plate, roles: wellRoles(plate), reagent: reagentPlan(p, plan.procedure, plate.wells) };
 }
 
@@ -524,6 +538,12 @@ export function curveLabels(p: Protocol, procedureId: string) {
   const curve = p.standardCurves.find(c => c.id === proc?.standardCurve);
   const stock = p.components.find(c => c.id === curve?.stock);
   const short = stock?.label?.length ? stock.label.reduce((a, b) => (b.length < a.length ? b : a)) : (stock?.name ?? 'Standard');
-  // The curve is drawn in µg/mL (shared/calc.ts works out every standard in it), whatever the kit prints.
-  return { x: `${short}, µg/mL`, y: `Net A${p.analysis?.readout.value ?? ''}` };
+  // The curve is drawn on the procedure's scale (shared/calc.ts works out every standard on it).
+  let unit = 'µg/mL';
+  try {
+    unit = unitOf(p, procedureId);
+  } catch {
+    /* not plannable: the design's unit */
+  }
+  return { x: `${short}, ${unit}`, y: `Net A${p.analysis?.readout.value ?? ''}` };
 }

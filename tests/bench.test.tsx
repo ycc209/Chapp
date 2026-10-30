@@ -86,6 +86,26 @@ describe.skipIf(!protocols.length)('bench scenes', () => {
     expect(renderToStaticMarkup(<BenchView scene={mix} mode="still" photos={photos} />)).toMatch(/^<svg/);
   });
 
+  it('draws what a step dissolves, and the buffer that goes into it', () => {
+    const atp = protocols.find(p => p.id === 'atp-assay');
+    if (!atp) return;
+    const proc = atp.procedures[0]!;
+    const scenes = benchScenes(atp, proc);
+    const bottlesOf = (title: string) => {
+      const step = [...(proc.prep ?? []), ...proc.steps].find(s => s.title === title)!;
+      return scenes.get(step.id)!.items.filter(i => i.kind === 'bottle').map(i => i.id);
+    };
+    expect(bottlesOf('Dissolve Converter Mix B')).toEqual(['bottle:assay-buffer-23', 'bottle:converter-mix-b']);
+    expect(bottlesOf('Dissolve Developer Mix N')).toEqual(['bottle:assay-buffer-23', 'bottle:developer-mix-n']);
+    expect(bottlesOf('Reconstitute ATP IV')).toEqual(['bottle:ddh2o', 'bottle:atp-iv']);
+    // Into the vial: its level rises, the pipette ends over it, set to the volume the step says.
+    const step = [...(proc.prep ?? []), ...proc.steps].find(s => s.title === 'Dissolve Converter Mix B')!;
+    const done = settled(scenes.get(step.id)!);
+    expect(done['bottle:converter-mix-b']!.level).toBe(0.7);
+    expect(done.pipette!.x).toBe(done['bottle:converter-mix-b']!.x);
+    expect(done.pipette!.text).toBe('220');
+  });
+
   it('has a contract a model could be asked to fill', () => {
     const schema = benchSceneJsonSchema() as { properties: Record<string, unknown> };
     expect(Object.keys(schema.properties)).toEqual(['title', 'caption', 'items', 'actions']);

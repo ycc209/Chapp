@@ -4,7 +4,8 @@ import type { Box } from '../../../shared/ai.ts';
 import { useRun } from '../../state/run.ts';
 import type { How, Pick, Thing } from './matching.ts';
 import type { Shot } from './photo.ts';
-import { cutOut } from '../../components/bench/cutout.ts';
+import { cutAlong, cutOut } from '../../components/bench/cutout.ts';
+import { squareOn } from '../../../shared/kit.ts';
 
 /**
  * This round of photographing the kit: the photos, what the models found on them, which bottle is where, and what
@@ -33,8 +34,19 @@ export type KitSession = {
   sample: boolean;
 };
 
-/** A photo's bottles: SAM is finding them, found them, their labels are being read, were read; or it failed. */
-export type Look = { state: 'finding' | 'found' | 'reading' | 'read' | 'failed'; boxes: Box[] };
+/**
+ * A photo's bottles: SAM is finding them, found them, their labels are being read, were read; or it failed. `boxes`
+ * are the bottles SAM found; `outlines` their masks, one per box, as SVG paths in fractions of the photo (none when
+ * the server could not decode them).
+ */
+export type Look = { state: 'finding' | 'found' | 'reading' | 'read' | 'failed'; boxes: Box[]; outlines?: (string | undefined)[] };
+
+/** SAM's outline of the bottle in `box` on a photo, by the box's place (a box kept in the session is a copy). */
+export function outlineAt(look: Look | undefined, box: Box | null | undefined): string | undefined {
+  if (!look?.outlines || !box) return undefined;
+  const i = look.boxes.findIndex(b => b.x === box.x && b.y === box.y && b.width === box.width && b.height === box.height);
+  return i >= 0 ? look.outlines[i] : undefined;
+}
 
 type KitActions = {
   addShots: (shots: Shot[]) => void;
@@ -58,10 +70,15 @@ type KitActions = {
   clear: () => void;
 };
 
-/** A matched bottle's crop goes into the run, and is cut out of its background right away (bench/cutout.ts). */
-function keep(component: string, crop: string) {
-  useRun.getState().setPhoto(component, crop);
-  void cutOut(crop);
+/**
+ * A matched bottle's crop goes into the run, and is cut out of its background right away (bench/cutout.ts): along
+ * SAM's outline of it when there is one (the mask is the cut), else by the phone's own means.
+ */
+function keep(component: string, pick: Pick, session: { shots: Shot[]; seen: Record<string, Look> }) {
+  useRun.getState().setPhoto(component, pick.crop);
+  const shot = session.shots.find(s => s.id === pick.shot);
+  const outline = outlineAt(session.seen[pick.shot], pick.box);
+  void (outline && shot ? cutAlong(pick.crop, outline, squareOn(pick.box, shot.width, shot.height)) : cutOut(pick.crop));
 }
 
 const empty: KitSession = { shots: [], seen: {}, picks: {}, things: [], skipped: {}, pending: null, asking: null, reassign: false, said: null, sample: false };
@@ -112,7 +129,7 @@ export const useKit = create<KitSession & KitActions>()(
       found: (picks, things, said) => {
         const { sample } = get();
         const fresh = Object.entries(picks).filter(([id]) => !get().picks[id]);
-        if (!sample) for (const [id, pick] of fresh) keep(id, pick.crop);
+        if (!sample) for (const [id, pick] of fresh) keep(id, pick, get());
         set(s => ({ picks: { ...s.picks, ...Object.fromEntries(fresh) }, things: [...s.things, ...things], ...(said === null ? {} : { said }) }));
       },
       answer: (id, component, how, said) => {
@@ -122,7 +139,7 @@ export const useKit = create<KitSession & KitActions>()(
         const rest = things.filter(t => t !== thing);
         if (!component) return set({ things: rest, asking: null, reassign: false, said });
         const pick: Pick = { shot: thing.shot, box: thing.box, boxes: thing.boxes, crop: thing.crop, how };
-        if (!sample) keep(component, pick.crop);
+        if (!sample) keep(component, pick, get());
         set(s => ({
           picks: { ...s.picks, [component]: pick },
           skipped: { ...s.skipped, [component]: false },
@@ -137,7 +154,7 @@ export const useKit = create<KitSession & KitActions>()(
         const { pending, sample } = get();
         if (!pending) return;
         const pick: Pick = { shot: pending.shot, box: pending.box, crop: pending.crop };
-        if (!sample) keep(component, pick.crop);
+        if (!sample) keep(component, pick, get());
         set(s => ({
           picks: { ...s.picks, [component]: pick },
           skipped: { ...s.skipped, [component]: false },

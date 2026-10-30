@@ -18,6 +18,7 @@ import {
   gotIt,
   heardAnswer,
   looking,
+  reading,
   needsOf,
   noPhoto,
   offered,
@@ -33,7 +34,7 @@ import {
 } from './matching.ts';
 import { boxOnCover, cropAt, type Shot } from './photo.ts';
 import { Picker } from './Picker.tsx';
-import { useKit } from './store.ts';
+import { outlineAt, useKit } from './store.ts';
 
 const CHIP = 'flex min-h-11 items-center rounded-[22px] text-[15px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const WHITE_CHIP = `${CHIP} bg-white px-4 font-semibold text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]`;
@@ -84,6 +85,9 @@ export function Match({ protocol, onCamera }: MatchProps) {
   }, [kit.seen, kit.sample, protocol]);
 
   const busy = analyzing(kit.seen);
+  // SAM is still finding bottles on some photo; else, while busy, Muse Spark is reading the labels of what it found.
+  const finding = Object.values(kit.seen).some(l => l.state === 'finding');
+  const found = Object.values(kit.seen).reduce((n, l) => n + l.boxes.length, 0);
   // SAM could not look at any photo (offline, say): over to the user's taps.
   const unseen = !kit.sample && kit.shots.length > 0 && kit.shots.every(s => kit.seen[s.id]?.state === 'failed');
   const left = open(needs, kit);
@@ -163,16 +167,20 @@ export function Match({ protocol, onCamera }: MatchProps) {
     }
   };
 
-  /** The boxes on a photo of the strip: blue once matched, yellow while Chapp asks, dashed while nobody can tell. */
+  /**
+   * The marks on a photo of the strip: SAM's outline of each bottle (its box when there is none), blue once matched,
+   * yellow while Chapp asks, dashed while nobody can tell.
+   */
   const marksOn = (shot: string): Mark[] => {
     const look = kit.seen[shot];
+    const mark = (box: Box, tone: Mark['tone']): Mark => ({ box, tone, outline: outlineAt(look, box) });
     // Bottles SAM found whose labels are not read yet light up dashed, as each photo comes back.
-    if (look && (look.state === 'found' || look.state === 'reading')) return look.boxes.map(box => ({ box, tone: 'dashed' }));
+    if (look && (look.state === 'found' || look.state === 'reading')) return look.boxes.map(box => mark(box, 'dashed'));
     const all = (p: Pick) => p.boxes ?? [p.box];
     return [
-      ...Object.values(kit.picks).filter(p => p.shot === shot).flatMap(p => all(p).map(box => ({ box, tone: 'blue' as const }))),
-      ...kit.things.filter(t => t.shot === shot).flatMap(t => all(t).map(box => ({ box, tone: t.match === 'guess' ? ('yellow' as const) : ('dashed' as const) }))),
-      ...(kit.pending?.shot === shot ? [{ box: kit.pending.box, tone: 'yellow' as const }] : []),
+      ...Object.values(kit.picks).filter(p => p.shot === shot).flatMap(p => all(p).map(box => mark(box, 'blue'))),
+      ...kit.things.filter(t => t.shot === shot).flatMap(t => all(t).map(box => mark(box, t.match === 'guess' ? 'yellow' : 'dashed'))),
+      ...(kit.pending?.shot === shot ? [mark(kit.pending.box, 'yellow')] : []),
     ];
   };
 
@@ -197,7 +205,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
       .
     </>
   ) : busy ? (
-    looking(kit.shots.length)
+    finding ? looking(kit.shots.length) : reading(found)
   ) : (
     kit.said ?? (unseen ? cantLook(needs.length) : opening(kit.shots.length, needs.length))
   ));
@@ -336,6 +344,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
           start={picker.shot}
           name={picker.need.name}
           bottles={id => kit.seen[id]?.boxes ?? []}
+          outlineOf={(id, box) => outlineAt(kit.seen[id], box)}
           onPick={(shot, at, bottle) => void pick(shot, at, picker.need, bottle)}
           onClose={() => setPicker(null)}
         />
@@ -435,11 +444,13 @@ function Row({ need, shape, pick, pending, thing, skipped, asked, detail, amount
   );
 }
 
-type Mark = { box: Box; tone: 'blue' | 'yellow' | 'dashed' };
+type Mark = { box: Box; tone: 'blue' | 'yellow' | 'dashed'; outline?: string };
 type ShotThumbProps = { shot: Shot; number: number; marks: Mark[]; onClick?: () => void };
 
-/** A photo in the strip, with a box where each bottle on it is (Recognized.dc.html). */
+/** A photo in the strip, with SAM's outline (or a box) where each bottle on it is (Recognized.dc.html). */
 function ShotThumb({ shot, number, marks, onClick }: ShotThumbProps) {
+  // Where the whole photo lands on the thumbnail (object-fit: cover): outlines in fractions scale onto it.
+  const on = boxOnCover({ x: 0, y: 0, width: 1, height: 1 }, shot, THUMB);
   return (
     <button
       type="button"
@@ -449,14 +460,26 @@ function ShotThumb({ shot, number, marks, onClick }: ShotThumbProps) {
       className="relative block h-[72px] w-[54px] overflow-hidden rounded-[12px] bg-[#1b1b1d] outline-none focus-visible:ring-2 focus-visible:ring-blue"
     >
       <img src={shot.src} alt="" draggable={false} className="absolute inset-0 size-full object-cover" />
-      {marks.map((m, i) => (
-        <Square key={i} box={boxOnCover(m.box, shot, THUMB)} tone={m.tone} />
-      ))}
+      {marks.map((m, i) => !m.outline && <Square key={i} box={boxOnCover(m.box, shot, THUMB)} tone={m.tone} />)}
+      {marks.some(m => m.outline) && (
+        <svg aria-hidden="true" className="absolute inset-0 size-full" viewBox={`0 0 ${THUMB.width} ${THUMB.height}`}>
+          <g transform={`translate(${on.left} ${on.top}) scale(${on.width} ${on.height})`}>
+            {marks.map((m, i) => m.outline && <Outline key={i} d={m.outline} tone={m.tone} />)}
+          </g>
+        </svg>
+      )}
       <span className="absolute top-[5px] left-[7px] text-[11px] leading-[14px] font-bold text-white [text-shadow:0_0_3px_rgba(0,0,0,0.9),0_1px_2px_rgba(0,0,0,0.6)]">
         {number}
       </span>
     </button>
   );
+}
+
+/** SAM's outline of a bottle, in a photo's fractions (the enclosing group scales it onto the picture). */
+export function Outline({ d, tone }: { d: string; tone: Mark['tone'] }) {
+  const stroke = tone === 'blue' ? '#568dfa' : tone === 'yellow' ? '#ffe863' : '#ffffff';
+  const fill = tone === 'blue' ? 'rgba(86,141,250,0.22)' : tone === 'yellow' ? 'rgba(255,232,99,0.22)' : 'rgba(255,255,255,0.12)';
+  return <path d={d} fill={fill} stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" strokeDasharray={tone === 'dashed' ? '3 2' : undefined} vectorEffect="non-scaling-stroke" className="transition-colors duration-300" />;
 }
 
 function Square({ box, tone }: { box: { left: number; top: number; width: number; height: number }; tone: Mark['tone'] }) {

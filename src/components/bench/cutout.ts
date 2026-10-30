@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Box } from '../../../shared/ai.ts';
 
 /**
  * The user's photo of a bottle (its 240 px square crop from the kit), cut out of its background on the phone, so it
  * can stand on the bench in place of the drawn bottle. No model: the background is what grows in from the crop's
  * edges in small colour steps (a table, a wall, a gradient, a shadow), and the bottle is the largest thing left near
- * the middle. The cut is made as soon as the bottle is matched (screens/kit/store.ts) and says whether it came out
- * whole (`ok`), or why not: the kit screen shows a poor one and asks for a photo of just that bottle, and the bench
- * keeps its drawn bottle until there is a whole one.
+ * the middle. When SAM 3.1 found the bottle, its mask is the cut instead (cutAlong), which comes out whole. The cut
+ * is made as soon as the bottle is matched (screens/kit/store.ts) and says whether it came out whole (`ok`), or why
+ * not: the kit screen shows a poor one and asks for a photo of just that bottle, and the bench keeps its drawn bottle
+ * until there is a whole one. SAM's cuts are kept on the phone by the crop they were made from, so the bench finds
+ * them again after a reload.
  */
 export type Cut = {
   src: string;
@@ -26,18 +29,124 @@ const FAR = 30;
 const NEAR = 64;
 
 const cuts = new Map<string, Promise<Cut>>();
+const unopened = (src: string): Cut => ({ src, width: 1, height: 1, ok: false, why: 'the photo could not be opened' });
 
-/** The photo's cut-out, made once per photo. */
+/** The photo's cut-out, made once per photo: SAM's when it was kept, else the phone's own. */
 export function cutOut(src: string): Promise<Cut> {
-  if (typeof document === 'undefined') return Promise.resolve({ src, width: 1, height: 1, ok: false, why: 'the photo could not be opened' });
+  if (typeof document === 'undefined') return Promise.resolve(unopened(src));
   let cut = cuts.get(src);
   if (!cut) {
-    cut = load(src)
-      .then(img => cutFrom(img))
-      .catch(() => ({ src, width: 1, height: 1, ok: false, why: 'the photo could not be opened' }));
+    const had = keptCut(src);
+    cut = had
+      ? Promise.resolve(had)
+      : load(src)
+          .then(img => cutFrom(img))
+          .catch(() => unopened(src));
     cuts.set(src, cut);
   }
   return cut;
+}
+
+/**
+ * The cut along SAM's outline of the bottle (an SVG path of M/L/Z in fractions of the photo): the mask is the cut,
+ * so it comes out whole. `square` is where the crop sits on the photo. Kept on the phone; when it cannot be made,
+ * the phone's own cut stands in.
+ */
+export function cutAlong(crop: string, outline: string, square: Box): Promise<Cut> {
+  if (typeof document === 'undefined') return cutOut(crop);
+  const cut = load(crop)
+    .then(img => {
+      const made = alongFrom(img, outline, square);
+      keepCut(crop, made);
+      return made;
+    })
+    .catch(() => {
+      cuts.delete(crop);
+      return cutOut(crop);
+    });
+  cuts.set(crop, cut);
+  return cut;
+}
+
+// SAM's cuts, kept by the crop they were made from (its hash: the crop itself is in the run).
+const KEPT = 'chapp.cuts';
+const KEEP_AT_MOST = 32;
+type Kept = { order: string[]; cuts: Record<string, Cut> };
+let table: Kept | null = null;
+
+function keyOf(src: string): string {
+  let h = 5381;
+  for (let i = 0; i < src.length; i++) h = ((h * 33) ^ src.charCodeAt(i)) | 0;
+  return `${src.length}-${(h >>> 0).toString(36)}`;
+}
+
+function kept(): Kept {
+  if (!table) {
+    try {
+      table = JSON.parse(localStorage.getItem(KEPT) ?? '') as Kept;
+      if (!Array.isArray(table.order) || typeof table.cuts !== 'object') throw new Error();
+    } catch {
+      table = { order: [], cuts: {} };
+    }
+  }
+  return table;
+}
+
+const keptCut = (src: string): Cut | undefined => kept().cuts[keyOf(src)];
+
+function keepCut(src: string, cut: Cut) {
+  const key = keyOf(src);
+  const k = kept();
+  k.cuts[key] = cut;
+  k.order = [...k.order.filter(o => o !== key), key];
+  while (k.order.length > KEEP_AT_MOST) delete k.cuts[k.order.shift()!];
+  try {
+    localStorage.setItem(KEPT, JSON.stringify(k));
+  } catch {
+    /* not kept past this page */
+  }
+}
+
+function alongFrom(img: HTMLImageElement, outline: string, square: Box): Cut {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext('2d');
+  if (!w || !h || !g) throw new Error('no canvas');
+  g.drawImage(img, 0, 0);
+  const on = outlineInCrop(outline, square, w, h);
+  g.globalCompositeOperation = 'destination-in';
+  g.fill(new Path2D(on.d));
+  const cw = on.right - on.left + 1;
+  const ch = on.bottom - on.top + 1;
+  const trimmed = document.createElement('canvas');
+  trimmed.width = cw;
+  trimmed.height = ch;
+  trimmed.getContext('2d')!.drawImage(canvas, on.left, on.top, cw, ch, 0, 0, cw, ch);
+  return { src: trimmed.toDataURL('image/png'), width: cw, height: ch, ok: true, why: null };
+}
+
+/**
+ * SAM's outline (fractions of the photo) on the crop (`square` of the photo, drawn `w` × `h`): the path in the
+ * crop's pixels and the box round it, within the crop. Pure, so it is tested.
+ */
+export function outlineInCrop(outline: string, square: Box, w: number, h: number): { d: string; left: number; top: number; right: number; bottom: number } {
+  const numbers = (outline.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+  const pts: [number, number][] = [];
+  for (let i = 0; i + 1 < numbers.length; i += 2) pts.push([((numbers[i]! - square.x) / square.width) * w, ((numbers[i + 1]! - square.y) / square.height) * h]);
+  // Whole pixels round the points, a hair of floating-point error forgiven.
+  const clamp = (v: number, max: number) => Math.max(0, Math.min(max, v));
+  const xs = pts.map(p => p[0]);
+  const ys = pts.map(p => p[1]);
+  return {
+    d: pts.length ? `M${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join('L')}Z` : '',
+    left: Math.floor(clamp(Math.min(...xs) + 1e-6, w - 1)),
+    top: Math.floor(clamp(Math.min(...ys) + 1e-6, h - 1)),
+    right: Math.ceil(clamp(Math.max(...xs) - 1e-6, w - 1)),
+    bottom: Math.ceil(clamp(Math.max(...ys) - 1e-6, h - 1)),
+  };
 }
 
 /** The cut-out once it is ready; null before (and on the server, where there is no canvas). */

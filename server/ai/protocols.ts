@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { ratioOf } from '../../shared/calc.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAssay, Protocol, type ProtocolSummary } from '../../shared/protocol.ts';
@@ -219,7 +220,7 @@ export function protocolBrief(protocol: Protocol, context: ConverseContext): str
     `Protocol "${protocol.id}": ${protocol.title}. Source: ${s.title}, ${s.publisher} ${s.docId} rev. ${s.revision} (${s.date}), ${s.pages} pages.`,
     `Kit: ${protocol.kit.name} (${protocol.kit.vendor}), catalog ${protocol.kit.variants.map(x => x.catalog).join(' / ')}.`,
     isAssay(procedure)
-      ? `${procedure.name} procedure: ${v(procedure.sample)} sample or standard + ${v(procedure.mixPerSample)} working reagent per well (${procedure.ratio}); range ${procedure.range.min}–${procedure.range.max} ${procedure.range.unit}.`
+      ? `${procedure.name} procedure: ${v(procedure.sample)} sample or standard + ${v(procedure.mixPerSample)} working reagent per well (${ratioOf(procedure)}); range ${procedure.range.min}–${procedure.range.max} ${procedure.range.unit}.`
       : `${procedure.name} procedure (${procedure.format}): no standards, plate or reagent amounts to plan.`,
     ...((procedure.prep ?? []).length
       ? [

@@ -3,6 +3,7 @@ import type { Box, KitVision, LabelMatch, LabelTarget, Photo, Point, ReadLabels,
 import { area, boxAt, overlap, sampleLayout } from '../../shared/kit.ts';
 import { UpstreamError } from './provider.ts';
 import { bcaFacts, knownProtocols, localProtocolId } from './protocols.ts';
+import { samOutline, type SamMask } from './samMask.ts';
 
 /**
  * Kit photos behind KitVision (shared/ai.ts): Muse Spark reads a kit's box (recognizeKit) and each bottle's label
@@ -28,15 +29,19 @@ type Json = Record<string, any>;
 // ---------------------------------------------------------------------------------------------------------------
 // SAM 3.1
 
+/** One object SAM found: its box as fractions of the photo, and its mask as it came, for samMask.ts to decode. */
+export type SamRecord = { box: Box; mask?: SamMask };
+
 /**
- * SAM 3.1's reply text → boxes as fractions of the photo. It answers /responses with one output_text like
- *   <0f>0<|box;x1=215;y1=318;x2=233;y2=391;w=500;h=461|><|mask;x=0;y=0;data=…|>,1<|box;…|><|mask;…|>
- * one box per object in pixels of the photo it was sent (w × h), each with its mask (run-length coded, unused here).
- * No scores.
+ * SAM 3.1's reply text → each object's box as fractions of the photo, with its mask. It answers /responses with one
+ * output_text like
+ *   <0f>0<|box;x1=215;y1=318;x2=233;y2=391;w=500;h=461|><|mask;x=0;y=0;data=74,19,~…|>,1<|box;…|><|mask;…|>
+ * one box per object in pixels of the photo it was sent (w × h), then its mask: the raster's height and width (the
+ * box's), one character saying how it is coded (~ lossless, ! one-bit) and the base85 payload. No scores.
  */
-export function parseSam(text: string): Box[] {
-  const boxes: Box[] = [];
-  for (const m of text.matchAll(/<\|box;([^|>]*)\|>/g)) {
+export function parseSamRecords(text: string): SamRecord[] {
+  const records: SamRecord[] = [];
+  for (const m of text.matchAll(/<\|box;([^|>]*)\|>(?:<\|mask;x=\d+;y=\d+;data=(\d+),(\d+),([^|>]*)\|>)?/g)) {
     const f: Record<string, number> = {};
     for (const pair of m[1].split(';')) {
       const [k, v] = pair.split('=');
@@ -48,9 +53,21 @@ export function parseSam(text: string): Box[] {
     const top = Math.max(0, Math.min(y1, y2)) / h;
     const right = Math.min(w, Math.max(x1, x2)) / w;
     const bottom = Math.min(h, Math.max(y1, y2)) / h;
-    if (right > left && bottom > top) boxes.push({ x: left, y: top, width: right - left, height: bottom - top });
+    if (!(right > left && bottom > top)) continue;
+    const box = { x: left, y: top, width: right - left, height: bottom - top };
+    const [height, width, data] = [Number(m[2]), Number(m[3]), m[4]];
+    const mask: SamMask | undefined =
+      data && data.length > 1 && height > 0 && width > 0
+        ? { encoding: data[0] === '!' ? 'one_bit' : 'lossless', width, height, payload: data.slice(1), left: Math.max(0, Math.min(x1, x2)), top: Math.max(0, Math.min(y1, y2)), frameWidth: w, frameHeight: h }
+        : undefined;
+    records.push(mask ? { box, mask } : { box });
   }
-  return boxes;
+  return records;
+}
+
+/** SAM 3.1's reply text → the boxes alone. */
+export function parseSam(text: string): Box[] {
+  return parseSamRecords(text).map(r => r.box);
 }
 
 /**
@@ -58,11 +75,16 @@ export function parseSam(text: string): Box[] {
  * the MAX_BOTTLES biggest, left to right.
  */
 export function tidyBoxes(boxes: Box[], max = MAX_BOTTLES): Box[] {
-  const kept: Box[] = [];
-  for (const b of boxes.filter(b => area(b) >= MIN_AREA).sort((a, b) => area(b) - area(a))) {
-    if (!kept.some(k => overlap(k, b) >= 0.85 * area(b))) kept.push(b);
+  return tidyBottles(boxes.map(box => ({ box })), max).map(b => b.box);
+}
+
+/** The same, for anything carrying its box (a record with its mask). */
+export function tidyBottles<T extends { box: Box }>(items: T[], max = MAX_BOTTLES): T[] {
+  const kept: T[] = [];
+  for (const it of items.filter(it => area(it.box) >= MIN_AREA).sort((a, b) => area(b.box) - area(a.box))) {
+    if (!kept.some(k => overlap(k.box, it.box) >= 0.85 * area(it.box))) kept.push(it);
   }
-  return kept.slice(0, max).sort((a, b) => a.x - b.x || a.y - b.y);
+  return kept.slice(0, max).sort((a, b) => a.box.x - b.box.x || a.box.y - b.box.y);
 }
 
 /** For each point, the smallest box holding it, once each. */
@@ -305,8 +327,14 @@ export function createKitVision(options: VisionOptions): KitVision {
         .filter((c: Json) => c.type === 'output_text' && typeof c.text === 'string')
         .map((c: Json) => c.text as string)
         .join('');
-      const boxes = tidyBoxes(parseSam(text));
-      return { bottles: (points?.length ? boxesAt(boxes, points) : boxes).map(box => ({ box })) };
+      const records = tidyBottles(parseSamRecords(text));
+      const chosen = points?.length ? boxesAt(records.map(r => r.box), points).map(box => records.find(r => r.box === box)!) : records;
+      // Each mask as an outline the phone draws and cuts along (samMask.ts); none when it cannot be decoded.
+      const bottles = await Promise.all(chosen.map(async r => {
+        const outline = r.mask ? await samOutline(r.mask) : undefined;
+        return outline ? { box: r.box, outline } : { box: r.box };
+      }));
+      return { bottles };
     },
 
     async readLabels(crops, components) {

@@ -155,7 +155,7 @@ export function Sections({ protocol, v, picked, open, onOpen, hl, onPick, onSamp
                   <p className="m-0 text-[13px] leading-[18px] font-semibold text-text">Each</p>
                   <Replicates label="Standard replicates" value={sr} onChange={onStandardReplicates} />
                 </div>
-                <VialRack vials={v.series.vials} ready={ready ? { need: v.series.need } : undefined} />
+                <VialRack unit={v.series.unit} vials={v.series.vials} ready={ready ? { need: v.series.need } : undefined} />
               </>
             )}
             {picked && !ready && (

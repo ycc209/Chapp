@@ -459,7 +459,16 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
         sc.add(flask(120, BENCH - 6, 1.5));
         break;
       }
-      const shown = (named.length ? named : p.components.filter(c => c.suppliedBy === 'kit')).slice(0, kind === 'dissolve' ? 1 : 3);
+      // Dissolving or diluting: what is dissolved is the one the title names ("Dissolve Converter Mix B"), what goes
+      // in another the step names ("in 220 µL Assay Buffer 23"), drawn first, the pipette going from it to the other.
+      const dissolving = kind === 'dissolve' || kind === 'dilute';
+      const title = step.title.toLowerCase();
+      const inTitle = (c: Protocol['components'][number]) =>
+        Math.min(Infinity, ...[c.name, c.name.split(/[\s,(]/)[0]!, shortName(c.name)].map(n => title.indexOf(n.toLowerCase())).filter(i => i >= 0));
+      const target = dissolving ? [...named].sort((a, b) => (inTitle(a) === inTitle(b) ? 0 : inTitle(a) < inTitle(b) ? -1 : 1))[0] : undefined;
+      const solvent = target ? named.find(c => c !== target && inTitle(c) === Infinity) : undefined;
+      const kit = p.components.filter(c => c.suppliedBy === 'kit');
+      const shown = target ? (solvent ? [solvent, target] : [target]) : (named.length ? named : kit).slice(0, dissolving ? 1 : 3);
       const xs = shown.length === 1 ? [96] : shown.length === 2 ? [70, 132] : [50, 104, 158];
       shown.forEach((c, i) => sc.add(bottle(c, i, xs[i]!, shown.length === 1 ? 1.05 : 0.86)));
       if (kind === 'warm') {
@@ -467,11 +476,21 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
         sc.add({ id: 'thermometer', kind: 'thermometer', x: 206, y: 196, text: t ? `${t} °C` : 'RT', represents: t ? `${t} °C` : 'Room temperature', source: src });
         if (step.timer) sc.add({ id: 'timer', kind: 'timer', x: 204, y: 92, text: `${step.timer.duration.value} ${step.timer.duration.unit}`, progress: 0, represents: 'How long', source: said(`steps.${step.id}.timer`, step.cite) });
         if (step.timer) sc.at('timer', { progress: 1 }, 2200, 500);
-      } else if ((kind === 'dissolve' || kind === 'dilute') && shown[0]) {
-        const id = `bottle:${shown[0].id}`;
+      } else if (dissolving && shown.length) {
+        const into = shown.length - 1;
+        const id = `bottle:${shown[into]!.id}`;
         sc.items.find(i => i.id === id)!.level = 0.15;
-        pipette(sc, p, xs[0]!, 120);
-        for (let i = 0; i < 3; i++) dispense(sc, xs[0]!, 120, BENCH - 40, CLEAR, i ? 300 : 500);
+        const said = /(\d+(?:\.\d+)?)\s*(µL|uL|mL)/i.exec(step.key);
+        const volume = said ? { value: Number(said[1]), unit: /^m/i.test(said[2]!) ? 'mL' : 'µL' } : undefined;
+        pipette(sc, p, xs[0]!, 120, volume);
+        if (into > 0) {
+          // Drawn up from the buffer, then over to what it dissolves.
+          sc.at('pipette', { y: 128 }, 300, 500);
+          sc.at(`bottle:${shown[0]!.id}`, { level: 0.64 }, 400, 0);
+          sc.at('pipette', { y: 120 }, 300, 200);
+          sc.at('pipette', { x: xs[into]! }, 500, 100);
+        }
+        for (let i = 0; i < 3; i++) dispense(sc, xs[into]!, 120, BENCH - 40, CLEAR, i ? 300 : 500);
         sc.at(id, { level: 0.7 }, 900, 200);
       }
       break;

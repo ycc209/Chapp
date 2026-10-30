@@ -99,7 +99,7 @@ const inRange = (a: PlateAnalysis) => a.samples.filter(s => s.flag === 'ok');
 const above = (a: PlateAnalysis) => a.samples.filter(s => s.flag === 'above');
 
 /** Page 1: how many are in range, and what to do about the rest (Results-Swipe). */
-export function concentrationSay(a: PlateAnalysis): Say {
+export function concentrationSay(a: PlateAnalysis, unit = 'µg/mL'): Say {
   const ok = inRange(a).length;
   const total = a.samples.length;
   const say: Say =
@@ -119,7 +119,7 @@ export function concentrationSay(a: PlateAnalysis): Say {
   }
   const low = a.samples.filter(s => s.flag === 'below');
   if (low.length) {
-    say.push(` ${sampleNames(low.map(s => s.ref))} ${low.length === 1 ? 'is' : 'are'} below the lowest standard, ${concentrationText(a.range.min)} µg/mL.`);
+    say.push(` ${sampleNames(low.map(s => s.ref))} ${low.length === 1 ? 'is' : 'are'} below the lowest standard, ${concentrationText(a.range.min)} ${unit}.`);
   }
   const missing = a.samples.filter(s => s.flag === 'missing');
   if (missing.length) say.push(` ${sampleNames(missing.map(s => s.ref))} ${missing.length === 1 ? 'has no reading' : 'have no readings'}.`);
@@ -188,18 +188,18 @@ export function tooHighSay(c: Common, asked: number): Say {
 }
 
 /** Page 4: how well the curve fits, and who sits above it (Results-Swipe-Curve). */
-export function curveSay(a: PlateAnalysis): Say {
+export function curveSay(a: PlateAnalysis, unit = 'µg/mL'): Say {
   const good = a.fit.r2 >= 0.99;
   const say: Say = [good ? 'The curve fits well: ' : 'The curve fits loosely: ', { b: `R² ${r2Text(a.fit.r2)}` }, '.'];
   const high = above(a);
-  if (high.length) say.push(` ${sampleNames(high.map(s => s.ref))} ${high.length === 1 ? 'sits' : 'sit'} above the top standard, ${concentrationText(a.range.max)} µg/mL.`);
+  if (high.length) say.push(` ${sampleNames(high.map(s => s.ref))} ${high.length === 1 ? 'sits' : 'sit'} above the top standard, ${concentrationText(a.range.max)} ${unit}.`);
   if (!good) say.push(' Check the standards’ wells before trusting the numbers.');
   return say;
 }
 
 /** The four tabs: µg/mL · 20 µg · 0.4 mg/mL · Curve. */
-export function tabLabels(amount: number, c: Common | null) {
-  return ['µg/mL', `${amountText(amount)} µg`, c ? `${mgText(c.target)} mg/mL` : 'Same', 'Curve'];
+export function tabLabels(amount: number, c: Common | null, unit = 'µg/mL') {
+  return [unit, `${amountText(amount)} µg`, c ? `${mgText(c.target)} mg/mL` : 'Same', 'Curve'];
 }
 
 /** Page 1's rows (concentration and CV), with the design's CV limit. */

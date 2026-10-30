@@ -264,7 +264,7 @@ function RunCard({ c }: { c: A2uiComponent }) {
     );
   return (
     <Frame label={`Standards · ${setup.series.vials.length} vials`} aside={`×${plan.standardReplicates}`}>
-      <StandardsTable vials={setup.series.vials} />
+      <StandardsTable unit={setup.series.unit} vials={setup.series.vials} />
     </Frame>
   );
 }

@@ -11,7 +11,7 @@ import { imageType } from '../server/kit.ts';
 import { createMockProvider } from '../server/ai/mock.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { loadProtocol } from '../server/ai/protocols.ts';
-import { boxesAt, createKitVision, createMockKitVision, namedBy, parseLabels, parseRecognized, parseSam, tidyBoxes } from '../server/ai/vision.ts';
+import { boxesAt, createKitVision, createMockKitVision, namedBy, parseLabels, parseRecognized, parseSam, parseSamRecords, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
 import { labelTargets } from '../src/screens/kit/found.ts';
 
 // Kit photos on the server: SAM 3.1's and Muse Spark's real replies (copied from data/smoke/kit/raw/, masks cut
@@ -60,6 +60,13 @@ describe('SAM 3.1 boxes', () => {
     expect(boxes[0].width).toBeCloseTo(18 / 500);
     expect(boxes[0].height).toBeCloseTo(73 / 461);
     expect(parseSam('')).toEqual([]);
+    // Each box's mask comes with it: the raster's height and width (the box's), how it is coded, and its payload.
+    const [first] = parseSamRecords(SAM_23225);
+    expect(first!.mask).toEqual({ encoding: 'lossless', height: 74, width: 19, payload: '!!!%N!O', left: 215, top: 318, frameWidth: 500, frameHeight: 461 });
+    expect(parseSamRecords('<|box;x1=1;y1=1;x2=3;y2=3;w=10;h=10|><|mask;x=0;y=0;data=3,3,!(QO|>')[0]!.mask).toMatchObject({ encoding: 'one_bit', payload: '(QO' });
+    expect(parseSamRecords('<|box;x1=1;y1=1;x2=3;y2=3;w=10;h=10|>')[0]!.mask).toBeUndefined();
+    // Tidying keeps each box's mask with it (only the first record of the sample has its payload in full).
+    expect(tidyBottles(parseSamRecords(SAM_23225)).find(r => r.mask?.left === 215)?.mask?.payload).toBe('!!!%N!O');
     expect(parseSam('<|box;x1=5;y1=5;x2=5;y2=9;w=10;h=10|><|box;x1=1;y1=1;x2=3;y2=3;w=0;h=10|>')).toEqual([]);
   });
 

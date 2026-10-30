@@ -1,24 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
-import {
-  AmountCard,
-  DoneAt,
-  DotLabel,
-  MarkChips,
-  NumberedList,
-  PlateMap,
-  ReagentParts,
-  SampleDataTag,
-  StepList,
-  Timer,
-  VialRack,
-  amountText,
-  lengthText,
-  stepDetail,
-  type BenchStep,
-  type StepItem,
-} from '../../components/lab/index.ts';
+import { AmountCard, DoneAt, DotLabel, MarkChips, NumberedList, PlateMap, ReagentParts, SampleDataTag, StepList, Timer, VialRack, amountText, lengthText, stepDetail, type BenchStep, type StepItem, standardsOf } from '../../components/lab/index.ts';
 import { cn } from '../../lib/cn.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { splitName } from '../protocol/content.ts';
@@ -112,7 +95,7 @@ export function StandardsStep({ v }: { v: View }) {
     <>
       {ready ? (
         <Answer nums>
-          Your <B>{series.vials.length} standards</B> are already made. Next, {next}.
+          Your <B>{standardsOf(series.vials).length} standards</B> are already made. Next, {next}.
         </Answer>
       ) : line.kind === 'all' ? (
         <Answer nums>
@@ -132,7 +115,7 @@ export function StandardsStep({ v }: { v: View }) {
         </Answer>
       )}
       <VialRack
-        vials={series.vials}
+        unit={series.unit} vials={series.vials}
         done={ready ? undefined : v.done}
         onVial={ready ? undefined : v.tickVial}
         ready={ready ? { need: series.need } : undefined}

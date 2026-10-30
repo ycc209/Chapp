@@ -62,7 +62,7 @@ export function findBottles() {
     kit.look(shot.id, { state: 'finding', boxes: [] });
     api
       .segmentBottles({ photo: photoData(analysisSrc(shot)), index })
-      .then(r => useKit.getState().look(shot.id, { state: 'found', boxes: r.bottles.map(b => b.box) }))
+      .then(r => useKit.getState().look(shot.id, { state: 'found', boxes: r.bottles.map(b => b.box), outlines: r.bottles.map(b => b.outline) }))
       .catch(() => useKit.getState().look(shot.id, { state: 'failed', boxes: [] }));
   });
 }
@@ -113,7 +113,8 @@ export async function readFound(protocol: Protocol) {
     const after = useKit.getState();
     const read = Object.values({ ...after.picks, ...picks }).filter(p => p.how === 'read').length;
     const unsure = after.things.length + things.length;
-    const said = read + unsure ? recognized(read + unsure, after.shots.length, unsure) : noneFound(after.shots.length, needs.length);
+    const found = Object.values(after.seen).reduce((n, l) => n + l.boxes.length, 0);
+    const said = read + unsure ? recognized(found, after.shots.length, read, unsure) : noneFound(after.shots.length, needs.length);
     after.found(picks, things, said);
   } catch {
     done('failed');

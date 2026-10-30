@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { BenchLine, DoneAt, PlateMap, ReagentParts, StandardsTable, Timer, VialNow, amountText, shadeLevels } from '../../components/lab/index.ts';
+import { BenchLine, DoneAt, PlateMap, ReagentParts, StandardsTable, Timer, VialNow, amountText, shadeLevels, standardsOf } from '../../components/lab/index.ts';
 import { Waveform } from '../../components/voice/Waveform.tsx';
 import { cn } from '../../lib/cn.ts';
 import { currentTube, standardsLine } from './model.ts';
@@ -34,13 +34,13 @@ export function GlovesStandards({ v }: { v: View }) {
   return (
     <div className="flex shrink-0 flex-col">
       {ready ? (
-        <BenchLine size="md" className="px-1">Your {series.vials.length} standards are already made.</BenchLine>
+        <BenchLine size="md" className="px-1">Your {standardsOf(series.vials).length} standards are already made.</BenchLine>
       ) : line.kind === 'all' ? (
         <BenchLine size="md" className="px-1">All {line.total} standards are ready.</BenchLine>
       ) : (
         <VialNow vial={line.vial} level={levels[series.vials.indexOf(line.vial)]!} />
       )}
-      <StandardsTable vials={series.vials} done={ready ? Object.fromEntries(series.vials.map(x => [x.id, true])) : v.done} className="mt-5" />
+      <StandardsTable unit={series.unit} vials={series.vials} done={ready ? Object.fromEntries(series.vials.map(x => [x.id, true])) : v.done} className="mt-5" />
     </div>
   );
 }

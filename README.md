@@ -52,10 +52,13 @@ testing on iPhones and the demo video.
 
 ## Meta models
 
+One photo of the kit, start to finish: **SAM 3.1** outlines every bottle → **Muse Spark** reads each label → the
+bottle, cut out along SAM's mask, stands in the step pictures.
+
 | Model | What Chapp uses it for |
 |---|---|
 | Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards) |
-| SAM 3.1 | Segmenting every bottle in one photo of the kit |
+| SAM 3.1 | Finding every bottle in one photo of the kit. Its masks are the outlines on the kit photos, and the cut-out of each bottle (`server/ai/samMask.ts`) |
 | Muse Voice Transcribe | Live speech to text at the bench: the phone streams through the server to the realtime endpoint, words show as they are said and the model decides when you have finished. Chinese and English in one sentence, the lab's words as keywords, Chinese written as Taiwan writes it (`?voice=server` sends a recording per turn instead; `?voice=browser` uses the phone's own recognizer, English only) |
 | Muse Image | Planned for a consistent set of equipment icons; not in the app yet (`npm run smoke` checks it) |
 

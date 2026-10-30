@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { assemble } from '../server/ai/import.ts';
-import { isPlannable, unitsProblem } from '../shared/calc.ts';
+import { isPlannable, standardSeries, unitsProblem } from '../shared/calc.ts';
 import { Protocol, problems } from '../shared/protocol.ts';
-import { comparable, normalizeUnit, toMicrogramsPerMl, toMicroliters, toMicromolar, unitKind } from '../shared/units.ts';
+import { comparable, convert, knownUnits, normalizeUnit, parseUnit, toMicrogramsPerMl, toMicroliters, toMicromolar, unitKind } from '../shared/units.ts';
 import { parts } from './import-fixture.ts';
 
 describe('units as printed', () => {
@@ -34,7 +34,7 @@ describe('units as printed', () => {
     expect(toMicromolar({ value: 500, unit: 'nM' })).toBe(0.5);
     expect(toMicromolar({ value: 2, unit: 'mg/mL' })).toBeNull();
     for (const unit of ['%', 'U/mL', 'X']) expect([toMicrogramsPerMl({ value: 1, unit }), toMicromolar({ value: 1, unit })]).toEqual([null, null]);
-    expect(['µL', 'ng/mL', 'nM', '%'].map(unitKind)).toEqual(['volume', 'mass-concentration', 'molar', null]);
+    expect(['µL', 'ng/mL', 'nM', '%'].map(u => unitKind(u))).toEqual(['volume', 'mass-concentration', 'molar', null]);
   });
 
   it('puts two concentrations on one scale when it can', () => {
@@ -68,12 +68,13 @@ describe('a protocol in units other than µL and µg/mL', () => {
     expect(isPlannable(protocol, protocol.procedures[0]!)).toBe(true);
   });
 
-  it('keeps a molar or percent table as printed, but does not plan what it cannot convert', () => {
+  it('keeps a molar table as printed and plans it in µM; a percent table it cannot convert', () => {
     const molar = kitIn({ stock: '1 mM', points: ['1000 uM', '500 uM', '0'], range: '10-1000 uM' }).protocol;
     expect(molar.standardCurves[0]!.points[0]!.concentration).toEqual({ value: 1000, unit: 'µM' });
     expect(problems(molar).filter(x => x.includes('gives'))).toEqual([]);
-    expect(unitsProblem(molar, molar.procedures[0]!)).toBe('the working range is in µM');
-    expect(isPlannable(molar, molar.procedures[0]!)).toBe(false);
+    expect(unitsProblem(molar, molar.procedures[0]!)).toBeNull();
+    expect(isPlannable(molar, molar.procedures[0]!)).toBe(true);
+    expect(standardSeries(molar, molar.procedures[0]!.id, 1).unit).toBe('µM');
 
     const percent = kitIn({ stock: '10 %', points: ['10 %', '5 %', '0'], range: '1-10 %', sample: '1 well' }).protocol;
     expect(percent.procedures[0]!.sample).toEqual({ value: 1, unit: 'well' });
@@ -83,5 +84,37 @@ describe('a protocol in units other than µL and µg/mL', () => {
   it('still reports a dilution that does not add up, in the units it was printed in', () => {
     const { protocol } = kitIn({ stock: '1 ng/mL', points: ['1000 pg/mL', '400 pg/mL', '0'], range: '10-1000 pg/mL' });
     expect(problems(protocol)).toContain('curve curve vial B: 50 µL of A + 50 µL diluent gives 500 pg/mL, not 400');
+  });
+});
+
+describe('units by their dimensions', () => {
+  it('reads any product of gram, mole, molar, litre and well with SI prefixes', () => {
+    expect(parseUnit('nmol/well')).toEqual({ pow: -9, mul: 1, dim: { g: 0, mol: 1, L: 0, well: -1 } });
+    expect(parseUnit('mg/mL')).toEqual({ pow: 0, mul: 1, dim: { g: 1, mol: 0, L: -1, well: 0 } });
+    expect(parseUnit('mM')!.dim).toEqual({ g: 0, mol: 1, L: -1, well: 0 });
+    expect(['%', 'U/mL', 'cells/mL', ''].map(u => parseUnit(u))).toEqual([null, null, null, null]);
+    expect(unitKind('pmol/well')).toBe('amount-per-well');
+    expect(unitKind('mol')).toBe('other');
+  });
+
+  it('converts within one dimension exactly, and never mass into moles', () => {
+    expect(convert({ value: 0.1, unit: 'mL' }, 'µL')).toBe(100);
+    expect(convert({ value: 2, unit: 'mg/mL' }, 'µg/mL')).toBe(2000);
+    expect(convert({ value: 2500, unit: 'pmol/well' }, 'nmol/well')).toBe(2.5);
+    expect(convert({ value: 1, unit: 'mM' }, 'µg/mL')).toBeNull();
+  });
+
+  it('turns a concentration per litre into an amount per well through the well, and back', () => {
+    expect(convert({ value: 1, unit: 'mM' }, 'nmol/well', { perWell: 50 })).toBe(50);
+    expect(convert({ value: 10, unit: 'mM' }, 'nmol/well', { perWell: 50 })).toBe(500);
+    expect(convert({ value: 2, unit: 'nmol/well' }, 'µM', { perWell: 50 })).toBe(40);
+    expect(convert({ value: 1, unit: 'mM' }, 'nmol/well')).toBeNull();
+  });
+
+  it('converts with a unit the manual defined itself, once its equivalent is a unit it reads', () => {
+    const known = knownUnits([{ unit: 'U', equals: { value: 0.5, unit: 'µg' } }, { unit: 'X', equals: { value: 1, unit: 'cells' } }]);
+    expect(Object.keys(known)).toEqual(['U']);
+    expect(convert({ value: 10, unit: 'U/mL' }, 'µg/mL', { known })).toBe(5);
+    expect(convert({ value: 10, unit: 'U/mL' }, 'µg/mL')).toBeNull();
   });
 });

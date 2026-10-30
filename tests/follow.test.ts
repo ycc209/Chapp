@@ -86,8 +86,8 @@ describe('following a protocol Chapp cannot plan', () => {
 
   it('says why only for an assay whose amounts it cannot convert', () => {
     expect(followNote(cells, proc)).toBeNull();
-    const assay: Procedure = { ...proc, format: 'microplate', ratio: '1:1', sample: { value: 50, unit: 'µL' }, mixPerSample: { value: 50, unit: 'µL' }, mix: 'm', standardCurve: 'c', range: { min: 1, max: 500, unit: 'µM' } };
-    expect(followNote(cells, assay)).toBe('I can’t work out this run’s amounts (the working range is in µM), so every number here is the manual’s, as printed.');
+    const assay: Procedure = { ...proc, format: 'microplate', ratio: '1:1', sample: { value: 50, unit: 'µL' }, mixPerSample: { value: 50, unit: 'µL' }, mix: 'm', standardCurve: 'c', range: { min: 1, max: 500, unit: '%' } };
+    expect(followNote(cells, assay)).toBe('I can’t work out this run’s amounts (the working range is in %), so every number here is the manual’s, as printed.');
   });
 
   it('counts down in minutes within the hour, and in hours past it', () => {

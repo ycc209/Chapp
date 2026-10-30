@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useKit } from '../src/screens/kit/store.ts';
+import { outlineAt, useKit } from '../src/screens/kit/store.ts';
 import { useRun } from '../src/state/run.ts';
 
 // The kit session (src/screens/kit/store.ts): a matched bottle's crop goes into the run, and a retake drops the match
@@ -18,6 +18,16 @@ beforeEach(() => {
   useRun.setState({ protocolId: 'pierce-bca', photos: {} });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe('outlineAt', () => {
+  it('finds SAM’s outline of a box by its place, even for a copy of the box', () => {
+    const look = { state: 'read' as const, boxes: [box, { ...box, x: 0.6 }], outlines: [undefined, 'M0,0L1,0L1,1Z'] };
+    expect(outlineAt(look, { ...box, x: 0.6 })).toBe('M0,0L1,0L1,1Z');
+    expect(outlineAt(look, box)).toBeUndefined();
+    expect(outlineAt({ state: 'read', boxes: [box] }, box)).toBeUndefined();
+    expect(outlineAt(undefined, box)).toBeUndefined();
+  });
+});
 
 describe('retake', () => {
   it('drops the match and asks for the bottle again; the run keeps the picture it had', () => {

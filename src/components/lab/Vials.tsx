@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { cn } from '../../lib/cn.ts';
-import { concentrationText, microliters, shadeColor, shadeInk, shadeLevels, vialRecipe, vialSay, type StandardVial } from './model.ts';
+import { microliters, shadeColor, shadeInk, shadeLevels, vialLabel, vialRecipe, vialSay, type StandardVial } from './model.ts';
 import { Check } from './Text.tsx';
 
 /**
@@ -22,6 +22,8 @@ const NOW_RING = (ground: string, width: number) => `0 0 0 2px ${ground}, 0 0 0 
 const BLANK_RING = 'inset 0 0 0 1.5px var(--std-2)';
 
 export type VialCardProps = {
+  /** The concentration's unit (\"µg/mL\", \"nmol/well\"). */
+  unit?: string;
   vial: StandardVial;
   /** Shade level 8…1, 0 for the blank (model.ts shadeLevels). */
   level: number;
@@ -32,10 +34,11 @@ export type VialCardProps = {
 };
 
 /** One vial card: letter and µg/mL on top, what goes in below (min 118 px tall, 18 px corners). */
-export function VialCard({ vial, level, state, ready, onTap }: VialCardProps) {
+export function VialCard({ vial, level, state, ready, onTap, unit = 'µg/mL' }: VialCardProps) {
   const done = state === 'done';
   const rings = [vial.blank && BLANK_RING, done && 'inset 0 0 0 200px rgba(255, 255, 255, 0.72)', state === 'now' && NOW_RING('#ffffff', 4.5)].filter(Boolean);
   const [l1, l2] = ready ? ['Ready', `Need ${microliters(ready.need)}`] : vialRecipe(vial);
+  const [amount, amountUnit] = vialLabel(vial, unit);
   const style: CSSProperties = {
     background: shadeColor(level),
     color: done ? 'var(--text)' : shadeInk(level),
@@ -52,9 +55,9 @@ export function VialCard({ vial, level, state, ready, onTap }: VialCardProps) {
           <b className="text-[26px] leading-[30px] font-bold">{vial.id}</b>
         )}
         <span className="text-right text-[11px] leading-[13px] font-[650]" style={{ opacity: done ? 0.45 : 0.85 }}>
-          {concentrationText(vial.concentration)}
+          {amount}
           <br />
-          <span className="text-[9px] font-semibold">µg/mL</span>
+          <span className="text-[9px] font-semibold">{amountUnit}</span>
         </span>
       </span>
       <span className="text-[13px] leading-[17px] font-semibold" style={{ opacity: done ? 0.45 : 1 }}>
@@ -72,7 +75,7 @@ export function VialCard({ vial, level, state, ready, onTap }: VialCardProps) {
         type="button"
         onClick={onTap}
         aria-pressed={done}
-        aria-label={`Vial ${vial.id}, ${concentrationText(vial.concentration)} µg/mL${done ? ', done' : state === 'now' ? ', now' : ''}`}
+        aria-label={`Vial ${vial.id}, ${amount} ${amountUnit}${done ? ', done' : state === 'now' ? ', now' : ''}`}
         className={cn(box, 'grow border-0 font-[inherit] transition-[box-shadow,color] duration-[250ms] outline-none focus-visible:outline-2 focus-visible:outline-blue')}
         style={style}
       >
@@ -83,6 +86,8 @@ export function VialCard({ vial, level, state, ready, onTap }: VialCardProps) {
 }
 
 export type VialRackProps = {
+  /** The concentrations' unit (\"µg/mL\", \"nmol/well\"). */
+  unit?: string;
   vials: readonly StandardVial[];
   /** Ticked vials by id (Run-Standards). With ticks kept, the first unticked vial wears the yellow ring. */
   done?: Record<string, boolean>;
@@ -96,7 +101,7 @@ export type VialRackProps = {
 };
 
 /** The rack, three across with 10 px gaps: Run-Standards, the Standards panel of Plan / Plan-Heard / Plan-Full, Standards-2. */
-export function VialRack({ vials, done, now, onVial, ready, className }: VialRackProps) {
+export function VialRack({ vials, done, now, onVial, ready, unit, className }: VialRackProps) {
   const levels = shadeLevels(vials);
   const current = currentVial(vials, done, now);
   return (
@@ -105,6 +110,7 @@ export function VialRack({ vials, done, now, onVial, ready, className }: VialRac
         <VialCard
           key={v.id}
           vial={v}
+          unit={unit}
           level={levels[i]!}
           state={done?.[v.id] ? 'done' : v.id === current ? 'now' : undefined}
           ready={ready}

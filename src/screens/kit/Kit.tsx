@@ -96,7 +96,7 @@ function seedSample(protocol: Protocol, review: Exclude<Review, 'camera'>) {
   const kit = useKit.getState();
   if (review === 'recognized') {
     const things = [...guess, ...own.map(n => thing(n.id, 'tall bottle', 'none'))];
-    return kit.seed({ shots, picks: matched, things, said: recognized(read.length + things.length, shots.length, things.length), sample: true });
+    return kit.seed({ shots, picks: matched, things, said: recognized(read.length + things.length, shots.length, read.length, things.length), sample: true });
   }
   const named = Object.fromEntries(own.map(n => [n.id, as(n.id, 'picked')]));
   if (review === 'filled') {

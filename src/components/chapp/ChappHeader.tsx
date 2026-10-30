@@ -23,7 +23,17 @@ export type ChappHeaderProps = {
   onAvatar?: () => void;
   /** Says what a tap on Chapp does, with onAvatar. */
   avatarLabel?: string;
+  /**
+   * One slim bar instead of Chapp large in the middle: the menu, Chapp small beside its name and what it is doing,
+   * and `actions` on the right. Its screen's content starts at COMPACT_TOP instead of 196 px.
+   */
+  compact?: boolean;
+  /** With compact: the buttons at the top right (Plan, Start). */
+  actions?: ReactNode;
 };
+
+/** Where a compact header's screen starts its content (196 px under the full header). */
+export const COMPACT_TOP = 116;
 
 /** Held this long, a press on Chapp opens it in 3D instead. */
 const STAGE_HOLD_MS = 500;
@@ -37,7 +47,7 @@ const STAGE_RETURN_MS = 780;
  * breathing avatar with its name and what it is doing, and the button at the top left. Tapping Chapp opens the
  * conversation with it (/chat), listening already; holding Chapp opens it in 3D.
  */
-export function ChappHeader({ subtitle, onMenu, back, pill, onAvatar, avatarLabel }: ChappHeaderProps) {
+export function ChappHeader({ subtitle, onMenu, back, pill, onAvatar, avatarLabel, compact, actions }: ChappHeaderProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const held = useRef({ timer: 0, opened: false });
@@ -87,6 +97,47 @@ export function ChappHeader({ subtitle, onMenu, back, pill, onAvatar, avatarLabe
     navigate('/chat', { state: { from: `${location.pathname}${location.search}` } });
   };
 
+  const press3d = {
+    onClick: tap,
+    onPointerDown: press,
+    onPointerUp: letGo,
+    onPointerLeave: letGo,
+    onPointerCancel: letGo,
+    onContextMenu: (e: { preventDefault(): void }) => e.preventDefault(),
+  };
+
+  if (compact)
+    return (
+      <>
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-[4] h-[calc(124px+var(--screen-top))] bg-[linear-gradient(#ffffff_74%,rgba(255,255,255,0))]"
+        />
+        <div className="pointer-events-none absolute inset-x-0 top-[calc(56px+var(--screen-top))] z-[6] flex h-11 items-center gap-2.5 pr-5 pl-[68px]">
+          {/* The 96 px avatar drawn at 44 px. */}
+          <span className="relative size-11 shrink-0">
+            <button
+              ref={avatar}
+              type="button"
+              aria-label={avatarLabel ?? 'Talk with Chapp'}
+              aria-description="Hold for Chapp in 3D"
+              {...press3d}
+              className="pointer-events-auto absolute top-0 left-0 block size-24 origin-top-left scale-[0.4583] cursor-pointer touch-manipulation rounded-full outline-none select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-blue"
+              style={{ opacity: stage === 'closed' ? 1 : 0 }}
+            >
+              <ChappAvatar expression={face} listening={listening} />
+            </button>
+          </span>
+          <span role="status" className="flex min-w-0 grow flex-col">
+            <b className="text-[15px] leading-5 font-semibold text-ink">Chapp</b>
+            {line && <span className="truncate text-[13px] leading-[18px] font-medium text-text">{line}</span>}
+          </span>
+          {actions && <div className="pointer-events-auto flex shrink-0 items-center gap-2">{actions}</div>}
+        </div>
+        {corner3d()}
+      </>
+    );
+
   return (
     <>
       <div
@@ -99,12 +150,7 @@ export function ChappHeader({ subtitle, onMenu, back, pill, onAvatar, avatarLabe
           type="button"
           aria-label={avatarLabel ?? 'Talk with Chapp'}
           aria-description="Hold for Chapp in 3D"
-          onClick={tap}
-          onPointerDown={press}
-          onPointerUp={letGo}
-          onPointerLeave={letGo}
-          onPointerCancel={letGo}
-          onContextMenu={e => e.preventDefault()}
+          {...press3d}
           // Drawn at 85 % from its bottom edge, so the name under it and every screen's layout stay where they were.
           className="pointer-events-auto relative block size-24 origin-bottom scale-[0.85] cursor-pointer touch-manipulation rounded-full outline-none select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-blue"
           style={{ opacity: stage === 'closed' ? 1 : 0 }}
@@ -125,27 +171,36 @@ export function ChappHeader({ subtitle, onMenu, back, pill, onAvatar, avatarLabe
           </span>
         )}
       </div>
-      {back ? (
-        <Link to={back.to} aria-label={back.label} className={corner}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d={back.close ? 'M6 6l12 12M18 6 6 18' : 'm15 6-6 6 6 6'} />
-          </svg>
-        </Link>
-      ) : onMenu ? (
-        <button type="button" aria-label="Library and history" onClick={onMenu} className={corner}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-            <path d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-      ) : null}
-      <ChappStage
-        open={stage === 'open'}
-        origin={origin}
-        onClose={() => setStage(s => (s === 'open' ? 'closing' : s))}
-        onMeet={() => navigate('/intro')}
-      />
+      {corner3d()}
     </>
   );
+
+  /** The button at the top left, and the 3D stage Chapp opens in. */
+  function corner3d() {
+    return (
+      <>
+        {back ? (
+          <Link to={back.to} aria-label={back.label} className={corner}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d={back.close ? 'M6 6l12 12M18 6 6 18' : 'm15 6-6 6 6 6'} />
+            </svg>
+          </Link>
+        ) : onMenu ? (
+          <button type="button" aria-label="Library and history" onClick={onMenu} className={corner}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        ) : null}
+        <ChappStage
+          open={stage === 'open'}
+          origin={origin}
+          onClose={() => setStage(s => (s === 'open' ? 'closing' : s))}
+          onMeet={() => navigate('/intro')}
+        />
+      </>
+    );
+  }
 }
 
 const corner =

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { comparable, normalizeUnit, toMicroliters } from './units.ts';
+import { comparable, knownUnits, normalizeUnit, toMicroliters } from './units.ts';
 
 /**
  * Chapp protocol format, version 1 (`chapp.protocol/1`): one JSON document per kit protocol.
@@ -104,6 +104,8 @@ export const StandardPoint = z.object({
   take: Volume,
   concentration: Concentration,
   blank: z.boolean().optional(),
+  /** A working dilution later vials draw from ("dilute the stock to 1 mM"), not a standard that goes on the plate. */
+  intermediate: z.boolean().optional(),
 });
 
 export const StandardCurve = z.object({
@@ -220,6 +222,11 @@ export const Protocol = z.object({
   equipment: z.array(Equipment),
   mixes: z.array(Mix),
   standardCurves: z.array(StandardCurve),
+  /**
+   * Units the manual defines in its own words ("1 U = 0.5 µg of X"), as the model read them, each with why and its
+   * page; the app converts with them (shared/units.ts knownUnits) and nothing else.
+   */
+  units: z.array(z.object({ unit: z.string().min(1), equals: z.object({ value: z.number().positive(), unit: Unit }), why: z.string(), cite: Cite })).default([]),
   procedures: z.array(Procedure).min(1),
   /** How the reading becomes a number; none for a kit with nothing to read (a cell protocol). */
   analysis: Analysis.optional(),
@@ -246,7 +253,8 @@ export type Protocol = z.infer<typeof Protocol>;
 /** A protocol as Library lists it (GET /api/protocols): its card and what a search looks in. `updated` in ms. */
 export type ProtocolSummary = { id: string; title: string; kit: string; catalogs: string[]; procedure: string; steps: number; updated: number };
 
-const ASSAY = ['ratio', 'sample', 'mixPerSample', 'mix', 'standardCurve', 'range'] as const;
+// The sample : reagent ratio is printed by some kits and not others (ATP's 50 µL + 50 µL): the volumes say it.
+const ASSAY = ['sample', 'mixPerSample', 'mix', 'standardCurve', 'range'] as const;
 
 /** A procedure read against a standard curve with a mixed reagent (BCA): everything Plan, the plate and Results need. */
 export type AssayProcedure = Procedure & Required<Pick<Procedure, (typeof ASSAY)[number]>>;
@@ -312,7 +320,7 @@ export function problems(p: Protocol): string[] {
       const source = point.from === 'stock' ? stock : made.get(point.from);
       if (source === undefined) { out.push(`${where}: source "${point.from}" is not the stock or an earlier vial`); continue; }
       made.set(point.id, stated);
-      const v = volumes(take, diluent), c = comparable(source, stated);
+      const v = volumes(take, diluent), c = comparable(source, stated, knownUnits(p.units ?? []));
       if (!v || !c || v[0] + v[1] <= 0) continue;
       const [t, d] = v, [from, want] = c;
       const expected = (from * t) / (t + d);
