@@ -1,4 +1,4 @@
-import { Box3, Group, Quaternion, Vector3, type AnimationClip, type Mesh, type Object3D } from 'three';
+import { Box3, Group, MathUtils, Quaternion, Vector3, type AnimationClip, type Mesh, type Object3D } from 'three';
 import type { Clip } from './poses.ts';
 
 /**
@@ -20,6 +20,8 @@ export const smooth = (k: number) => k * k * (3 - 2 * k);
 export const outCubic = (k: number) => 1 - (1 - k) ** 3;
 export const inOutCubic = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
 export const outBack = (k: number) => 1 + 2.70158 * (k - 1) ** 3 + 1.70158 * (k - 1) ** 2;
+/** Coming apart (ms from the start): out by `out`, held, back from `back`, together again by `end`. */
+export const SCATTER = { out: 450, back: 1250, end: 1900 };
 export const noise = (i: number, k: number) => {
   const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -64,6 +66,31 @@ export function createRig(gltf: ChappGLTF) {
   const box = new Box3().setFromObject(body);
   const center = box.getCenter(new Vector3());
   const radius = Math.max(...box.getSize(new Vector3()).toArray()) / 2;
+  // The 24 subunits, for coming apart: each flies out along its own line from the middle, a little smaller, turning
+  // round its own middle, and back. None flies across the face (+Z): a piece in front fans out to the side instead,
+  // so the eyes stay in sight between them.
+  const FAN = Math.cos(MathUtils.degToRad(55));
+  const pieces = body.children.map((o, i) => {
+    const mid = new Box3().setFromObject(o).getCenter(new Vector3());
+    const dir = mid.clone().sub(center).normalize();
+    if (dir.z > FAN) {
+      const side = new Vector3(dir.x, dir.y, 0);
+      if (side.lengthSq() < 1e-4) side.set(noise(i, 6) - 0.5, noise(i, 7) - 0.5, 0);
+      side.normalize().multiplyScalar(Math.sqrt(1 - FAN * FAN));
+      dir.set(side.x, side.y, FAN);
+    }
+    return {
+      o,
+      mid,
+      dir,
+      far: (0.4 + 0.2 * noise(i, 4)) * radius,
+      axis: new Vector3(noise(i, 1) - 0.5, noise(i, 2) - 0.5, noise(i, 3) - 0.5).normalize(),
+      spin: (noise(i, 5) - 0.5) * 1.6,
+    };
+  });
+  const turned = new Vector3();
+  let scatterAt = 0;
+  let scatterSize = 1;
   const tilt = new Group();
   const turn = new Group();
   model.position.copy(center).negate();
@@ -124,6 +151,13 @@ export function createRig(gltf: ChappGLTF) {
     blink() {
       blinkAt = performance.now();
     },
+    /** Comes apart into its 24 subunits and back (gently: a little way, no turning). Returns how long it takes (ms). */
+    scatter(gently = false) {
+      scatterAt = performance.now();
+      scatterSize = gently ? 0.35 : 1;
+      return SCATTER.end;
+    },
+    scattering: () => scatterAt !== 0,
     update(now = performance.now()) {
       const e = smooth(faceMs ? clamp((now - faceAt) / faceMs, 0, 1) : 1);
       for (const c of chans) {
@@ -157,6 +191,22 @@ export function createRig(gltf: ChappGLTF) {
       for (const g of glints) g.visible = open > 0.35;
       if (rig.pop[0] !== 1 || rig.pop[1] !== 1) {
         for (const o of parts) o.scale.multiplyScalar(Math.max(1e-5, eyeParts.has(o) ? rig.pop[0] : rig.pop[1]));
+      }
+      if (scatterAt) {
+        const t = now - scatterAt;
+        // Out fast, a moment apart, then back with a little snap past where they belong.
+        const k = t < SCATTER.out ? outCubic(t / SCATTER.out) : t < SCATTER.back ? 1 : 1 - outBack(clamp((t - SCATTER.back) / (SCATTER.end - SCATTER.back), 0, 1));
+        const done = t >= SCATTER.end;
+        for (const p of pieces) {
+          const out = done ? 0 : k;
+          const size = 1 - 0.18 * scatterSize * out;
+          p.o.quaternion.setFromAxisAngle(p.axis, scatterSize < 1 ? 0 : p.spin * out);
+          p.o.scale.setScalar(size);
+          // Turned and shrunk round its own middle, then moved out.
+          turned.copy(p.mid).multiplyScalar(size).applyQuaternion(p.o.quaternion);
+          p.o.position.copy(p.dir).multiplyScalar(p.far * scatterSize * out).add(p.mid).sub(turned);
+        }
+        if (done) scatterAt = 0;
       }
       const s = rig.breathe ? (1 - Math.cos((now / 4000) * Math.PI * 2)) / 2 : 0;
       chapp.position.y = 0.045 * s;

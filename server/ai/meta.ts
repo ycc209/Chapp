@@ -14,6 +14,8 @@ import { createKitVision } from './vision.ts';
 import { authorize, claimsChange, type Rules } from './authorize.ts';
 import { ActionSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
 import { solutionReply } from './solution.ts';
+import { ASR_MODEL, keywords, LANGUAGES, toTaiwan } from './speech.ts';
+import { cleanSvg, DRAW_INSTRUCTIONS, layoutFor } from './picture.ts';
 import { answerFromManual, knownProtocols, loadProtocol, localProtocolId, manualSources, protocolBrief, WAYS } from './protocols.ts';
 
 /**
@@ -23,7 +25,6 @@ import { answerFromManual, knownProtocols, loadProtocol, localProtocolId, manual
  */
 
 const MODEL = 'muse-spark-1.3';
-const ASR_MODEL = 'muse-voice-transcribe-1.0';
 
 /**
  * How hard Muse Spark thinks before it answers (minimal, low, medium, high, xhigh, max; high when not sent). Thinking
@@ -31,8 +32,14 @@ const ASR_MODEL = 'muse-voice-transcribe-1.0';
  * (max 8.1) at high, 1,000–2,000 reasoning tokens each; 2.4 s (max 4.6) at low; 1.7 s (max 2.6) at minimal, about 200
  * tokens, with the same actions and manual pages every time.
  */
-export const EFFORT = { converse: 'minimal', findProtocol: 'low', fixTranscript: 'minimal' } as const;
+export const EFFORT = { converse: 'minimal', findProtocol: 'low', fixTranscript: 'minimal', drawStep: 'medium' } as const;
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
+ * One converse call's wait. Answers take 1.5–4 s; on 2026-10-29 one call hung for the whole 30 s and the user saw an
+ * error, so a call that has not answered by now is asked again while the turn has time.
+ */
+const ATTEMPT_MS = 12_000;
 
 export type MetaOptions = {
   apiKey: string;
@@ -40,8 +47,8 @@ export type MetaOptions = {
   /** Injected by tests; the global fetch otherwise. */
   fetch?: typeof fetch;
   log?: (line: string) => void;
-  /** Milliseconds per operation. A converse retry shares its first attempt's budget. */
-  timeouts?: { converse?: number; findProtocol?: number; transcribe?: number };
+  /** Milliseconds per operation. A converse retry shares its first attempt's budget; `attempt` caps each try. */
+  timeouts?: { converse?: number; findProtocol?: number; transcribe?: number; attempt?: number; draw?: number };
   /** Overrides EFFORT, for measuring (scripts/converse-smoke.ts --effort). */
   effort?: Partial<Record<keyof typeof EFFORT, Effort>>;
 };
@@ -198,7 +205,7 @@ Reply in JSON:
 - actions: only what the user asks for or clearly means, usually none; unused fields "" or 0. navigate (to: ${routes.join(' ')}) · setSamples (value) · setReplicates (value 1–${MAX_REPLICATES}; samples and standards) · nextStep · previousStep · markDone (id: a standard's letter, a sample's number or a step id; several at once separated by commas: "A,B,C,D") · redo (id: a standard's letter or a sample's number to make or load again, several by commas; the app redoes the vials made from it too) · moveWell (id: the well that went wrong, as "B3"; query: the well the user names for its contents, else "" and the app picks a free one) · addWell (query: what the extra well is for, as the user said it, or "sample 3" / "B" for one more well of that sample or standard; id: the well, only if the user named one) · addCondition (query: the new condition's name as the user said it: one more sample with this run's replicates) · startTimer (id: the step id, value 0: the app knows its length) · setStepTime (id: a timed step's id, value: the new length in seconds, as the user said it): whenever the user asks to change how long a step takes, send it at once; the app shows them a card to confirm (this run only), so say only asks ("Make step 4 24 hours for this run?") · findProtocol (query: the kit as the user named it: vendor, kit name, catalog number). A change the user did not plainly ask for becomes a button they tap. For redo, moveWell, addWell and addCondition the app picks the wells and shows what to do, so say only acknowledges ("Got it, here's where it goes.") and names no well the user did not say.
 - calc: when the user asks how to make a solution that is not this kit's own reagent: how much of a solid to weigh (kind "weigh": substance as the user named it, concentration such as "1 M", "5 mg/mL" or "2 %", volume such as "100 mL", formulaWeight only if the user said one) or how to dilute a stock (kind "dilute": stock such as "10X" or "1 M", concentration: the one they want, volume: how much they want, substance if named). Copy the user's own numbers and units, "" for any they did not say, and work nothing out: the app answers with its own numbers, so say "" and a2ui "[]". Otherwise kind "".
 ${CARD_SCREENS.has(context.screen) ? A2UI_RULES(current ? dataPaths(stepsOf(current, context)) : null) : NO_CARDS}
-- The user names a kit to run, or asks for a kit's manual or protocol, whether you have it or not: findProtocol for that kit and say you are looking up its manual; no navigate, the app opens the search. Don't ask first. "Yes" or "find it" after a kit was named earlier in the conversation means that kit. A greeting: greet back and suggest what to say next.
+- The user names a kit to run, or asks for a kit's manual or protocol, whether you have it or not: findProtocol for that kit and say you are looking up its manual; no navigate, the app opens the search. Don't ask first. The same for a reagent named with its brand or catalog number (TRIzol, Invitrogen DAPI D1306): findProtocol finds its manual, or its product page when it has none. A reagent named without either (trypsin, PBS, DAPI): ask which brand or catalog number they have, offering the usual ones where you can draw a choice, then findProtocol. "Yes" or "find it" after a kit was named earlier in the conversation means that kit. A greeting: greet back and suggest what to say next.
 - Plate readings that are sample data are an example, not the user's results: say so when you talk about them.
 
 Protocols you have: ${library.map(p => `${p.id} (${p.kit.name}, ${p.kit.vendor})`).join('; ') || 'none yet'}.${current ? `\n\n${protocolBrief(current, context)}` : '\n\nNo kit is open in this conversation: don\'t assume one.'}
@@ -323,7 +330,12 @@ const langKey = (question: string) => {
 };
 
 // Words that send the user to a card: "on the card", "shown below", "Here's what to mix…", "下面卡片".
-const POINTS = [/\bcards?\b/i, /\b(?:see|shown|listed)\s+below\b|\bbelow[:.!]?\s*$/i, /^here\b/i, /卡片|下面|下方|如下/];
+const POINTS = [
+  /\bcards?\b/i,
+  /\b(?:see|shown|listed)\s+below\b|\bbelow[:.!]?\s*$/i,
+  /^here(?:'s| is| are)\s+(?:what|how much|the (?:plan|amounts?|numbers?|layout|mix))\b|^here it is\b/i,
+  /卡片|下面|下方|如下/,
+];
 
 /**
  * Take out the sentences that point at a card when none is drawn (the model drew none, it was dropped, or the screen
@@ -464,10 +476,11 @@ export function checkReply(content: unknown, context: ConverseContext, question 
 
 // The answer is short on purpose: the app shows the protocol on this machine (or imports the PDF found), so only the
 // document, the kit and a few lines are read from it, and every line written is time the user waits.
-const findInstructions = `You are Chapp, a lab companion at the bench. The user names a kit, and maybe the part of its protocol they need.
-1. Search the web for the vendor's own manual or protocol book for that exact kit (its catalog number when given). Prefer the newest version on the vendor's site. Before each search or page, say in a few words what you are doing: the user sees it live.
+const findInstructions = `You are Chapp, a lab companion at the bench. The user names a kit or a reagent, and maybe the part of its protocol they need.
+1. Search the web for the vendor's own manual, user guide or protocol for that exact product (its catalog number when given). Prefer the newest version on the vendor's site. Before each search or page, say in a few words what you are doing: the user sees it live.
 2. Answer only from that document: the requested section's steps, or the main procedure if they name none, in at most 6 short lines, with volumes, times and temperatures exactly as written.
 3. Name the document, its version or date, and cite its URL. If you cannot find the vendor's document, say so; never fill in steps from memory or from another kit.
+4. A product with no manual or protocol of its own (a plain chemical, buffer, medium or antibody sold with a product page only): say so first, then in at most 4 short lines from the vendor's product page what it is, its catalog number, how it is stored and what it is used for. Its Document is "none" and its URL is that product page.
 Reply in the user's language, but keep reagent names, units and numbers as the manual writes them.
 End with these six lines, labels in English exactly as shown, "none" for anything you could not find:
 Vendor: <company>
@@ -577,7 +590,9 @@ export function parseFound(r: Json, query = ''): FoundProtocol {
   // Without the details block, a cited site whose name the user or the answer mentions counts as the vendor's.
   const mentioned = (query + answer.slice(0, 600)).toLowerCase().replace(/[^a-z0-9]/g, '');
   const guessed = details.vendor ? undefined : sources.find(s => siteName(s.url).length >= 4 && mentioned.includes(siteName(s.url)));
-  const found = Boolean(vendorSource || namedCited || guessed);
+  // A product with no manual (rule 4): its product page, with what the answer read from it, but nothing to import.
+  const page = !details.document && named && !/\.pdf(?:[?#]|$)/i.test(named) && (namedCited || (details.vendor && isVendorUrl(named, details.vendor))) ? named : undefined;
+  const found = !page && Boolean(vendorSource || namedCited || guessed);
   const url = namedCited ?? (named && details.vendor && isVendorUrl(named, details.vendor) ? named : undefined) ?? vendorSource?.url ?? guessed?.url;
   const title = details.document ?? sources.find(s => url && sameUrl(s.url, url))?.title;
 
@@ -588,6 +603,7 @@ export function parseFound(r: Json, query = ''): FoundProtocol {
     progress,
     answer,
     sources,
+    ...(page ? { page } : {}),
   };
 }
 
@@ -640,7 +656,7 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   const { apiKey, baseUrl = 'https://api.meta.ai/v1', log = (line: string) => console.log(line) } = options;
   if (!apiKey) throw new Error('AI_PROVIDER=meta needs MODEL_API_KEY in .env (see .env.example).');
   const fetchFn = options.fetch ?? globalThis.fetch;
-  const timeouts = { converse: 30_000, findProtocol: 60_000, transcribe: 20_000, ...options.timeouts };
+  const timeouts = { converse: 30_000, findProtocol: 60_000, transcribe: 20_000, attempt: ATTEMPT_MS, draw: 90_000, ...options.timeouts };
   const effort: Record<keyof typeof EFFORT, Effort> = { ...EFFORT, ...options.effort };
 
   type Request = {
@@ -719,15 +735,16 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   return {
     async transcribe(wav: Uint8Array): Promise<Transcript> {
       const deadline = Date.now() + timeouts.transcribe;
-      // DIARIZATION is the one mode the endpoint accepted in testing; for one speaker it is a plain transcript.
+      // One turn the phone has already cut: PUSH_TO_TALK, with the lab's words and languages (speech.ts).
       const form = new FormData();
-      form.append('request', new Blob([JSON.stringify({ mode: 'DIARIZATION', model: ASR_MODEL, audioEncoding: 'WAV' })], { type: 'application/json' }));
+      const request = { mode: 'PUSH_TO_TALK', model: ASR_MODEL, audioEncoding: 'WAV', languageBias: LANGUAGES, keywords: keywords() };
+      form.append('request', new Blob([JSON.stringify(request)], { type: 'application/json' }));
       form.append('audio', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'speech.wav');
       const body = await call('transcribe', '/asr/transcribe', { body: form }, timeouts.transcribe);
       if (typeof body.transcript !== 'string') throw new UpstreamError('Meta transcribe returned no transcript');
       // Lab names misheard ("pierced BCA protein acetate"): fixed here, and by Muse Spark only when still unsure.
       const terms = labTerms(knownProtocols());
-      const fixed = fixLabWords(body.transcript.trim(), terms);
+      const fixed = fixLabWords(toTaiwan(body.transcript.trim()), terms);
       const left = deadline - Date.now();
       return { transcript: needsModelFix(fixed, terms) && left > 1000 ? await fixTranscript(fixed, terms, Math.min(left, 8000)) : fixed };
     },
@@ -747,9 +764,15 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           body = await call('converse', '/chat/completions', {
             body: JSON.stringify({ model: MODEL, reasoning_effort: effort.converse, messages, response_format: replyFormat }),
             json: true,
-          }, left);
+          }, Math.min(left, timeouts.attempt));
         } catch (error) {
           if (first && !first.ok && first.say) break; // The retry failed; fall back to the first answer's words.
+          // Only a call that hung or that the API failed itself (5xx); a refused key or a bad request would fail again.
+          const passing = error instanceof UpstreamError && / timed out after |failed \(5\d\d\)/.test(error.message);
+          if (attempt === 0 && passing && deadline - Date.now() > 3000) {
+            log(`[meta] converse asked again: ${error instanceof Error ? error.message : 'failed'}`);
+            continue;
+          }
           throw error;
         }
         const content = body.choices?.[0]?.message?.content;
@@ -805,6 +828,17 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       // The vendor's document we already have as a protocol: the app opens that one.
       const protocolId = found.found ? localProtocolId(found) : undefined;
       return protocolId ? { ...found, protocolId } : found;
+    },
+
+    /** A step card's picture: Muse Spark writes it as SVG from the step's facts, kept only if it is plain drawing. */
+    async drawStep(facts) {
+      const body = await call('draw-step', '/chat/completions', {
+        body: JSON.stringify({ model: MODEL, reasoning_effort: effort.drawStep, messages: [{ role: 'system', content: DRAW_INSTRUCTIONS }, { role: 'user', content: JSON.stringify({ ...facts, layout: layoutFor(facts) }) }] }),
+        json: true,
+      }, timeouts.draw);
+      const svg = cleanSvg(String(body.choices?.[0]?.message?.content ?? ''));
+      if (!svg) throw new UpstreamError('Meta draw-step returned no usable SVG');
+      return svg;
     },
 
     readPlate: metaReadPlate({ apiKey, baseUrl, fetch: options.fetch, log }),

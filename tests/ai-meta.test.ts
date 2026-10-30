@@ -136,6 +136,17 @@ describe('meta converse', () => {
     expect(error.message).toMatch(/converse timed out/);
   });
 
+  it('asks again once when a call hangs, while the turn has time', async () => {
+    let calls = 0;
+    const fn = (async (_url: string, init: RequestInit) => {
+      if (calls++ === 0) return new Promise((_, fail) => init.signal!.addEventListener('abort', () => fail(init.signal!.reason)));
+      return new Response(JSON.stringify(chat(wire({ say: 'Here now.' }))));
+    }) as unknown as typeof fetch;
+    const reply = await provider(fn, { converse: 5000, attempt: 50 }).converse({ text: 'x', context: home });
+    expect(reply.say).toBe('Here now.');
+    expect(calls).toBe(2);
+  });
+
   it('cannot reach the API', async () => {
     const { fn } = fakeFetch(new TypeError('fetch failed'));
     await expect(provider(fn).converse({ text: 'x', context: home })).rejects.toThrow('Could not reach the Meta API for converse');
@@ -167,11 +178,20 @@ describe('meta transcribe', () => {
     expect(await provider(fn).transcribe(audio)).toEqual({ transcript: 'Next step.' });
     expect(calls[0].url).toBe('https://api.meta.ai/v1/asr/transcribe');
     const form = calls[0].init.body as FormData;
-    expect(JSON.parse(await (form.get('request') as Blob).text())).toEqual({ mode: 'DIARIZATION', model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV' });
+    const request = JSON.parse(await (form.get('request') as Blob).text());
+    expect(request).toMatchObject({ mode: 'PUSH_TO_TALK', model: 'muse-voice-transcribe-1.0', audioEncoding: 'WAV', languageBias: ['Chinese (Taiwan)', 'English'] });
+    expect(request.keywords).toEqual(expect.arrayContaining(['TRIzol', 'BCA', '三重複']));
+    // Meta refuses a keyword over 30 characters.
+    expect(request.keywords.every((k: string) => k.length <= 30)).toBe(true);
     const sent = form.get('audio') as File;
     expect(sent.type).toBe('audio/wav');
     expect(new Uint8Array(await sent.arrayBuffer())).toEqual(audio);
     expect((calls[0].init.headers as Record<string, string>)['content-type']).toBeUndefined();
+  });
+
+  it('writes Chinese as Taiwan does: the model hears it in Simplified', async () => {
+    const { fn } = fakeFetch({ transcript: '把样本数改成12个, 然后计时开始,  add 25 uL, then mix' });
+    expect(await provider(fn).transcribe(new Uint8Array(10))).toEqual({ transcript: '把樣本數改成12個，然後計時開始，add 25 uL, then mix' });
   });
 
   it('fails clearly when there is no transcript', async () => {
@@ -227,6 +247,14 @@ describe('meta findProtocol', () => {
     expect(found.found).toBe(false);
     expect(found.document).toBeUndefined();
     expect(found.answer).toBe('I could not find the vendor manual for 99999.');
+  });
+
+  it('gives a reagent with no manual its product page, and nothing to read into steps', () => {
+    const product = 'https://www.sigmaaldrich.com/US/en/product/sigma/s9888';
+    const details = `\nVendor: Sigma-Aldrich\nCatalog: S9888\nKit: Sodium chloride\nDocument: none\nVersion: none\nURL: ${product}`;
+    const found = parseFound(searchReply('No manual: it is a plain chemical.\nSodium chloride, ACS reagent, S9888; store at room temperature.' + details, [cite(product, 'Sodium chloride S9888')]), 'Sigma NaCl');
+    expect(found).toMatchObject({ found: false, page: product, answer: 'No manual: it is a plain chemical.\nSodium chloride, ACS reagent, S9888; store at room temperature.' });
+    expect(found.document).toBeUndefined();
   });
 
   it('falls back to search actions for progress and to the cited site when the details block is missing', () => {

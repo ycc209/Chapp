@@ -10,6 +10,7 @@ import { ConverseRequestSchema, describeIssues, FindProtocolRequestSchema } from
 import { createShareHandler } from './share.ts';
 import { createImportHandler, findAndImport } from './imports.ts';
 import { createKitHandler } from './kit.ts';
+import { createPictureHandler } from './pictures.ts';
 import { streamFindProtocol, wantsEvents } from './events.ts';
 import { createPlateHandler } from './ai/plate.ts';
 import { protocolList } from './ai/protocols.ts';
@@ -22,6 +23,7 @@ import { createPushHandler, type PushOptions } from './push.ts';
  *   GET  /api/health          → Health
  *   GET  /api/protocols       → ProtocolSummary[]: every protocol in data/protocols/, the newest first (Library)
  *   GET  /api/protocols/:id   → a chapp.protocol/1 document from data/protocols/
+ *   GET  /api/protocols/:id/pictures/:step.svg → a step card's picture, drawn once and kept (server/pictures.ts)
  *   POST /api/voice           audio/wav (≤ 10 MB) → Transcript
  *   POST /api/converse        ConverseRequest (≤ 100 KB) → ConverseReply
  *   POST /api/find-protocol   { query } (≤ 100 KB) → FoundProtocol; with accept: text/event-stream, its progress
@@ -49,6 +51,8 @@ export type AppOptions = {
   manuals?: string;
   /** Where shared setups are kept (data/shares/). */
   shares?: string;
+  /** Where step pictures are kept (data/pictures/). */
+  pictures?: string;
   /** Web Push for timers (server/push.ts): its folder (data/push/) and, in tests, a sender that stays off the network. */
   push?: Partial<PushOptions>;
 };
@@ -131,6 +135,7 @@ export function createHandler(options: AppOptions) {
   // A manual the search finds for a kit without a protocol here is read into one (server/imports.ts).
   const find = (query: string, live?: FindProtocolLive) => findAndImport(provider, query, live, { protocols, manuals });
   const plate = createPlateHandler(provider);
+  const pictures = createPictureHandler({ provider, protocols, pictures: options.pictures ?? fileURLToPath(new URL('../data/pictures/', import.meta.url)) });
   const push = createPushHandler({ dir: fileURLToPath(new URL('../data/push/', import.meta.url)), ...options.push });
 
   const post = (req: IncomingMessage) => {
@@ -164,6 +169,7 @@ export function createHandler(options: AppOptions) {
       if (await imports(req, res, path)) return;
 
       if (path === '/api/protocols') return json(res, 200, protocolList(protocols));
+      if (req.method === 'GET' && (await pictures(res, path))) return;
       const id = /^\/api\/protocols\/([a-z0-9-]+)$/.exec(path)?.[1];
       if (id) {
         const raw = await readFile(resolve(protocols, `${id}.json`), 'utf8').catch(() => null);

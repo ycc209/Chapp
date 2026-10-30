@@ -3,8 +3,8 @@
  * R3F port in src/components/chapp/three (and lookdev.html renders the stills from that); this file stays as the
  * source of the design canvas's bundled copy (data/design/chapp/chapp-3d.js). The look itself (light, tone mapping,
  * the gel) comes from src/components/chapp/three/look.ts, so this file needs Vite or a bundler to load it.
- * The model, public/chapp/chapp.glb, is Chapp V4: the 24 subunits of Hsp16.5 (PDB 1SHS) rounded into a ball,
- * wearing a face. The faces are the model's expression clips; blinking and breathing happen here.
+ * The model, public/chapp/chapp.glb, is Chapp V5: the 24 subunits of Hsp16.5 (PDB 1SHS) as round lumps rounded into
+ * a ball (body.ts), wearing V4's face. The faces are the model's expression clips; blinking and breathing happen here.
  */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';

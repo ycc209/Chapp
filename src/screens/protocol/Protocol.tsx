@@ -186,15 +186,15 @@ export function ProtocolScreen() {
               {finding.notFound}
             </p>
           )}
-          {finding.notFound && finding.manual && (
+          {finding.notFound && (finding.manual || finding.page) && (
             <a
-              href={finding.manual}
+              href={finding.manual ?? finding.page}
               target="_blank"
               rel="noreferrer"
               className="mb-6 flex min-h-11 shrink-0 items-center gap-2 self-start px-1 text-[15px] leading-5 font-semibold text-blue no-underline"
             >
               <DocumentIcon />
-              Open the manual
+              {finding.manual ? 'Open the manual' : 'Open the product page'}
             </a>
           )}
           {error && !finding.notFound && stage >= 1 && (

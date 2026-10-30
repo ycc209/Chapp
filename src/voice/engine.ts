@@ -1,17 +1,17 @@
 /**
- * The two ways Chapp hears: the browser's own speech recognition (live words, free) or the server's (records a WAV
- * and sends it to POST /api/voice, which the Meta model transcribes). Both follow the same small contract, so the
- * controller does not care which one runs.
+ * The ways Chapp hears: live through the server (live.ts: the microphone streams to Muse Voice Transcribe, words show
+ * as they are said), a recording per turn (server.ts: a WAV to POST /api/voice), or the browser's own recognizer
+ * (browser.ts, English only). All follow the same small contract, so the controller does not care which one runs.
  */
 
-/** What the browser's recognizer listens in (?voice=browser). Muse Voice Transcribe, the default, hears Chinese too. */
+/** What the browser's recognizer listens in (?voice=browser). Muse Voice Transcribe hears Chinese too. */
 export const LISTEN_LANG = 'en-US';
 
 /** Quiet after speech that ends a turn. */
 export const SILENCE_MS = 1200;
 /** A tap that hears nothing at all gives up after this long. */
 export const NO_SPEECH_MS = 8000;
-/** The server engine sends a turn this long even if the speaker has not paused. */
+/** A held turn (or the recording engine's turn) goes after this long even if the speaker has not stopped. */
 export const MAX_TURN_MS = 30000;
 /** Wait after Chapp stops talking before listening again, so the tail of its voice is not heard. */
 export const AFTER_SPEAKING_MS = 300;
@@ -61,7 +61,7 @@ export interface Engine {
   abort(): void;
 }
 
-export type EngineKind = 'browser' | 'server';
+export type EngineKind = 'live' | 'server' | 'browser';
 
 // Read once at startup: the router drops the query string on the first navigation.
 const fromUrl = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('voice');
@@ -74,7 +74,8 @@ function fromStorage() {
   }
 }
 
-/** ?voice=browser|server, else localStorage chapp.voice, else Muse Voice Transcribe (it hears Chinese and English). */
+/** ?voice=live|server|browser, else localStorage chapp.voice, else live (Muse Voice Transcribe, Chinese and English). */
 export function chooseEngine(): EngineKind {
-  return (fromUrl ?? fromStorage()) === 'browser' ? 'browser' : 'server';
+  const wanted = fromUrl ?? fromStorage();
+  return wanted === 'browser' || wanted === 'server' ? wanted : 'live';
 }

@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: 5175,
     allowedHosts: ['.ts.net'],
-    proxy: { '/api': `http://127.0.0.1:${process.env.API_PORT || 3003}` },
+    // ws: live speech is a WebSocket (/api/voice/live).
+    proxy: { '/api': { target: `http://127.0.0.1:${process.env.API_PORT || 3003}`, ws: true } },
   },
 });

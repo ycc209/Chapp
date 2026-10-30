@@ -7,7 +7,8 @@ import { YAW, clamp, createRig, outCubic } from './rig.ts';
 
 /**
  * Chapp in the middle of the screen, the R3F port of mountStage in scripts/chapp-model/chapp3d.js. Drag to turn it;
- * it keeps turning a little after you let go and drifts back to face you when left alone. A tap changes the face.
+ * it keeps turning a little after you let go and drifts back to face you when left alone. A tap changes the face;
+ * three quick taps take it apart into its 24 subunits for a moment, to show what it is made of.
  * Loaded only when the stage opens (React.lazy in ChappStage), so the home screen ships no WebGL.
  */
 
@@ -38,6 +39,8 @@ export default function StageCanvas(props: Props) {
 
 // Taps go round all eight faces, starting after the one it came with.
 const FACES: Clip[] = ['Happy', 'Excited', 'Wink', 'Surprised', 'Thinking', 'Sleepy', 'Sad', 'Neutral'];
+// Taps this close together are one burst: the third comes apart.
+const TAPS_MS = 450;
 
 function StageScene({ pose, fit, onReady }: Props) {
   const gltf = useChappGLTF();
@@ -59,7 +62,11 @@ function StageScene({ pose, fit, onReady }: Props) {
     lean: pose.tilt,
     look: pose.look,
     frames: 0,
+    lastTap: 0,
+    burst: 0,
   }).current;
+  const timers = useRef<number[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
   useLayoutEffect(() => {
     rig.setFace(pose.clip, 0);
@@ -105,10 +112,25 @@ function StageScene({ pose, fit, onReady }: Props) {
       canvas.style.cursor = 'grab';
       m.still = performance.now();
       if (tap) {
+        const now = performance.now();
+        // The first tap of a burst changes the face as any tap does; the second waits for a third.
+        const quick = now - m.lastTap < TAPS_MS;
+        m.lastTap = now;
+        m.burst = quick ? m.burst + 1 : 1;
+        if (rig.scattering() || (quick && m.burst < 3)) return;
         m.vy = m.vp = 0;
         m.tapped = true;
         m.lean = 0;
         m.look = [0, 0];
+        if (m.burst === 3) {
+          // Apart, surprised, and back together happy.
+          m.burst = 0;
+          const ms = rig.scatter(calm);
+          rig.setFace('Surprised', 120);
+          m.n = FACES.indexOf('Happy');
+          timers.current.push(window.setTimeout(() => rig.setFace('Happy', 240), ms - 450));
+          return;
+        }
         m.n = (m.n + 1) % FACES.length;
         rig.setFace(FACES[m.n]);
         if (!calm) m.hop = performance.now();
@@ -129,15 +151,13 @@ function StageScene({ pose, fit, onReady }: Props) {
     };
   }, [canvas, rig, calm, m]);
 
-  const smiles = useRef<number[]>([]);
-  useEffect(() => () => smiles.current.forEach(clearTimeout), []);
   const api = useMemo<StageApi>(
     () => ({
       arrive() {
         if (!calm) m.spin = performance.now();
         if (pose.clip !== 'Neutral') return;
         const say = (face: Clip, ms: number) => () => !m.tapped && rig.setFace(face, ms);
-        smiles.current.push(window.setTimeout(say('Happy', 200), 1000), window.setTimeout(say('Neutral', 240), 2400));
+        timers.current.push(window.setTimeout(say('Happy', 200), 1000), window.setTimeout(say('Neutral', 240), 2400));
       },
     }),
     [rig, calm, m, pose.clip],

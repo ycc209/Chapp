@@ -1,11 +1,14 @@
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { ProtocolIntro } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
+import { useKits } from '../../state/library.ts';
 import { answer, bottles, bottleDetail, kitContents, precautions, prepLines, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
 import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, EyeIcon, FlaskIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
+import { BenchSheet } from './BenchSheet.tsx';
+import { scenesFor, StepPicture } from './StepPicture.tsx';
 
 export type Section = 'kit' | 'prep' | 'steps' | 'principle' | 'precautions';
 export const SECTIONS: Section[] = ['kit', 'prep', 'steps', 'principle', 'precautions'];
@@ -200,7 +203,7 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
         </AccordionPrimitive.Header>
         <Content>
           <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
-            <StepCards steps={steps} />
+            <StepCards steps={steps} protocol={protocol} procedureId={procedure} />
             {/* Fix-Steps (comparing each step with its page) is not built; until then the PDF opens at the steps. */}
             <a
               href={`${protocol.source.url}#page=${pdfPage}`}
@@ -353,13 +356,22 @@ const CARD =
 /**
  * The steps as cards side by side, swiped through, under a row of the steps that follows them: "Step 1" … with a picture
  * of each kind of step on a line, the card's steps in ink and the others grey; tapping one brings its card. A step done
- * with the hands has its own card with room for its picture (empty for now); short steps share a card, one above the
+ * with the hands has its own card with its picture (StepPicture, drawn from the protocol; empty while only the quick
+ * read is there); short steps share a card, one above the
  * other. Each card says the step, its numbers in a line ("37 °C · 30 min · Covered") and what to do in Chapp's words; a
  * tap turns the card in view to the manual's own words. Cards beside it are faded. All cards are as tall as the tallest.
  */
-function StepCards({ steps }: { steps: CardStep[] }) {
+function StepCards({ steps, protocol, procedureId }: { steps: CardStep[]; protocol?: Protocol; procedureId?: string | null }) {
   const cards = cardsOf(steps);
+  // The user's own photos of this kit's bottles (never the drawn samples): they stand on the bench in the pictures.
+  const photos = useKits(s => (protocol ? s.kits[protocol.id] : undefined));
   const [at, setAt] = useState(0);
+  // Every step with a bench scene, in order, for the enlarged picture (BenchSheet) to step through.
+  const enlarged = useMemo(() => {
+    const scenes = protocol ? scenesFor(protocol, procedureId) : new Map();
+    return steps.flatMap((s, i) => (s.id && scenes.get(s.id)?.items.length ? [{ n: i + 1, id: s.id, scene: scenes.get(s.id)! }] : []));
+  }, [steps, protocol, procedureId]);
+  const [open, setOpen] = useState<number | null>(null);
   const row = useRef<HTMLOListElement>(null);
   const progress = useRef<HTMLOListElement>(null);
 
@@ -426,15 +438,25 @@ function StepCards({ steps }: { steps: CardStep[] }) {
             key={card.steps[0]!.n}
             className="flex w-[72%] shrink-0 scroll-ml-1.5 snap-start [perspective:1200px]"
           >
-            <StepCard card={card} total={steps.length} inView={i === at} onBring={() => show(i)} />
+            <StepCard
+              card={card}
+              total={steps.length}
+              inView={i === at}
+              onBring={() => show(i)}
+              onEnlarge={enlarged.some(e => e.id === card.steps[0]!.step.id) ? () => setOpen(enlarged.findIndex(e => e.id === card.steps[0]!.step.id)) : undefined}
+              protocol={protocol}
+              procedureId={procedureId}
+              photos={photos}
+            />
           </li>
         ))}
       </ol>
+      <BenchSheet scenes={enlarged} at={open} onAt={setOpen} onClose={() => setOpen(null)} photos={photos} />
     </div>
   );
 }
 
-function StepCard({ card, total, inView, onBring }: { card: Card; total: number; inView: boolean; onBring: () => void }) {
+function StepCard({ card, total, inView, onBring, onEnlarge, protocol, procedureId, photos }: { card: Card; total: number; inView: boolean; onBring: () => void; onEnlarge?: () => void; protocol?: Protocol; procedureId?: string | null; photos?: Record<string, string> }) {
   const [turned, setTurned] = useState(false);
   useEffect(() => {
     if (!inView) setTurned(false);
@@ -442,8 +464,13 @@ function StepCard({ card, total, inView, onBring }: { card: Card; total: number;
   const front = (
     <div className={cn(CARD, 'grow gap-3 p-4')} aria-hidden={turned}>
       {card.picture && (
-        <div aria-hidden="true" className="flex aspect-square w-[44%] items-center justify-center rounded-[14px] bg-sunken text-faint">
-          <PictureIcon />
+        <div aria-hidden="true" data-picture className="relative flex aspect-square w-[44%] items-center justify-center overflow-hidden rounded-[14px] bg-sunken text-faint">
+          {protocol && card.steps[0]!.step.id ? <StepPicture protocol={protocol} procedureId={procedureId} stepId={card.steps[0]!.step.id} photos={photos} /> : <PictureIcon />}
+          {onEnlarge && (
+            <span className="absolute right-1.5 bottom-1.5 flex size-6 items-center justify-center rounded-full bg-card/90 text-ink shadow-[0_1px_3px_rgba(17,17,19,0.15)]">
+              <EnlargeIcon />
+            </span>
+          )}
         </div>
       )}
       {card.steps.map(({ step, n }, i) => (
@@ -479,7 +506,12 @@ function StepCard({ card, total, inView, onBring }: { card: Card; total: number;
       type="button"
       aria-pressed={turns && inView ? turned : undefined}
       aria-label={!inView ? `Show step ${card.steps[0]!.n}` : turns ? (turned ? 'Show Chapp\'s words' : 'Show the manual\'s words') : undefined}
-      onClick={() => (!inView ? onBring() : turns && setTurned(t => !t))}
+      onClick={(e: MouseEvent) => {
+        if (!inView) return onBring();
+        // The picture opens enlarged; the rest of the card turns.
+        if (onEnlarge && (e.target as Element).closest('[data-picture]')) return onEnlarge();
+        if (turns) setTurned(t => !t);
+      }}
       className={cn(
         'grid h-full w-full text-left outline-none [transform-style:preserve-3d] transition-[transform,scale,opacity] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] focus-visible:ring-2 focus-visible:ring-blue',
         // Cards beside the one in view are faded and a little smaller. On the card, not its slot: the slot's size is
@@ -509,6 +541,12 @@ function StepCard({ card, total, inView, onBring }: { card: Card; total: number;
 /** A number and its unit stay on one line ("2 mg/mL", "37 °C", "30 min"): the space between them doesn't break. */
 const keepUnits = (text: string) =>
   text.replace(/(\d) (?=(?:[pnµum]?(?:L|g|M)\b|[pnµum]?g\/m?L|°C|nm|min|h\b|s\b|%|parts?\b|wells?\b|tubes?\b))/g, '$1\u00a0');
+
+const EnlargeIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
 
 /** Where a step's picture will go. */
 function PictureIcon() {

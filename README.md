@@ -56,7 +56,7 @@ testing on iPhones and the demo video.
 |---|---|
 | Muse Spark 1.3 | Finding the vendor manual (web search), reading the PDF into a structured protocol, recognizing the kit box and reading bottle labels, reading a photo of the plate reader, the conversation (answers with citations, changes to the run, cards) |
 | SAM 3.1 | Segmenting every bottle in one photo of the kit |
-| Muse Voice Transcribe | Speech to text at the bench, in Chinese or English, with lab words fixed afterwards (`?voice=browser` uses the phone's own recognizer instead, English only) |
+| Muse Voice Transcribe | Live speech to text at the bench: the phone streams through the server to the realtime endpoint, words show as they are said and the model decides when you have finished. Chinese and English in one sentence, the lab's words as keywords, Chinese written as Taiwan writes it (`?voice=server` sends a recording per turn instead; `?voice=browser` uses the phone's own recognizer, English only) |
 | Muse Image | Planned for a consistent set of equipment icons; not in the app yet (`npm run smoke` checks it) |
 
 ## How Chapp asks Muse Spark to read a manual
@@ -123,11 +123,14 @@ from, and the tests check that every quoted sentence appears word for word on th
   the user's words (`authorize.ts`) and answers without a network in mock mode (`mock.ts`)
 - `src/screens/`: one folder per screen (home, chat, protocol, kit, plan, run, results, share, library, intro)
 - `src/state/`: the run (plan, progress, timers, plate changes) and the changes Chapp makes to it
-- `src/voice/`: listening (the browser's recognizer or Muse Voice Transcribe), hold to talk, lab-word fixes
+- `src/voice/`: listening (live through `server/live.ts`, a recording per turn, or the browser's recognizer), hold to
+  talk, lab-word fixes
 - `src/style-guide/`: the interface style guide (`/style`)
-- `public/chapp/`: the Chapp character (`chapp.glb`: the 24 subunits of Hsp16.5, PDB 1SHS, rounded into a ball and
-  wearing a face, one animation per expression) and its stills; with Vite running, `node scripts/chapp-model/stills.ts`
-  renders the stills again from the app's own 3D scene
+- `public/chapp/`: the Chapp character (`chapp.glb`: the 24 subunits of Hsp16.5, PDB 1SHS, each its own piece of
+  round lumps of gel, with the cage's 14 windows open, rounded into a ball and wearing a face, one animation per
+  expression; three quick taps on the big 3D Chapp take it apart for a moment) and its
+  stills; `node scripts/chapp-model/body.ts` rebuilds the body from the PDB file, and with Vite running
+  `node scripts/chapp-model/stills.ts` renders the stills (and `--icons`, the app icons) from the app's own 3D scene
 - `scripts/smoke-meta.ts`: checks each Meta model Chapp depends on; the other scripts try one feature against the real
   models (finding, importing, kit photos, voice, conversation), and `scripts/bench/` compares models at reading manuals
 - `tests/`: the protocol format, the numbers, model replies (recorded, replayed without a network), voice, the cards and

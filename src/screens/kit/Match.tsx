@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { Box } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
+import { useCutouts } from '../../components/bench/cutout.ts';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
@@ -45,6 +46,8 @@ const NOT_THIS_RUN = 'Not for this run';
 const SOMETHING_ELSE = 'Something else';
 const SHOW_ME = 'Show me';
 const NOT_IN_PHOTOS = 'Not in my photos';
+const TAKE_PHOTO = 'Take a photo';
+const KEEP_IT = 'Keep it';
 
 type MatchProps = { protocol: Protocol; onCamera: () => void };
 
@@ -89,6 +92,11 @@ export function Match({ protocol, onCamera }: MatchProps) {
   const complete = !busy && !kit.pending && kit.things.length === 0 && left.length === 0;
   const shotNumber = (id: string) => kit.shots.findIndex(s => s.id === id) + 1;
   const picked = needs.filter(n => kit.picks[n.id]).length;
+  // Each matched bottle's cut-out, made as it was matched (store.ts). One that did not come out whole gets a question
+  // once everything else is in: a photo of just that bottle, or keep it.
+  const cuts = useCutouts(useMemo(() => Object.fromEntries(needs.flatMap(n => (kit.picks[n.id] ? [[n.id, kit.picks[n.id]!.crop]] : []))), [needs, kit.picks]));
+  const [kept, setKept] = useState<Record<string, true>>({});
+  const retake = complete && !kit.sample ? (needs.find(n => kit.picks[n.id] && cuts[n.id] && !cuts[n.id]!.ok && !kept[n.id]) ?? null) : null;
   // The bottle a tap on a photo is for: the one asked about, else the first still open.
   const target = subject && subject.kind !== 'unknown' ? subject.need : (left[0] ?? null);
   /** Left to check once `need` is matched: "Diluent, got it. 1 more to check." */
@@ -99,8 +107,10 @@ export function Match({ protocol, onCamera }: MatchProps) {
     setPicker({ shot, need });
   };
 
-  const answers: string[] = !subject
-    ? []
+  const answers: string[] = retake
+    ? [TAKE_PHOTO, KEEP_IT]
+    : !subject
+      ? []
     : subject.kind === 'where'
       ? [SHOW_ME, NOT_IN_PHOTOS]
       : kit.reassign
@@ -112,6 +122,13 @@ export function Match({ protocol, onCamera }: MatchProps) {
 
   const choose = (choice: string) => {
     setReply(null);
+    if (retake) {
+      if (choice === TAKE_PHOTO) {
+        kit.retake(retake.id, `Take a photo of just the ${retake.name}.`);
+        onCamera();
+      } else if (choice === KEEP_IT) setKept(k => ({ ...k, [retake.id]: true }));
+      return;
+    }
     if (!subject) return;
     if (subject.kind === 'where') {
       if (choice === SHOW_ME) return show(subject.need);
@@ -166,7 +183,12 @@ export function Match({ protocol, onCamera }: MatchProps) {
     window.setTimeout(() => useKit.getState().clear(), 0);
   };
 
-  const line: ReactNode = reply ?? (complete ? (
+  const photoOf = (id: string) => (shotNumber(id) > 0 ? `photo ${shotNumber(id)}` : 'the photo');
+  const line: ReactNode = reply ?? (retake ? (
+    <>
+      I couldn’t cut the <b className="font-bold">{retake.name}</b> out of {photoOf(kit.picks[retake.id]!.shot)} cleanly: {cuts[retake.id]!.why}.
+    </>
+  ) : complete ? (
     <>
       {picked === needs.length ? `All ${needs.length} are in.` : `${picked} of ${needs.length} have a photo.`} Amounts are for{' '}
       <b className="font-bold whitespace-nowrap">
@@ -234,7 +256,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
                 thing={thing}
                 skipped={kit.skipped[need.id]}
                 asked={!complete && Boolean(asked)}
-                detail={rowDetail(need, { pick, pending, thing, skipped: kit.skipped[need.id] }, shotNumber)}
+                detail={rowDetail(need, { pick, pending, thing, skipped: kit.skipped[need.id] }, shotNumber) + (pick && !pending && cuts[need.id] && !cuts[need.id]!.ok ? ' · hard to cut out' : '')}
                 amount={complete ? amount[need.id] : undefined}
                 onClick={() => (thing ? kit.ask(thing.id) : show(need, Math.max(0, shotNumber(pick?.shot ?? '') - 1)))}
               />
@@ -243,7 +265,23 @@ export function Match({ protocol, onCamera }: MatchProps) {
         </ul>
       </div>
 
-      {complete ? (
+      {retake ? (
+        <div className="flex shrink-0 flex-col gap-2.5">
+          <div className="flex items-center gap-3 px-1">
+            <span className="flex size-[72px] shrink-0 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#f7f9fc_0%,#e4e9f0_100%)]">
+              <img src={cuts[retake.id]!.src} alt="" draggable={false} className="max-h-16 max-w-16 object-contain" />
+            </span>
+            <p className="text-[17px] leading-6 font-medium text-ink">Take a photo of just that bottle?</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {answers.map(a => (
+              <button key={a} type="button" onClick={() => choose(a)} className={a === TAKE_PHOTO ? DARK_CHIP : WHITE_CHIP}>
+                {a}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : complete ? (
         <button
           type="button"
           onClick={finish}

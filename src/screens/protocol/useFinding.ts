@@ -24,6 +24,8 @@ export type Finding = {
   protocolId?: string;
   /** A manual found but not read into steps (not a PDF, or it would not download): the vendor's link to it. */
   manual?: string;
+  /** A reagent with no manual: the vendor's product page its answer was read from. */
+  page?: string;
   /**
    * A manual new to Chapp: what the kit is, read within seconds while its steps are still being read (shared/ai.ts
    * ProtocolIntro). The Overview shows its answer and At a glance from it until the protocol is there.
@@ -102,7 +104,7 @@ export function useFinding(ask: string | null, hold: Stage | null, exchange: obj
         const number = found.found ? otherCatalog(`${useSession.getState().exchange?.ask ?? ''} ${ask}`, found.kit?.catalog) : null;
         if (number && found.kit) setFinding(f => ({ ...f, said: { number, found: found.kit!.catalog } }));
         if (!found.found) {
-          setFinding({ stage: 1, progress: found.progress, notFound: found.answer || "I couldn't find that kit's manual." });
+          setFinding({ stage: 1, progress: found.progress, notFound: found.answer || "I couldn't find that kit's manual.", ...(found.page ? { page: found.page } : {}) });
           session.setStatus('');
           session.setExpression('sad');
           return;

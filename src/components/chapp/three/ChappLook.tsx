@@ -8,7 +8,7 @@ import { FILL, FOV, MODEL_URL, PITCH, type ChappGLTF, type ChappRig } from './ri
 
 // The pieces every 3D Chapp shares: the model, its light, the camera framing and the shadow it stands on.
 
-// chapp.glb uses neither Draco nor meshopt (plain buffers, 4.4 MB), so neither decoder is set up or fetched.
+// chapp.glb uses neither Draco nor meshopt (plain buffers, 4.1 MB), so neither decoder is set up or fetched.
 const DRACO = false;
 const MESHOPT = false;
 

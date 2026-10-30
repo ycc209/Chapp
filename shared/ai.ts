@@ -18,6 +18,7 @@
  *   GET  /api/protocols/:id/manual.pdf                                  → the PDF an imported protocol was read from
  * A non-2xx answer carries ApiError.
  */
+import type { StepFacts } from './stepFacts.ts';
 import type { A2uiMessage } from './a2ui.ts';
 import type { Protocol } from './protocol.ts';
 
@@ -116,6 +117,8 @@ export type FoundProtocol = {
   progress: string[];
   answer: string;
   sources: Source[];
+  /** No manual of its own (a plain chemical, buffer or medium): the vendor's product page `answer` was read from. */
+  page?: string;
 };
 
 export interface AIProvider {
@@ -123,6 +126,8 @@ export interface AIProvider {
   converse(request: ConverseRequest): Promise<ConverseReply>;
   /** `live.onProgress` hears each progress line as the search says it (POST /api/find-protocol as server-sent events). */
   findProtocol(query: string, live?: FindProtocolLive): Promise<FoundProtocol>;
+  /** A step card's picture as SVG, drawn from the step's facts (server/ai/picture.ts). Optional: without it the card keeps its simple one. */
+  drawStep?(facts: StepFacts): Promise<string>;
   /** Reads a plate reader's screen, printout or odd export (server/ai/plate.ts); the route parses ordinary files itself. */
   readPlate?(input: PlateInput): Promise<PlateReading>;
   /** Kit photos (KitVision, server/ai/vision.ts). Optional: a provider without them answers /api/kit/* with 501. */

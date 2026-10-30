@@ -4,6 +4,7 @@ import type { Box } from '../../../shared/ai.ts';
 import { useRun } from '../../state/run.ts';
 import type { How, Pick, Thing } from './matching.ts';
 import type { Shot } from './photo.ts';
+import { cutOut } from '../../components/bench/cutout.ts';
 
 /**
  * This round of photographing the kit: the photos, what the models found on them, which bottle is where, and what
@@ -49,11 +50,19 @@ type KitActions = {
   reject: (said: string) => void;
   setReassign: (reassign: boolean) => void;
   skip: (component: string, said: string) => void;
+  /** The bottle's picture did not come out whole: its match is dropped and Chapp asks for it again, on the next photo. */
+  retake: (component: string, said: string) => void;
   ask: (component: string | null) => void;
   say: (said: string | null) => void;
   seed: (session: Partial<KitSession>) => void;
   clear: () => void;
 };
+
+/** A matched bottle's crop goes into the run, and is cut out of its background right away (bench/cutout.ts). */
+function keep(component: string, crop: string) {
+  useRun.getState().setPhoto(component, crop);
+  void cutOut(crop);
+}
 
 const empty: KitSession = { shots: [], seen: {}, picks: {}, things: [], skipped: {}, pending: null, asking: null, reassign: false, said: null, sample: false };
 
@@ -103,7 +112,7 @@ export const useKit = create<KitSession & KitActions>()(
       found: (picks, things, said) => {
         const { sample } = get();
         const fresh = Object.entries(picks).filter(([id]) => !get().picks[id]);
-        if (!sample) for (const [id, pick] of fresh) useRun.getState().setPhoto(id, pick.crop);
+        if (!sample) for (const [id, pick] of fresh) keep(id, pick.crop);
         set(s => ({ picks: { ...s.picks, ...Object.fromEntries(fresh) }, things: [...s.things, ...things], ...(said === null ? {} : { said }) }));
       },
       answer: (id, component, how, said) => {
@@ -113,7 +122,7 @@ export const useKit = create<KitSession & KitActions>()(
         const rest = things.filter(t => t !== thing);
         if (!component) return set({ things: rest, asking: null, reassign: false, said });
         const pick: Pick = { shot: thing.shot, box: thing.box, boxes: thing.boxes, crop: thing.crop, how };
-        if (!sample) useRun.getState().setPhoto(component, pick.crop);
+        if (!sample) keep(component, pick.crop);
         set(s => ({
           picks: { ...s.picks, [component]: pick },
           skipped: { ...s.skipped, [component]: false },
@@ -128,7 +137,7 @@ export const useKit = create<KitSession & KitActions>()(
         const { pending, sample } = get();
         if (!pending) return;
         const pick: Pick = { shot: pending.shot, box: pending.box, crop: pending.crop };
-        if (!sample) useRun.getState().setPhoto(component, pick.crop);
+        if (!sample) keep(component, pick.crop);
         set(s => ({
           picks: { ...s.picks, [component]: pick },
           skipped: { ...s.skipped, [component]: false },
@@ -143,6 +152,12 @@ export const useKit = create<KitSession & KitActions>()(
       reject: said => set({ pending: null, reassign: false, said }),
       setReassign: reassign => set({ reassign }),
       skip: (component, said) => set(s => ({ skipped: { ...s.skipped, [component]: true }, asking: null, said })),
+      retake: (component, said) =>
+        set(s => {
+          const picks = { ...s.picks };
+          delete picks[component];
+          return { picks, skipped: { ...s.skipped, [component]: false }, pending: null, asking: component, reassign: false, said };
+        }),
       ask: component => set({ asking: component, pending: null, reassign: false }),
       say: said => set({ said }),
       seed: session => set({ ...empty, ...session }),

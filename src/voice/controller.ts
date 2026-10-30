@@ -2,6 +2,7 @@ import { useSession, type Voice } from '../state/session.ts';
 import { BrowserEngine } from './browser.ts';
 import { AFTER_SPEAKING_MS, chooseEngine, PROBLEM_TEXT, type Engine, type EngineKind, type Mode, type Problem } from './engine.ts';
 import { fixLabWords } from './labWords.ts';
+import { LiveEngine } from './live.ts';
 import { ServerEngine } from './server.ts';
 import { isSpeaking, stopSpeaking } from './speak.ts';
 
@@ -19,8 +20,9 @@ let mode: Mode | null = null;
 /** Bumped for every engine, so events from one that was replaced are ignored. */
 let generation = 0;
 /**
- * The browser's recognizer could not work here (no service, no network, could not reach the microphone): use the
- * server from now on, which only needs getUserMedia. With no microphone at all it reports the same problem itself.
+ * Live speech or the browser's recognizer could not work here (no WebSocket through, no service, no network): record
+ * turns for the server from now on, which only needs getUserMedia and a request. With no microphone at all it reports
+ * the same problem itself.
  */
 let serverFromNowOn = false;
 let unwatchSpeaking: (() => void) | null = null;
@@ -112,7 +114,7 @@ function run(next: EngineKind) {
     end: (problem?: Problem) => live() && ended(problem),
   };
   kind = next;
-  engine = next === 'browser' ? new BrowserEngine(mode ?? 'tap', events) : new ServerEngine(mode ?? 'tap', events);
+  engine = next === 'live' ? new LiveEngine(mode ?? 'tap', events) : next === 'browser' ? new BrowserEngine(mode ?? 'tap', events) : new ServerEngine(mode ?? 'tap', events);
   engine.start();
 }
 
@@ -135,7 +137,8 @@ function deliver(heard: string) {
 function ended(problem?: Problem) {
   const wasKind = kind;
   const wasMode = mode;
-  if (wasKind === 'browser' && wasMode && (problem === 'unavailable' || problem === 'network' || problem === 'no-mic')) {
+  const fallBack = wasKind === 'browser' ? ['unavailable', 'network', 'no-mic'] : wasKind === 'live' ? ['network'] : [];
+  if (wasMode && problem && fallBack.includes(problem)) {
     serverFromNowOn = true;
     close();
     mode = wasMode;

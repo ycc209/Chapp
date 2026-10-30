@@ -53,6 +53,17 @@ export function encodeWav(samples: Float32Array, sampleRate = WAV_RATE): Uint8Ar
   return bytes;
 }
 
+/** A chunk of the microphone as live speech streams it (live.ts): 16-bit little-endian mono PCM at 16 kHz, no header. */
+export function toPcm16(samples: Float32Array, fromRate: number): ArrayBuffer {
+  const down = downsample(samples, fromRate);
+  const view = new DataView(new ArrayBuffer(down.length * 2));
+  for (let i = 0; i < down.length; i++) {
+    const s = Math.max(-1, Math.min(1, down[i]!));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return view.buffer;
+}
+
 /** The microphone's samples as the WAV the server transcribes. */
 export function toWav(samples: Float32Array, fromRate: number): Blob {
   return new Blob([encodeWav(downsample(samples, fromRate))], { type: 'audio/wav' });
