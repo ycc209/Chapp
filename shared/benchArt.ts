@@ -13,13 +13,18 @@ export type Frac = [number, number];
 
 export type Art = {
   src: string;
-  /** The box on the bench, in bench units (a rack's is its aspect only: it is as wide as the scene says). */
+  /** The box on the bench, in bench units. */
   w: number;
   h: number;
   cx: number;
   foot: number;
   /** The inside of a vessel, where liquid shows, as fractions of the picture. */
   liquid?: Frac[];
+  /**
+   * A screw cap's box (left, top, right, bottom fractions), taken off when the vessel is open; how wide its mouth is;
+   * and where the cap then stands, right of the vessel's axis (in its widths): in front of a bottle, beside a tube.
+   */
+  cap?: { box: [number, number, number, number]; mouth: number; at: number };
 };
 
 const picture = (name: string) => `/bench/${name}.png`;
@@ -48,6 +53,7 @@ export const ART = {
     cx: 0.495,
     foot: 0.995,
     liquid: [[0.09, 0.19], [0.9, 0.19], [0.9, 0.82], [0.76, 0.9], [0.66, 0.96], [0.55, 0.995], [0.44, 0.995], [0.33, 0.96], [0.23, 0.9], [0.09, 0.82]],
+    cap: { box: [0.02, 0, 0.98, 0.135], mouth: 0.84, at: 0.95 },
   },
   bottle: {
     src: picture('bottle'),
@@ -56,11 +62,11 @@ export const ART = {
     cx: 0.5,
     foot: 0.995,
     liquid: [[0.18, 0.24], [0.82, 0.24], [0.95, 0.34], [1, 0.42], [1, 0.92], [0.93, 0.96], [0.8, 0.985], [0.2, 0.985], [0.07, 0.96], [0, 0.92], [0, 0.42], [0.05, 0.34]],
+    cap: { box: [0.15, 0.015, 0.86, 0.195], mouth: 0.46, at: 0.34 },
   },
   pipette: { src: picture('pipette'), w: 32.4, h: 142.5, cx: 0.675, foot: 0.995 },
   reservoir: { src: picture('reservoir'), w: 76, h: 44.8, cx: 0.5, foot: 0.99, liquid: shrink(RESERVOIR_RIM, 0.86) },
   plate: { src: picture('plate'), w: 184, h: 95.7, cx: 0.5, foot: 0.975 },
-  rack: { src: picture('rack'), w: 448, h: 122, cx: 0.5, foot: 0.99 },
   dish: { src: picture('dish'), w: 112, h: 72.3, cx: 0.5, foot: 0.99 },
   flask: { src: picture('flask-base'), w: 90, h: 47.2, cx: 0.5, foot: 0.99 },
   beaker: {
@@ -88,12 +94,9 @@ export const ART = {
 /** The flask's medium, as a mask over the flask picture (white where the medium is): any colour can stand in it. */
 export const FLASK_MEDIUM_MASK = picture('flask-medium-mask');
 
-/** Where the rack's front face begins, as a fraction of its height: drawn again over the tubes standing in it. */
-export const RACK_FRONT = 0.67;
-
-/** A point of a picture on the bench, for the picture standing on its foot (sized `w` × `h` when not its own box). */
-export function at(art: Art, fx: number, fy: number, w = art.w, h = art.h): [number, number] {
-  return [(fx - art.cx) * w, (fy - art.foot) * h];
+/** A point of a picture on the bench, for the picture standing on its foot. */
+export function at(art: Art, fx: number, fy: number): [number, number] {
+  return [(fx - art.cx) * art.w, (fy - art.foot) * art.h];
 }
 
 /** A polygon shrunk towards its centre: the inside of a rim. */
@@ -120,7 +123,8 @@ const PLATE_FACE: Frac[] = [
 export function plateFrame() {
   const art = ART.plate;
   const face = PLATE_FACE.map(([fx, fy]) => at(art, fx, fy));
-  const cover = shrink(PLATE_FACE, 0.93).map(([fx, fy]) => at(art, fx, fy));
+  // To the face's edge: the picture's outer wells come close to it.
+  const cover = shrink(PLATE_FACE, 1).map(([fx, fy]) => at(art, fx, fy));
   const [back, right, , left] = shrink(PLATE_FACE, 0.82).map(([fx, fy]) => at(art, fx, fy)) as [number, number][];
   return { face, cover, back: back!, right: right!, left: left! };
 }

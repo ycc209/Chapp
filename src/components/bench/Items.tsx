@@ -1,6 +1,6 @@
 import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
 import type { Item } from '../../../shared/bench.ts';
-import { ART, FLASK_MEDIUM_MASK, RACK_FRONT, at, plateFrame, wellAt, type Art } from '../../../shared/benchArt.ts';
+import { ART, FLASK_MEDIUM_MASK, at, plateFrame, wellAt, type Art } from '../../../shared/benchArt.ts';
 import { useCutout } from './cutout.ts';
 
 /**
@@ -66,9 +66,42 @@ function Shadow({ w, d = 4 }: { w: number; d?: number }) {
   return <ellipse cx={0} cy={1} rx={w / 2} ry={d} fill={u('shadow')} />;
 }
 
-/** A picture standing on its foot: its own box, or sized `w` × `h` (a rack as wide as its tubes). */
-function Picture({ art, w = art.w, h = art.h }: { art: Art; w?: number; h?: number }) {
-  return <image href={art.src} x={-art.cx * w} y={-art.foot * h} width={w} height={h} preserveAspectRatio="none" />;
+/** A picture standing on its foot. */
+function Picture({ art }: { art: Art }) {
+  return <image href={art.src} x={-art.cx * art.w} y={-art.foot * art.h} width={art.w} height={art.h} preserveAspectRatio="none" />;
+}
+
+/**
+ * A vessel's picture, open or capped. Open, the picture stops under its cap (the mouth shows), and the cap, cut from
+ * the same picture, stands upside down on the bench at its right (in `colour`, a bottle's).
+ */
+function Capped({ art, open, clip, colour, ms = 0 }: { art: Art; open?: boolean; clip: string; colour?: string; ms?: number }) {
+  if (!open || !art.cap) return <Picture art={art} />;
+  const [l, t, r, b] = art.cap.box;
+  const [x0, y0] = at(art, l, t);
+  const [x1, y1] = at(art, r, b);
+  const [, top] = at(art, 0, 0);
+  const [, bottom] = at(art, 0, 1);
+  const w = x1 - x0, h = y1 - y0;
+  const mouth = (art.cap.mouth * art.w) / 2;
+  // A little in front: lower on the bench than the vessel's foot.
+  const cx = art.w * art.cap.at, cy = 3;
+  return (
+    <g>
+      <clipPath id={`${clip}-body`}>
+        <rect x={-art.w} y={y1} width={art.w * 2} height={bottom - y1} />
+      </clipPath>
+      <image href={art.src} x={-art.cx * art.w} y={top} width={art.w} height={art.h} preserveAspectRatio="none" clipPath={`url(#${clip}-body)`} />
+      <ellipse cx={(x0 + x1) / 2} cy={y1 + 0.6} rx={mouth} ry={Math.max(1.2, mouth * 0.22)} fill="#e6ebf1" stroke="#a9b5c3" strokeWidth={0.6} />
+      <g transform={`translate(${cx} ${cy}) scale(1 -1)`}>
+        <Shadow w={w * 0.9} d={1.6} />
+        <svg x={-w / 2} y={0} width={w} height={h} viewBox={`${(l * art.w).toFixed(2)} ${(t * art.h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`} preserveAspectRatio="none" overflow="hidden">
+          <image href={art.src} width={art.w} height={art.h} preserveAspectRatio="none" />
+          {colour && <rect x={l * art.w} y={t * art.h} width={w} height={h} rx={2.2} opacity={0.85} style={{ fill: colour, ...multiply, ...ease(ms) }} />}
+        </svg>
+      </g>
+    </g>
+  );
 }
 
 /** Liquid in a vessel: a column round `x` from `bottom` up to `level` of the way to `top`, with a lighter surface, within `clip`. */
@@ -123,13 +156,22 @@ function Display({ x, y, w, h, text, size = 5.2, angle = 0 }: { x: number; y: nu
 export const BigText = createContext(false);
 const useBig = () => useContext(BigText);
 
+/**
+ * A picture drawn small, on a step's card (BenchView's `still`): words too small to read there (a plate's rows and
+ * columns, a tube's letter) are left out, and the ones that say the step (the pipette's volume, an arrow's amount)
+ * stand in pills big enough to read.
+ */
+export const ThumbText = createContext(false);
+export const useThumb = () => useContext(ThumbText);
+
 /** A label in a white pill centred on (x, y): the amount on an arrow, the volume by the pipette, the temperature over the incubator. */
 function Pill({ x, y, text }: { x: number; y: number; text: string }) {
   const big = useBig();
-  const size = big ? 15 : 6.5, h = big ? 24 : 12, w = text.length * size * 0.66 + (big ? 16 : 8);
+  const thumb = useThumb();
+  const size = big ? 15 : thumb ? 11 : 6.5, h = big ? 24 : thumb ? 18 : 12, w = text.length * size * 0.66 + (big ? 16 : thumb ? 12 : 8);
   return (
     <g>
-      <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={h / 2} fill="#ffffff" stroke="#c9d2dc" strokeWidth={big ? 0.9 : 0.6} />
+      <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={h / 2} fill="#ffffff" stroke="#c9d2dc" strokeWidth={big || thumb ? 0.9 : 0.6} />
       <text x={x} y={y + size * 0.06} fontSize={size} fontWeight={700} fill={INK} textAnchor="middle" dominantBaseline="middle">
         {text}
       </text>
@@ -139,11 +181,13 @@ function Pill({ x, y, text }: { x: number; y: number; text: string }) {
 
 /**
  * A big pill at an item's own point (x, y), the item's scale and turn undone so it reads like every other; nothing when
- * the words are small. Undone as fast as the item changes (`ms`), so the pill keeps its size while the item shrinks.
+ * the words are small (but on a card's small picture, where it is the one word that reads). Undone as fast as the
+ * item changes (`ms`), so the pill keeps its size while the item shrinks.
  */
 function Callout({ it, x, y, text, ms = 0 }: { it: Item; x: number; y: number; text: string; ms?: number }) {
   const big = useBig();
-  if (!big) return null;
+  const thumb = useThumb();
+  if (!big && !thumb) return null;
   return (
     <g style={{ transform: `translate(${x}px, ${y}px) rotate(${-(it.rotate ?? 0)}deg) scale(${1 / (it.scale ?? 1)})`, transition: `transform ${ms}ms cubic-bezier(.4,.1,.2,1)` }}>
       <Pill x={0} y={0} text={text} />
@@ -175,7 +219,7 @@ export function Conical({ it, ms, clip }: { it: Item; ms: number; clip: string }
   return (
     <g>
       <Shadow w={26} d={3} />
-      <Picture art={art} />
+      <Capped art={art} open={it.open} clip={clip} />
       <Fill art={art} clip={clip} level={it.level ?? 0} colour={it.liquid ?? EMPTY} ms={ms} />
       {it.label && (
         <g>
@@ -190,7 +234,7 @@ export function Conical({ it, ms, clip }: { it: Item; ms: number; clip: string }
   );
 }
 
-/** A reagent bottle: its cap in the bottle's colour, and a printed label with the reagent's name. */
+/** A reagent bottle: its cap in the bottle's colour (on it, or beside it when open), and a printed label with the reagent's name. */
 export function Bottle({ it, ms, clip }: { it: Item; ms: number; clip: string }) {
   const art = ART.bottle;
   const words = (it.label ?? '').split(/\s+/);
@@ -203,9 +247,9 @@ export function Bottle({ it, ms, clip }: { it: Item; ms: number; clip: string })
   return (
     <g>
       <Shadow w={44} d={4} />
-      <Picture art={art} />
+      <Capped art={art} open={it.open} clip={clip} colour={it.cap ?? '#2b7de9'} ms={ms} />
       <Fill art={art} clip={clip} level={it.level ?? 0} colour={it.liquid ?? EMPTY} ms={ms} />
-      <rect x={cx0} y={cy0} width={cx1 - cx0} height={cy1 - cy0} rx={2.2} opacity={0.85} style={{ fill: it.cap ?? '#2b7de9', ...multiply, ...ease(ms) }} />
+      {!it.open && <rect x={cx0} y={cy0} width={cx1 - cx0} height={cy1 - cy0} rx={2.2} opacity={0.85} style={{ fill: it.cap ?? '#2b7de9', ...multiply, ...ease(ms) }} />}
       {it.label && (
         <g>
           <rect x={lx0} y={ly0} width={lw} height={lh} rx={2} fill="#ffffff" stroke="#d0d7e0" strokeWidth={0.6} />
@@ -226,7 +270,9 @@ export function Bottle({ it, ms, clip }: { it: Item; ms: number; clip: string })
 /**
  * The user's own bottle, from their photo of the kit, standing where the drawn bottle would: cut out of its
  * background (cutout.ts), as tall as the drawn bottle (so the arrows and the pipette meet it where they would) and no
- * wider than its place on the bench, its foot melting into its shadow. Only a cut-out that came out whole stands
+ * wider than its place on the bench, its foot melting into its shadow. A photo keeps its cap on, so where the drawn
+ * bottle would stand open it is as tall as the open bottle's mouth: what is poured from it or taken up starts at its
+ * top rather than in its cap. Only a cut-out that came out whole stands
  * there; when it did not (the kit screen asks for a better photo), the drawn bottle does. Until it is ready the drawn
  * bottle breathes lighter and back (after a moment, so a cut kept from before does not flicker), and the photo fades
  * in, again when Muse Image's whole bottle replaces it.
@@ -241,7 +287,9 @@ export function PhotoBottle({ it, ms, clip, photo }: { it: Item; ms: number; cli
     );
   if (!cut.ok) return <Bottle it={it} ms={ms} clip={clip} />;
   const aspect = cut.width / cut.height;
-  const width = Math.min(52, 89 * aspect);
+  const art = ART.bottle;
+  const tall = it.open ? (art.foot - art.cap.box[3]) * art.h : art.h;
+  const width = Math.min(52, tall * aspect);
   const height = width / aspect;
   return (
     <g key={cut.src} className="chapp-anim" style={{ animation: 'chapp-fade-in 0.5s ease-out both' }}>
@@ -282,6 +330,7 @@ const darker = (hex: string) => `#${[0, 1, 2].map(i => Math.round(parseInt(hex.s
 
 export function Plate({ it, ms }: { it: Item; ms: number }) {
   const u = useDefs();
+  const thumb = useThumb();
   const wells = it.wells ?? {};
   const { cover } = plateFrame();
   const cells: ReactNode[] = [];
@@ -305,41 +354,25 @@ export function Plate({ it, ms }: { it: Item; ms: number }) {
       <Picture art={ART.plate} />
       <polygon points={cover.map(p => `${p[0]},${p[1]}`).join(' ')} fill="#f7f9fb" />
       {cells}
-      {Array.from({ length: 12 }, (_, c) => {
-        const { x, y } = wellAt(-1.15, c);
-        return (
-          <text key={c} x={x} y={y} fontSize={3.4} fill={SOFT} textAnchor="middle" dominantBaseline="middle">
-            {c + 1}
-          </text>
-        );
-      })}
-      {Array.from({ length: 8 }, (_, r) => {
-        const { x, y } = wellAt(r, -1.05);
-        return (
-          <text key={r} x={x} y={y} fontSize={3.6} fill={SOFT} textAnchor="middle" dominantBaseline="middle">
-            {String.fromCharCode(65 + r)}
-          </text>
-        );
-      })}
+      {!thumb &&
+        Array.from({ length: 12 }, (_, c) => {
+          const { x, y } = wellAt(-1.15, c);
+          return (
+            <text key={c} x={x} y={y} fontSize={3.4} fill={SOFT} textAnchor="middle" dominantBaseline="middle">
+              {c + 1}
+            </text>
+          );
+        })}
+      {!thumb &&
+        Array.from({ length: 8 }, (_, r) => {
+          const { x, y } = wellAt(r, -1.05);
+          return (
+            <text key={r} x={x} y={y} fontSize={3.6} fill={SOFT} textAnchor="middle" dominantBaseline="middle">
+              {String.fromCharCode(65 + r)}
+            </text>
+          );
+        })}
       {it.label && <Callout it={it} x={55} y={-114} text={it.label} ms={ms} />}
-    </g>
-  );
-}
-
-/** A tube rack, as wide as the scene says: the whole of it behind the tubes and, drawn after them, its front face. */
-export function Rack({ it, front }: { it: Item; front?: boolean }) {
-  const art = ART.rack;
-  const w = it.width ?? 180, h = (w * art.h) / art.w;
-  if (front)
-    return (
-      <svg x={-w / 2} y={(RACK_FRONT - art.foot) * h} width={w} height={(1 - RACK_FRONT) * h} viewBox={`0 ${RACK_FRONT * art.h} ${art.w} ${(1 - RACK_FRONT) * art.h}`} preserveAspectRatio="none">
-        <image href={art.src} width={art.w} height={art.h} preserveAspectRatio="none" />
-      </svg>
-    );
-  return (
-    <g>
-      <Shadow w={w + 8} d={5} />
-      <Picture art={art} w={w} h={h} />
     </g>
   );
 }

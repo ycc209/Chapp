@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { BenchScene, benchSceneJsonSchema } from '../shared/bench.ts';
+import { wellAt } from '../shared/benchArt.ts';
 import { benchScenes } from '../shared/benchScenes.ts';
 import { Protocol } from '../shared/protocol.ts';
 import { BenchView, photoOf, settled } from '../src/components/bench/BenchView.tsx';
@@ -26,33 +27,55 @@ describe.skipIf(!protocols.length)('bench scenes', () => {
         // Every action is about something on the bench.
         const ids = new Set(scene!.items.map(i => i.id));
         for (const a of scene!.actions) expect(ids.has(a.id), `${step.id}: ${a.id}`).toBe(true);
+        // Drawn in a square round what it draws (frame.ts).
         const svg = renderToStaticMarkup(<BenchView scene={scene!} mode="still" />);
-        expect(svg).toMatch(/^<svg[^>]*viewBox="0 0 240 240"/);
+        expect(svg).toMatch(/^<svg[^>]*viewBox="-?[\d.]+ -?[\d.]+ ([\d.]+) \1"/);
       }
     }
   });
 
-  it('carries BCA’s bench on: clear standards, the working reagent the colour the protocol gives it, wells that turn', () => {
+  it('carries BCA’s bench on: pale standards, the working reagent the colour the protocol gives it, wells that turn', () => {
     const bca = protocols.find(p => p.id === 'pierce-bca');
     if (!bca) return;
     const proc = bca.procedures.find(x => x.format === 'microplate')!;
     const scenes = benchScenes(bca, proc);
     const at = (stage: string, k = 0) => settled(scenes.get(proc.steps.filter(s => s.stage === stage)[k]!.id)!);
 
+    // The vials stand on the bench (no rack), the stock and diluent open behind them, clear of the pipette at the last.
     const standards = at('standards');
     const vials = Object.values(standards).filter(i => i.kind === 'tube');
     expect(vials.map(v => v.label)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
-    expect(vials.every(v => v.liquid === '#e3eef8' && v.level! > 0)).toBe(true);
+    expect(vials.every(v => v.liquid === '#b9d3f0' && v.level! > 0)).toBe(true);
     expect(vials[0]!.source).toMatchObject({ from: 'protocol', field: expect.stringMatching(/^standardCurves\./) });
+    const bottles = Object.values(standards).filter(i => i.kind === 'bottle');
+    expect(bottles).toHaveLength(2);
+    expect(bottles.every(b => b.open)).toBe(true);
+    expect(standards.pipette!.x).toBe(vials.at(-1)!.x);
+    expect(bottles.every(b => Math.abs(b.x - standards.pipette!.x) > 40)).toBe(true);
 
-    const mix = at('mix').mix!;
-    expect(mix.liquid).toBe('#3aa76d');
-    expect(Object.values(at('mix')).some(i => i.kind === 'arrow' && i.label === '50 parts')).toBe(true);
+    // The parts poured into the open tube, their arrows ending apart.
+    const mixing = at('mix');
+    expect(mixing.mix!.liquid).toBe('#3aa76d');
+    expect(mixing.mix!.open).toBe(true);
+    const arrows = Object.values(mixing).filter(i => i.kind === 'arrow');
+    expect(arrows.some(i => i.label === '50 parts')).toBe(true);
+    expect(Math.abs(arrows[0]!.to![1] - arrows[1]!.to![1])).toBeGreaterThanOrEqual(20);
 
-    // Loading the working reagent: its colour, in the wells the samples were loaded into.
-    const loaded = at('load', 1).plate!;
+    // Loading the standards and samples: from their vials, behind the plate; the pipette's tip ends just over a well.
+    const samples = at('load', 0);
+    expect(Object.values(samples).filter(i => i.kind === 'tube')).toHaveLength(9);
+    expect(Object.values(samples).every(i => i.kind !== 'tube' || i.y < samples.plate!.y - 90)).toBe(true);
+    const last = samples.plate!.y + wellAt(0, Math.ceil(Object.keys(samples.plate!.wells!).length / 8) - 1).y * (samples.plate!.scale ?? 1);
+    expect(samples.pipette!.y).toBeGreaterThan(last - 16);
+
+    // Loading the working reagent: its colour, in the wells the samples were loaded into, from its open tube standing
+    // clear of the plate.
+    const reagent = at('load', 1);
+    const loaded = reagent.plate!;
     expect(Object.keys(loaded.wells!).length).toBeGreaterThan(8);
     expect(Object.values(loaded.wells!)).toContain('#3aa76d');
+    expect(reagent.mix!.open).toBe(true);
+    expect(reagent.mix!.x + 14).toBeLessThan(loaded.x - (184 * loaded.scale!) / 2);
 
     // At 37 °C into the incubator and out, the wells turned towards purple, more so the stronger the standard: vial A
     // (2000 µg/mL) in A1 and B1, the blank (vial I) in A3 and B3.

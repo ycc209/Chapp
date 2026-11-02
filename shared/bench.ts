@@ -26,7 +26,6 @@ export const ItemKind = z.enum([
   'pipette', // micropipette, tip down (seen side on, a multichannel looks the same)
   'reservoir', // reagent trough
   'plate', // 96-well plate
-  'rack', // tube rack
   'dish', // culture dish of cells
   'flask', // culture flask
   'beaker',
@@ -47,8 +46,6 @@ export const Look = z.object({
   x: z.number(),
   y: z.number(),
   scale: z.number().positive().optional(),
-  /** A rack's width. */
-  width: z.number().positive().optional(),
   rotate: z.number().optional(),
   hidden: z.boolean().optional(),
   /** How full (0–1), and with what. */
@@ -56,6 +53,7 @@ export const Look = z.object({
   liquid: Colour.optional(),
   /** A cap's colour, or a pipette's button (which also says its range). */
   cap: Colour.optional(),
+  /** Uncapped: a bottle or conical tube something is taken from or put into, its cap upside down on the bench. */
   open: z.boolean().optional(),
   /** Filled wells of a plate, by name ("A1"), and their colour. */
   wells: z.record(z.string().regex(/^[A-H](?:[1-9]|1[0-2])$/), Colour).optional(),

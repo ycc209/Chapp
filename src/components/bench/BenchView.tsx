@@ -1,13 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BenchScene, Item, Look } from '../../../shared/bench.ts';
-import { Arrow, BenchDefs, Beaker, BigText, Bottle, Centrifuge, Chart, Conical, Dish, Flask, Incubator, Microscope, PhotoBottle, Pipette, Plate, Rack, Reader, Reservoir, Thermometer, Timer, Tube, WashBottle } from './Items.tsx';
+import { frameOf } from './frame.ts';
+import { Arrow, BenchDefs, Beaker, BigText, Bottle, Centrifuge, Chart, Conical, Dish, Flask, Incubator, Microscope, PhotoBottle, Pipette, Plate, Reader, Reservoir, Thermometer, ThumbText, Timer, Tube, useThumb, WashBottle } from './Items.tsx';
 
 /**
  * A bench scene (shared/bench.ts) as a drawing that happens. `still`: the step done, its items appearing one after
  * another the first time it is shown (a step card). `play`: from the start, its timeline played: the pipette moves,
  * drops fall, wells fill column by column, a colour turns (the enlarged step). A tap on an item picks it. A kit bottle
  * the user has photographed (`photos`, by component id) stands on the bench as their own bottle. `big`: the words on
- * it (amounts, volumes, temperatures) big enough to read from arm's length, for the run.
+ * it (amounts, volumes, temperatures) big enough to read from arm's length, for the run. Either way the picture is
+ * framed round what the scene draws (frame.ts), and a still one, drawn small on a card, keeps only words that read.
  */
 
 type Drop = { key: number; x: number; y1: number; y2: number; colour: string; ms: number };
@@ -64,22 +66,12 @@ export function BenchView({ scene, mode, picked, onPick, replay = 0, photos, big
   }, [scene, mode, start, replay]);
 
   const order = scene.items.map(it => looks[it.id]!).filter(Boolean);
-  const lastTube = order.map(it => it.kind).lastIndexOf('tube');
-  const drawn: ReactNode[] = [];
-  order.forEach((it, i) => {
-    drawn.push(<Placed key={it.id} it={it} ms={ms[it.id] ?? 600} index={i} picked={picked === it.id} onPick={onPick} clip={`${id}-${it.id.replace(/[^a-zA-Z0-9]/g, '')}`} photo={photoOf(it, photos)} />);
-    // A rack's front face covers the feet of the tubes in it.
-    if (i === lastTube)
-      for (const rack of order.filter(r => r.kind === 'rack'))
-        drawn.push(
-          <g key={`${rack.id}-front`} style={{ transform: `translate(${rack.x}px, ${rack.y}px) scale(${rack.scale ?? 1})` }}>
-            <Rack it={rack} front />
-          </g>,
-        );
-  });
+  const drawn = order.map((it, i) => <Placed key={it.id} it={it} ms={ms[it.id] ?? 600} index={i} picked={picked === it.id} onPick={onPick} clip={`${id}-${it.id.replace(/[^a-zA-Z0-9]/g, '')}`} photo={photoOf(it, photos)} />);
+  const still = mode === 'still';
+  const frame = useMemo(() => frameOf(scene, { still, big }), [scene, still, big]);
 
   return (
-    <svg viewBox="0 0 240 240" className="block size-full" role="img" aria-label={scene.title} onClick={() => onPick?.(null)}>
+    <svg viewBox={frame} className="block size-full" role="img" aria-label={scene.title} onClick={() => onPick?.(null)}>
       <style>{`
         .bench-in { animation: bench-in 520ms cubic-bezier(.2,.8,.2,1.15) both; }
         @keyframes bench-in { from { opacity: 0; transform: translateY(6px) scale(.96); } to { opacity: 1; transform: none; } }
@@ -88,7 +80,9 @@ export function BenchView({ scene, mode, picked, onPick, replay = 0, photos, big
         @media (prefers-reduced-motion: reduce) { .bench-in, .bench-drop { animation: none; } }
       `}</style>
       <BenchDefs id={id}>
-        <BigText.Provider value={!!big}>{drawn}</BigText.Provider>
+        <BigText.Provider value={!!big}>
+          <ThumbText.Provider value={still && !big}>{drawn}</ThumbText.Provider>
+        </BigText.Provider>
         {drops.map(d => (
           <g key={d.key} transform={`translate(${d.x} ${d.y1})`}>
             <g className="bench-drop" style={{ ['--ms' as string]: `${d.ms}ms`, ['--fall' as string]: `${d.y2 - d.y1}px` }}>
@@ -103,6 +97,7 @@ export function BenchView({ scene, mode, picked, onPick, replay = 0, photos, big
 }
 
 function Placed({ it, ms, index, picked, onPick, clip, photo }: { it: Item; ms: number; index: number; picked: boolean; onPick?: (id: string | null) => void; clip: string; photo?: string }) {
+  const thumb = useThumb();
   return (
     <g
       style={{
@@ -123,7 +118,7 @@ function Placed({ it, ms, index, picked, onPick, clip, photo }: { it: Item; ms: 
     >
       <g className="bench-in" style={{ animationDelay: `${index * 70}ms` }}>
         {photo ? <PhotoBottle it={it} ms={ms} clip={clip} photo={photo} /> : draw(it, ms, clip)}
-        {it.kind === 'tube' && it.label && (
+        {it.kind === 'tube' && it.label && !thumb && (
           <text x={0} y={11} fontSize={6.4} fontWeight={700} fill="#2f3a48" textAnchor="middle" dominantBaseline="middle">
             {it.label}
           </text>
@@ -147,8 +142,6 @@ function draw(it: Item, ms: number, clip: string): ReactNode {
       return <Reservoir it={it} ms={ms} />;
     case 'plate':
       return <Plate it={it} ms={ms} />;
-    case 'rack':
-      return <Rack it={it} />;
     case 'dish':
       return <Dish it={it} ms={ms} />;
     case 'flask':

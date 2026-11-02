@@ -14,7 +14,8 @@ import { colourIn, colourWordIn, mixColour, prepKind } from './stepFacts.ts';
  */
 
 const CLEAR = '#e3eef8';
-const SAMPLE = '#d3e3f3';
+// Standards and samples are mostly colourless; drawn a pale blue all the same, so the wells they fill show as filled.
+const SAMPLE = '#b9d3f0';
 const MEDIUM = '#f3b2bf';
 const CAPS = ['#2b7de9', '#e0564f', '#f2b134', '#2f9e74', '#7a5af8', '#5b6573'];
 const BENCH = 214;
@@ -41,11 +42,20 @@ export type Sized = {
 /** What is on the bench between steps. */
 type Bench = { tubes: string[]; mix: { colour: string; level: number; label?: string } | null; wells: Record<string, string>; samples: { colour: string; level: number } | null; flask: { colour: string; level: number } };
 
-/** Where a plate's well is on the bench, for a plate standing at (x, y): the drawn plate's well (benchArt.ts) moved there. */
-function wellAt(px: number, py: number, row: number, col: number) {
+/** Where a plate's well is on the bench, for a plate standing at (x, y) at scale s: the drawn plate's well (benchArt.ts) moved there. */
+function wellAt(px: number, py: number, row: number, col: number, s = 1) {
   const w = wellOnPlate(row, col);
-  return { x: px + w.x, y: py + w.y };
+  return { x: px + w.x * s, y: py + w.y * s };
 }
+
+/** Where an open bottle's or conical tube's mouth is, for one standing on its foot at y at scale s (its cap off). */
+const mouthOf = (kind: 'bottle' | 'conical', y: number, s: number) => y - (ART[kind].foot - ART[kind].cap.box[3]) * ART[kind].h * s;
+
+/** A pipette's tip just over the well it fills (lower than this, the drop that falls would not show). */
+const OVER_WELL = 12;
+
+/** The standards' vials, a little smaller than life so a row of ten stands on the bench. */
+const TUBE = 0.85;
 
 /** The pipette whose range takes this volume: its plunger colour and what its window shows. */
 function pipetteFor(volume?: { value: number; unit: string }) {
@@ -162,22 +172,27 @@ function equipmentItem(p: Protocol, kind: Item['kind'], icon: RegExp, x: number,
   };
 }
 
-/** The five sample tubes in their rack, as the bench left them. */
+/** The five sample tubes standing on the bench round cx, as the bench left them. */
 function sampleTubes(sc: Scene, bench: Bench, cx: number, s: number) {
-  sc.add({ id: 'rack', kind: 'rack', x: cx, y: BENCH, scale: s, width: 120, represents: 'Tube rack', source: drawn('Somewhere for the tubes to stand.') });
+  const ids: string[] = [];
   for (let i = 0; i < 5; i++)
-    sc.add({ id: `tube:${i + 1}`, kind: 'tube', x: cx + (i - 2) * 20 * s, y: BENCH - 6 * s, scale: s, level: bench.samples?.level ?? 0, liquid: bench.samples?.colour ?? CLEAR, label: String(i + 1), represents: `Tube ${i + 1}`, source: drawn('Five tubes stand for the standards and samples.'), drawn: { colour: 'Clear unless the protocol gives a colour.' } });
+    ids.push(sc.add({ id: `tube:${i + 1}`, kind: 'tube', x: cx + (i - 2) * 20 * s, y: BENCH - 6 * s, scale: s, level: bench.samples?.level ?? 0, liquid: bench.samples?.colour ?? CLEAR, label: String(i + 1), represents: `Tube ${i + 1}`, source: drawn('Five tubes stand for the standards and samples.'), drawn: { colour: 'Clear unless the protocol gives a colour.' } }));
+  return ids;
 }
 
-/** Moves an item (a rack, with its tubes) from `home`, where it was put, to `to`, and hides it inside or shows it again. */
-function moveWith(sc: Scene, id: string, to: { x: number; y: number; scale: number }, home: { x: number; y: number; scale: number }, hidden?: boolean) {
-  sc.at(id, { ...to, ...(hidden === false ? { hidden } : {}) }, 900, 500);
-  if (id === 'rack')
-    for (const it of sc.items.filter(i => i.kind === 'tube'))
-      sc.actions.push({ at: sc.t, ms: 900, id: it.id, set: { x: to.x + ((it.x - home.x) / home.scale) * to.scale, y: to.y + ((it.y - home.y) / home.scale) * to.scale, scale: ((it.scale ?? 1) / home.scale) * to.scale, ...(hidden === false ? { hidden } : {}) } });
+/**
+ * Moves items (the plate, the flask, or the tubes together) from `home`, where they were put round, to `to`, and hides
+ * them inside or shows them again.
+ */
+function moveWith(sc: Scene, ids: string[], to: { x: number; y: number; scale: number }, home: { x: number; y: number; scale: number }, hidden?: boolean) {
+  sc.t += 500;
+  for (const id of ids) {
+    const it = sc.items.find(i => i.id === id)!;
+    sc.actions.push({ at: sc.t, ms: 900, id, set: { x: to.x + ((it.x - home.x) / home.scale) * to.scale, y: to.y + ((it.y - home.y) / home.scale) * to.scale, scale: ((it.scale ?? 1) / home.scale) * to.scale, ...(hidden === false ? { hidden } : {}) } });
+  }
   if (hidden) {
     sc.t += 900;
-    for (const it of [id, ...(id === 'rack' ? sc.items.filter(i => i.kind === 'tube').map(i => i.id) : [])]) sc.actions.push({ at: sc.t, ms: 300, id: it, set: { hidden: true } });
+    for (const id of ids) sc.actions.push({ at: sc.t, ms: 300, id, set: { hidden: true } });
   }
 }
 
@@ -193,7 +208,7 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
   const curve = p.standardCurves.find(c => c.id === (step.standardCurve ?? proc.standardCurve));
   const used = Math.min(96, (curve?.points.length ?? 8) * 2 + 24);
   const wellNames = sized.wells?.length ? sized.wells : Array.from({ length: used }, (_, i) => wellName(i % 8, Math.floor(i / 8)));
-  const vessel = proc.format === 'cells' ? 'flask' : proc.format === 'microplate' ? 'plate' : 'rack';
+  const vessel = proc.format === 'cells' ? 'flask' : proc.format === 'microplate' ? 'plate' : 'tubes';
   // A bottle the step's words name: by its whole name or its label, or by its first word when that word is its own
   // ("ddH2O", "Insulin") rather than any kit's ("Assay Buffer 23" is not in "for desired assays").
   const generic = /^(?:assay|reagent|buffer|mix|solution|standard|working|reaction|stain|medium|probe|wash|sample|kit|control|lysis|dilution|stop|dye)$/;
@@ -203,7 +218,8 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
   });
   const ending = sharedEnding(p.components.filter(c => c.suppliedBy === 'kit').map(c => c.name));
 
-  const bottle = (c: Protocol['components'][number], i: number, x: number, scale = 0.86): Item => {
+  // A kit bottle on the bench; open (its cap beside it) when the step takes from it or puts into it.
+  const bottle = (c: Protocol['components'][number], i: number, x: number, scale = 0.86, open = false): Item => {
     const note = c.notes?.map(n => colourIn(n.text)).find(Boolean);
     return {
       id: `bottle:${c.id}`,
@@ -211,6 +227,7 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       x,
       y: BENCH - 6,
       scale,
+      ...(open ? { open } : {}),
       label: shortName(c.name, ending),
       cap: CAPS[i % CAPS.length],
       level: 0.72,
@@ -249,20 +266,20 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
     drawn: { look: 'A culture flask; medium drawn pink, as phenol red makes most media, and buffer clear.' },
   });
 
-  // What a step takes its reagent up from, standing on the bench at x: the mix in the tube its own step made it in (named
-  // as that step named it, as full as it left it), else the component's bottle. Nothing the protocol does not have (no
-  // reservoir to pour it into). Where the pipette's tip goes into it, or null when the protocol names neither.
+  // What a step takes its reagent up from, standing open on the bench at x: the mix in the tube its own step made it in
+  // (named as that step named it, as full as it left it), else the component's bottle. Nothing the protocol does not
+  // have (no reservoir to pour it into). Where the pipette's tip goes into it, or null when the protocol names neither.
   const takeFrom = (add: NonNullable<Step['add']>[number] | undefined, x: number, scale: number): { id: string; x: number; y: number } | null => {
     if (add?.what === 'mix') {
       const m = p.mixes.find(q => q.id === add.ref) ?? p.mixes.find(q => q.id === (step.mix ?? proc.mix));
       const label = bench.mix?.label ?? (m ? m.short || shortName(m.name) : undefined);
-      sc.add({ id: 'mix', kind: 'conical', x, y: BENCH - 4, scale, label, cap: '#2b7de9', level: bench.mix?.level ?? 0.6, liquid: bench.mix?.colour ?? mixC ?? CLEAR, represents: m ? `${m.name}, in the tube it was made in` : 'The mix', source: m ? said(`mixes.${m.id}`, m.cite) : src, drawn: { vessel: 'The 15 mL conical tube its step made it in.' } });
-      return { id: 'mix', x, y: BENCH - 4 - ART.conical.h * scale + 12 };
+      sc.add({ id: 'mix', kind: 'conical', x, y: BENCH - 4, scale, open: true, label, cap: '#2b7de9', level: bench.mix?.level ?? 0.6, liquid: bench.mix?.colour ?? mixC ?? CLEAR, represents: m ? `${m.name}, in the tube it was made in` : 'The mix', source: m ? said(`mixes.${m.id}`, m.cite) : src, drawn: { vessel: 'The 15 mL conical tube its step made it in.' } });
+      return { id: 'mix', x, y: mouthOf('conical', BENCH - 4, scale) + 8 };
     }
     const c = add?.ref ? p.components.find(q => q.id === add.ref) : named[0];
     if (!c) return null;
-    const id = sc.add(bottle(c, 0, x, scale));
-    return { id, x, y: BENCH - 6 - ART.bottle.h * scale - 6 };
+    const id = sc.add(bottle(c, 0, x, scale, true));
+    return { id, x, y: mouthOf('bottle', BENCH - 6, scale) - 2 };
   };
   /** The pipette goes to take it up; the mix's tube goes down a little each time. */
   const take = (from: { id: string; x: number; y: number }, after: number) => {
@@ -294,48 +311,49 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
     case 'standards': {
       const shown = curve ?? p.standardCurves[0];
       const pts = (shown?.points ?? []).slice(0, 10);
+      // The vials stand in a row on the bench, the pipette's tip just over each in turn.
+      const over = BENCH - 6 - ART.tube.h * TUBE - 4;
       if (!shown) {
-        sc.add({ id: 'rack', kind: 'rack', x: 120, y: BENCH, width: 140, represents: 'Tube rack', source: drawn('Somewhere for the vials to stand.') });
-        for (let i = 0; i < 6; i++) sc.add({ id: `tube:${i + 1}`, kind: 'tube', x: 70 + i * 20, y: BENCH - 6, label: String(i + 1), level: 0, liquid: CLEAR, represents: `Standard ${i + 1}`, source: drawn('The protocol gives no dilution table here: six vials stand for its standards.') });
-        pipette(sc, p, 70, 150);
+        for (let i = 0; i < 6; i++) sc.add({ id: `tube:${i + 1}`, kind: 'tube', x: 70 + i * 20, y: BENCH - 6, scale: TUBE, label: String(i + 1), level: 0, liquid: SAMPLE, represents: `Standard ${i + 1}`, source: drawn('The protocol gives no dilution table here: six vials stand for its standards.') });
+        pipette(sc, p, 70, over);
         for (let i = 0; i < 6; i++) {
           sc.at(`tube:${i + 1}`, { open: true }, 250, i ? 260 : 450);
-          dispense(sc, 70 + i * 20, 150, BENCH - 30, CLEAR, 0);
+          dispense(sc, 70 + i * 20, over, BENCH - 30, SAMPLE, 0);
           sc.at(`tube:${i + 1}`, { level: 0.55 }, 450, 120);
           sc.at(`tube:${i + 1}`, { open: false }, 250, 380);
         }
         break;
       }
-      // The stock the standards are made from and their diluent stand behind the rack: the user's own photo of the
-      // stock, when they took one, is what they see on the bench.
+      const n = Math.max(1, pts.length);
+      const step_ = Math.min(18, 190 / n);
+      const x0 = 120 - ((n - 1) * step_) / 2;
+      // The stock the standards are made from and their diluent stand open behind the vials, to the left, clear of the
+      // pipette as it works along them: the user's own photo of the stock, when they took one, is what they see there.
       const stock = p.components.find(c => c.id === shown.stock);
       const diluent = p.components.find(c => c.id === shown.diluent);
-      if (stock) sc.add({ ...bottle(stock, 0, 34, 0.6), y: BENCH - 60 });
-      if (diluent && diluent.id !== stock?.id) sc.add({ ...bottle(diluent, 1, 206, 0.6), y: BENCH - 60 });
-      const n = Math.max(1, pts.length);
-      const step_ = Math.min(21, 200 / n);
-      const x0 = 120 - ((n - 1) * step_) / 2;
-      sc.add({ id: 'rack', kind: 'rack', x: 120, y: BENCH, width: n * step_ + 18, represents: 'Tube rack', source: drawn('Somewhere for the vials to stand.') });
+      if (stock) sc.add({ ...bottle(stock, 0, x0 + step_ * 1.4, 0.8, true), y: BENCH - 58 });
+      if (diluent && diluent.id !== stock?.id) sc.add({ ...bottle(diluent, 1, x0 + step_ * 3.8, 0.8, true), y: BENCH - 58 });
       pts.forEach((pt, i) =>
         sc.add({
           id: `tube:${pt.id}`,
           kind: 'tube',
           x: x0 + i * step_,
           y: BENCH - 6,
+          scale: TUBE,
           label: pt.id,
           level: bench.tubes.includes(pt.id) ? 0.55 : 0,
-          liquid: CLEAR,
+          liquid: SAMPLE,
           represents: `Vial ${pt.id}: ${pt.concentration.value} ${pt.concentration.unit}${pt.blank ? ' (blank)' : ''} — ${pt.from ? `${pt.take.value} ${pt.take.unit} of ${pt.from === 'stock' ? 'the stock' : pt.from} + ` : ''}${pt.diluent.value} ${pt.diluent.unit} diluent`,
           source: said(`standardCurves.${shown.id}.points.${pt.id}`, shown.cite),
-          drawn: { colour: 'Protein standards are colourless: drawn clear.' },
+          drawn: { colour: 'Protein standards are colourless: drawn pale blue, so they show.' },
         }),
       );
-      pipette(sc, p, x0, 150, pts.find(pt => pt.diluent.value > 0)?.diluent, false);
+      pipette(sc, p, x0, over, pts.find(pt => pt.diluent.value > 0)?.diluent, false);
       pts.forEach((pt, i) => {
         const id = `tube:${pt.id}`;
         const x = x0 + i * step_;
         sc.at(id, { open: true }, 250, i ? 260 : 450);
-        dispense(sc, x, 150, BENCH - 30, CLEAR, 0);
+        dispense(sc, x, over, BENCH - 30, SAMPLE, 0);
         sc.at(id, { level: 0.55 }, 450, 120);
         sc.at(id, { open: false }, 250, 380);
       });
@@ -347,13 +365,15 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       if (!m) {
         const shown = (named.length ? named : p.components.filter(c => c.suppliedBy === 'kit')).slice(0, 2);
         const xs = shown.length === 1 ? [70] : [44, 104];
-        shown.forEach((c, i) => sc.add(bottle(c, i, xs[i]!)));
-        sc.add({ id: 'mix', kind: 'conical', x: 196, y: BENCH - 4, scale: 0.98, cap: '#2b7de9', level: 0, liquid: CLEAR, represents: step.title, source: src, drawn: { vessel: 'A 15 mL conical tube; the protocol does not name the vessel.', colour: 'Drawn clear.' } });
-        pipette(sc, p, xs[0]!, 126);
+        shown.forEach((c, i) => sc.add(bottle(c, i, xs[i]!, 0.86, true)));
+        sc.add({ id: 'mix', kind: 'conical', x: 196, y: BENCH - 4, scale: 0.98, open: true, cap: '#2b7de9', level: 0, liquid: CLEAR, represents: step.title, source: src, drawn: { vessel: 'A 15 mL conical tube; the protocol does not name the vessel.', colour: 'Drawn clear.' } });
+        const from = mouthOf('bottle', BENCH - 6, 0.86) + 4;
+        const into = mouthOf('conical', BENCH - 4, 0.98) - 4;
+        pipette(sc, p, xs[0]!, from);
         shown.forEach((_, i) => {
-          dispense(sc, xs[i]!, 126, BENCH - 50, CLEAR, 500);
-          sc.at('pipette', { x: 196, y: 112 }, 400, 300);
-          sc.drop('pipette', 194.8, 114, BENCH - 40, CLEAR, 400);
+          sc.at('pipette', { x: xs[i]!, y: from }, 300, 500);
+          sc.at('pipette', { x: 196, y: into }, 400, 300);
+          sc.drop('pipette', 194.8, into + 2, BENCH - 40, CLEAR, 400);
           sc.at('mix', { level: (0.6 * (i + 1)) / Math.max(1, shown.length) }, 600, 200);
         });
         break;
@@ -365,7 +385,7 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       const bottleScale = parts.length === 4 ? 0.74 : parts.length === 2 && big ? 1 : 0.86;
       parts.forEach((part, i) => {
         const c = p.components.find(x => x.id === part.component);
-        if (c) sc.add(bottle(c, i, xs[i]!, bottleScale));
+        if (c) sc.add(bottle(c, i, xs[i]!, bottleScale, true));
       });
       const tubeX = big ? 206 : 202;
       // What goes in, on each arrow: the amount the manual prints when the protocol kept it ("44 µL"), else the share
@@ -380,10 +400,14 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       const short = m.short || shortName(m.name);
       const withRatio = `${short} · ${m.parts.map(x => x.parts).join(' : ')}`;
       const label = sized.mix ? `${short} · ${sized.mix.make}` : !m.parts.every(x => x.amount) && withRatio.length <= 40 ? withRatio : short;
-      sc.add({ id: 'mix', kind: 'conical', x: tubeX, y: BENCH - 4, scale: big ? 1.05 : 0.98, label, cap: '#2b7de9', level: bench.mix?.level ?? 0, liquid: bench.mix?.colour ?? CLEAR, represents: `${m.name}: ${m.parts.map(x => `${share(x)} ${p.components.find(c => c.id === x.component)?.name ?? x.component}`).join(' + ')}`, source: said(`mixes.${m.id}`, m.cite), drawn: { vessel: 'A 15 mL conical tube; the protocol names the mix, not its tube.' } });
-      const top = BENCH - 4 - 89 * bottleScale;
+      const tubeScale = big ? 1.05 : 0.98;
+      sc.add({ id: 'mix', kind: 'conical', x: tubeX, y: BENCH - 4, scale: tubeScale, open: true, label, cap: '#2b7de9', level: bench.mix?.level ?? 0, liquid: bench.mix?.colour ?? CLEAR, represents: `${m.name}: ${m.parts.map(x => `${share(x)} ${p.components.find(c => c.id === x.component)?.name ?? x.component}`).join(' + ')}`, source: said(`mixes.${m.id}`, m.cite), drawn: { vessel: 'A 15 mL conical tube; the protocol names the mix, not its tube.' } });
+      // Each arrow from its bottle's open mouth to the tube's. Small, the first ends just over the mouth and the next
+      // at its rim, their heads apart; drawn big, they end one under the other beside the tube.
+      const from = mouthOf('bottle', BENCH - 6, bottleScale) - 4;
+      const into = mouthOf('conical', BENCH - 4, tubeScale);
       parts.forEach((part, i) =>
-        sc.add({ id: `arrow:${i}`, kind: 'arrow', x: xs[i]! + 4, y: big ? top : BENCH - 92, to: [tubeX - 16, big ? BENCH - 126 + i * 38 : BENCH - 112 + i * 8], label: onArrow(part, i), hidden: true, represents: `${share(part)} ${p.components.find(c => c.id === part.component)?.name ?? part.component}`, source: said(`mixes.${m.id}.parts`, m.cite) }),
+        sc.add({ id: `arrow:${i}`, kind: 'arrow', x: xs[i]! + 4, y: from, to: big ? [tubeX - 16, BENCH - 126 + i * 38] : [tubeX - (i ? 12 : 1), into - 9 + i * 25], label: onArrow(part, i), hidden: true, represents: `${share(part)} ${p.components.find(c => c.id === part.component)?.name ?? part.component}`, source: said(`mixes.${m.id}.parts`, m.cite) }),
       );
       parts.forEach((_, i) => {
         sc.at(`arrow:${i}`, { hidden: false }, 400, i ? 700 : 500);
@@ -401,17 +425,31 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       if (vessel === 'plate') {
         const intoWells = add?.what === 'standards-and-samples' || !add;
         const colour = add?.what === 'mix' ? (bench.mix?.colour ?? mixC ?? CLEAR) : SAMPLE;
-        sc.add(plateItem(bench.wells));
-        // Left of the plate's corner, on the bench: what it is taken up from.
-        const from = intoWells ? null : takeFrom(add, 28, 0.78);
-        const first = wellAt(120, BENCH, 0, 0);
-        pipette(sc, p, first.x, first.y - 34, add?.volume);
+        // What the wells are filled from: the standards' vials standing behind the plate, as the bench left them; or,
+        // left of the plate's corner, the mix's tube or the bottle (the plate then smaller and to the right of it).
+        const vials = intoWells ? bench.tubes : [];
+        const beside = !intoWells && (add?.what === 'mix' || !!(add?.ref ? p.components.some(q => q.id === add.ref) : named[0]));
+        const where = beside ? { x: 138, scale: 0.84 } : { x: 120, scale: 1 };
+        const vialStep = Math.min(14, 130 / Math.max(1, vials.length));
+        const vialAt = (k: number) => ({ x: 100 + (k - (vials.length - 1) / 2) * vialStep, y: BENCH - 100 });
+        vials.forEach((v, k) =>
+          sc.add({ id: `tube:${v}`, kind: 'tube', ...vialAt(k), scale: 0.62, level: 0.55, liquid: SAMPLE, represents: `Vial ${v}, made in the standards step`, source: curve ? said(`standardCurves.${curve.id}.points.${v}`, curve.cite) : drawn('The standards made before.'), drawn: { colour: 'Colourless standards: drawn pale blue, so they show.' } }),
+        );
+        sc.add(plateItem(bench.wells, where));
+        const from = beside ? takeFrom(add, 26, 0.78) : null;
+        const over = (col: number) => {
+          const w = wellAt(where.x, BENCH, 0, col, where.scale);
+          return { x: w.x, top: w.y - OVER_WELL, y: w.y - 2 };
+        };
+        pipette(sc, p, over(0).x, over(0).top, add?.volume);
         const cols = Math.ceil(wellNames.length / 8);
         for (let col = 0; col < cols; col++) {
           const names = wellNames.slice(col * 8, col * 8 + 8);
-          const top = wellAt(120, BENCH, 0, col);
+          const well = over(col);
           if (from && col % 2 === 0) take(from, col ? 300 : 500);
-          dispense(sc, top.x, top.y - 34, top.y - 2, colour, intoWells ? 240 : 320);
+          // Each column from the next vial, its tip just into it.
+          if (vials.length) sc.at('pipette', { x: vialAt(col % vials.length).x, y: vialAt(0).y - ART.tube.h * 0.62 + 2 }, 280, col ? 300 : 500);
+          dispense(sc, well.x, well.top, well.y, colour, intoWells ? 240 : 320);
           sc.at('plate', { wells: Object.fromEntries(names.map(n => [n, colour])) }, 420, 160);
         }
         if (step.timer && /shak/.test((step.equipment ?? []).join(' ') + words)) {
@@ -420,9 +458,9 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
             sc.at('pipette', from ? { x: from.x, y: from.y - 10 } : { x: 46, y: 120 }, 400, 300);
             sc.at('plate', { label: `${step.timer.label} ${step.timer.duration.value} ${step.timer.duration.unit}` }, 300, 100);
           }
-          for (let i = 0; i < 6; i++) sc.at('plate', { x: 120 + (i % 2 ? -2 : 2) }, 90, i ? 100 : 400);
+          for (let i = 0; i < 6; i++) sc.at('plate', { x: where.x + (i % 2 ? -2 : 2) }, 90, i ? 100 : 400);
         }
-        if (step.timer) sc.at('plate', { x: 120 }, 120, 100);
+        if (step.timer) sc.at('plate', { x: where.x }, 120, 100);
         for (const n of wellNames) bench.wells[n] = colour;
       } else {
         const c = (add?.ref ? p.components.find(x => x.id === add.ref) : named[0]) ?? null;
@@ -431,15 +469,16 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
         const from = intoTubes ? null : takeFrom(add, 52, 0.9);
         if (vessel === 'flask') sc.add(flask(152, BENCH - 4, 1.05));
         else sampleTubes(sc, bench, 150, 1);
-        const target = vessel === 'flask' ? { x: 150, top: BENCH - 80, y: BENCH - 30 } : { x: 110, top: BENCH - 84, y: BENCH - 30 };
+        // Into the flask's neck, or just over each tube.
+        const target = vessel === 'flask' ? { x: 150, top: BENCH - 80, y: BENCH - 30 } : { x: 110, top: BENCH - 6 - ART.tube.h - 4, y: BENCH - 30 };
         pipette(sc, p, target.x, target.top, add?.volume);
-        if (vessel === 'rack') {
+        if (vessel === 'tubes') {
           const level = Math.min(0.8, (bench.samples?.level ?? 0) + (add?.what === 'mix' ? 0.45 : 0.25));
           const now = bench.samples ? (colour === CLEAR ? bench.samples.colour : mixHex(bench.samples.colour, colour, 0.8)) : colour;
           for (let i = 0; i < 5; i++) {
             if (from) take(from, i ? 200 : 400);
             sc.at(`tube:${i + 1}`, { open: true }, 250, from ? 0 : i ? 200 : 400);
-            dispense(sc, 110 + i * 20, BENCH - 84, BENCH - 30, colour, from ? 200 : 0);
+            dispense(sc, 110 + i * 20, target.top, target.y, colour, from ? 200 : 0);
             sc.at(`tube:${i + 1}`, { level, liquid: now }, 450, 150);
             sc.at(`tube:${i + 1}`, { open: false }, 250, 300);
           }
@@ -465,12 +504,12 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       sc.add({ id: 'in', kind: 'arrow', x: 44, y: 18, to: [92, 132], label: 'wash', hidden: true, represents: 'Wash buffer in', source: src });
       sc.at('out', { hidden: false }, 400, 400);
       if (vessel === 'plate') sc.at('plate', { wells: Object.fromEntries(Object.keys(bench.wells).map(n => [n, '#f1f5f9'])) }, 700, 200);
-      if (vessel === 'rack') for (let i = 0; i < 5; i++) sc.at(`tube:${i + 1}`, { level: 0.06 }, 700, 0);
+      if (vessel === 'tubes') for (let i = 0; i < 5; i++) sc.at(`tube:${i + 1}`, { level: 0.06 }, 700, 0);
       if (vessel === 'flask') sc.at('flask', { level: 0.04 }, 700, 0);
       sc.at('waste', { level: 0.35 }, 700, 0);
       sc.at('in', { hidden: false }, 400, 700);
       if (vessel === 'plate') sc.at('plate', { wells: Object.fromEntries(Object.keys(bench.wells).map(n => [n, CLEAR])) }, 700, 200);
-      if (vessel === 'rack') for (let i = 0; i < 5; i++) sc.at(`tube:${i + 1}`, { level: 0.4, liquid: CLEAR }, 700, i ? 0 : 200);
+      if (vessel === 'tubes') for (let i = 0; i < 5; i++) sc.at(`tube:${i + 1}`, { level: 0.4, liquid: CLEAR }, 700, i ? 0 : 200);
       if (vessel === 'flask') sc.at('flask', { level: 0.3, liquid: CLEAR }, 700, 200);
       for (const n of Object.keys(bench.wells)) bench.wells[n] = CLEAR;
       if (bench.samples) bench.samples = { colour: CLEAR, level: 0.4 };
@@ -489,13 +528,9 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       if (warm) sc.add(equipmentItem(p, 'incubator', /incubat|oven|bath/, 162, BENCH, 0.92, { text: `${deg!.toFixed(1)} °C`, label: temp }));
       else sc.add({ id: 'thermometer', kind: 'thermometer', x: 30, y: 196, scale: big ? 1.3 : 1, text: temp ?? 'RT', represents: temp ?? 'Room temperature', source: t?.temperature ? said(`steps.${step.id}.timer`, step.cite) : drawn('The protocol gives no temperature: room temperature.') });
       const home = vessel === 'plate' ? { x: warm ? 66 : 120, y: BENCH, scale: warm ? 0.5 : 0.9 } : vessel === 'flask' ? { x: warm ? 56 : 120, y: BENCH - 4, scale: warm ? 0.7 : 1.1 } : { x: warm ? 60 : 120, y: BENCH, scale: warm ? 0.6 : 1 };
-      let what: string;
-      if (vessel === 'plate') what = sc.add(plateItem(bench.wells, { ...home, ...(big && t?.covered ? { label: 'Cover' } : {}) }));
-      else if (vessel === 'flask') what = sc.add(flask(home.x, home.y, home.scale));
-      else {
-        what = 'rack';
-        sampleTubes(sc, bench, home.x, home.scale);
-      }
+      // What goes in: the plate, the flask, or the tubes together.
+      const what =
+        vessel === 'plate' ? [sc.add(plateItem(bench.wells, { ...home, ...(big && t?.covered ? { label: 'Cover' } : {}) }))] : vessel === 'flask' ? [sc.add(flask(home.x, home.y, home.scale))] : sampleTubes(sc, bench, home.x, home.scale);
       const inside = vessel === 'plate' ? { x: 162, y: BENCH - 66, scale: 0.38 } : vessel === 'flask' ? { x: 162, y: BENCH - 66, scale: 0.55 } : { x: 162, y: BENCH - 66, scale: 0.4 };
       if (warm) {
         sc.at('incubator', { open: true }, 500, 400);
@@ -514,9 +549,9 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
               return [n, mixHex(bench.mix?.colour ?? CLEAR, result.colour, Math.min(1, 0.12 + 0.88 * strength))];
             }),
           );
-          sc.at(what, { wells: turned }, 2400, 0);
+          sc.at('plate', { wells: turned }, 2400, 0);
           Object.assign(bench.wells, turned);
-        } else if (vessel === 'rack' && bench.samples) {
+        } else if (vessel === 'tubes' && bench.samples) {
           for (let i = 0; i < 5; i++) sc.at(`tube:${i + 1}`, { liquid: mixHex(bench.samples.colour, result.colour, 0.3 + i * 0.15) }, 2400, 0);
           bench.samples = { ...bench.samples, colour: mixHex(bench.samples.colour, result.colour, 0.6) };
         }
@@ -581,7 +616,8 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
       const kit = p.components.filter(c => c.suppliedBy === 'kit');
       const shown = target ? (solvent ? [solvent, target] : [target]) : (named.length ? named : kit).slice(0, dissolving ? 1 : 3);
       const xs = shown.length === 1 ? [96] : shown.length === 2 ? [70, 132] : [50, 104, 158];
-      shown.forEach((c, i) => sc.add(bottle(c, i, xs[i]!, shown.length === 1 ? 1.05 : 0.86)));
+      const size = shown.length === 1 ? 1.05 : 0.86;
+      shown.forEach((c, i) => sc.add(bottle(c, i, xs[i]!, size, dissolving)));
       if (kind === 'warm') {
         const t = /(\d+)\s*°?\s*c/i.exec(step.key)?.[1];
         sc.add({ id: 'thermometer', kind: 'thermometer', x: 206, y: 196, text: t ? `${t} °C` : 'RT', represents: t ? `${t} °C` : 'Room temperature', source: src });
@@ -593,15 +629,17 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: 
         sc.items.find(i => i.id === id)!.level = 0.15;
         const said = /(\d+(?:\.\d+)?)\s*(µL|uL|mL)/i.exec(step.key);
         const volume = said ? { value: Number(said[1]), unit: /^m/i.test(said[2]!) ? 'mL' : 'µL' } : undefined;
-        pipette(sc, p, xs[0]!, 120, volume);
+        // The tip just over an open bottle's mouth, or at it: never into it, where a photo's bottle keeps its cap.
+        const over = mouthOf('bottle', BENCH - 6, size) - 4;
+        pipette(sc, p, xs[0]!, over, volume);
         if (into > 0) {
           // Drawn up from the buffer, then over to what it dissolves.
-          sc.at('pipette', { y: 128 }, 300, 500);
+          sc.at('pipette', { y: over + 4 }, 300, 500);
           sc.at(`bottle:${shown[0]!.id}`, { level: 0.64 }, 400, 0);
-          sc.at('pipette', { y: 120 }, 300, 200);
+          sc.at('pipette', { y: over }, 300, 200);
           sc.at('pipette', { x: xs[into]! }, 500, 100);
         }
-        for (let i = 0; i < 3; i++) dispense(sc, xs[into]!, 120, BENCH - 40, CLEAR, i ? 300 : 500);
+        for (let i = 0; i < 3; i++) dispense(sc, xs[into]!, over, BENCH - 40, CLEAR, i ? 300 : 500);
         sc.at(id, { level: 0.7 }, 900, 200);
       }
       break;
