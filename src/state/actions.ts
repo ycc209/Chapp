@@ -19,8 +19,7 @@ export function applyActions(actions: Action[], navigate: (to: string) => void, 
     switch (action.type) {
       case 'navigate': navigate(action.to); break;
       case 'setSamples': run.setPlan({ samples: action.samples }); break;
-      // "Make it triplicates": the storyboard's 63 wells are all 21 tubes three times, standards included.
-      case 'setReplicates': run.setPlan({ replicates: action.replicates, standardReplicates: action.replicates }); break;
+      case 'setReplicates': run.setPlan({ replicates: action.replicates, ...(action.standardReplicates !== undefined ? { standardReplicates: action.standardReplicates } : {}) }); break;
       case 'nextStep': run.next(); break;
       case 'previousStep': run.previous(); break;
       // A vial or a step by its id; a sample's tube ("3") loaded, on the plate as the run lays it out.
@@ -37,7 +36,27 @@ export function applyActions(actions: Action[], navigate: (to: string) => void, 
       case 'addWell': if (protocol) lines.push(addWells(protocol, action.what, { well: action.well })); break;
       case 'addCondition': if (protocol) lines.push(addWells(protocol, action.name, { condition: true })); break;
       case 'startTimer': run.startTimer(action.id, action.seconds); break;
+      // Stopped part-way, the time left is kept (useBench.paused) for resuming.
+      case 'stopTimer': {
+        const ends = run.timers[action.id];
+        if (ends === undefined) break;
+        run.stopTimer(action.id);
+        useBench.getState().pause(action.id, Math.max(1, Math.ceil((ends - Date.now()) / 1000)));
+        break;
+      }
+      case 'resumeTimer': {
+        const left = useBench.getState().paused[action.id];
+        if (!left) break;
+        run.startTimer(action.id, left);
+        useBench.getState().unpause(action.id);
+        break;
+      }
       case 'setStepTime': changeStepTime(action.id, action.seconds); break;
+      // The run screen's own (its camera, its sample readings, the question it asked): nothing to do anywhere else.
+      case 'takePhoto':
+      case 'useSample':
+      case 'answer':
+        break;
       // The Overview searches for the kit Chapp named, under what the user said.
       case 'findProtocol': {
         const session = useSession.getState();

@@ -7,7 +7,8 @@ import type { PlateCheck } from './model.ts';
  * The run screen's own progress, beside useRun() (which keeps the ticks, the running timers and the readings): the
  * incubation length chosen, a timer stopped part-way, the timers already announced as done (so a reload does not ring
  * twice), the photo of the plate reader's screen, and readings waiting on Run-Read for the user's look (a model's
- * reading of that photo, or a file with wells left out). Cleared when the run starts over.
+ * reading of that photo, or a file with wells left out). Cleared when the run starts over; whether the words under
+ * the step pictures are shown is the user's choice and stays.
  */
 type BenchState = {
   /** Seconds chosen for each timer (by step id): 1800, or the protocol's 2 h alternative. */
@@ -20,12 +21,15 @@ type BenchState = {
   platePhoto: string | null;
   /** Readings to check before Results uses them, or null. */
   check: PlateCheck | null;
+  /** The words under a step's picture (what to do, written out), by the user's choice; kept from run to run. */
+  words: boolean;
   setLength: (id: string, seconds: number) => void;
   pause: (id: string, left: number) => void;
   unpause: (id: string) => void;
   announce: (id: string, endsAt: number) => void;
   setPlatePhoto: (src: string | null) => void;
   setCheck: (check: PlateCheck | null) => void;
+  setWords: (words: boolean) => void;
   clear: () => void;
 };
 
@@ -39,12 +43,14 @@ export const useBench = create<BenchState>()(
       announced: {},
       platePhoto: null,
       check: null,
+      words: false,
       setLength: (id, seconds) => set(s => ({ lengths: { ...s.lengths, [id]: seconds } })),
       pause: (id, left) => set(s => ({ paused: { ...s.paused, [id]: left } })),
       unpause: id => set(s => ({ paused: without(s.paused, id) })),
       announce: (id, endsAt) => set(s => ({ announced: { ...s.announced, [id]: endsAt } })),
       setPlatePhoto: platePhoto => set({ platePhoto }),
       setCheck: check => set({ check }),
+      setWords: words => set({ words }),
       clear: () => set({ lengths: {}, paused: {}, announced: {}, platePhoto: null, check: null }),
     }),
     { name: 'chapp.run.bench' },

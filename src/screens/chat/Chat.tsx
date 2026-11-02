@@ -4,10 +4,11 @@ import { useBottomWhileTyping } from '../../app/keyboard.ts';
 import { useScreen } from '../../app/screen.ts';
 import { A2uiSurface } from '../../components/a2ui/Surface.tsx';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
+import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { cn } from '../../lib/cn.ts';
-import { useRun } from '../../state/run.ts';
+import { useProtocolPreviews } from '../../state/protocolPreview.ts';
 import { useSession } from '../../state/session.ts';
 import { endConversation, startListening } from '../../voice/controller.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
@@ -18,6 +19,7 @@ import { Bubble, Progress, SaidCheck } from '../protocol/Protocol.tsx';
 import { otherCatalog } from '../../../shared/catalog.ts';
 import { CheckIcon } from '../protocol/icons.tsx';
 import { type Exchange, useChat, useChatLog } from './useChat.ts';
+import { StartCard } from './StartCard.tsx';
 
 // The bar's wash (Overview.dc.html): the conversation scrolls under the bar.
 const BAR_WASH =
@@ -63,7 +65,7 @@ export function ChatScreen() {
   useEffect(() => {
     const el = scroller.current;
     el?.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [exchanges.length, last?.phase, last?.find?.progress.length, last?.find?.state, Boolean(heard || interim)]);
+  }, [exchanges.length, last?.phase, last?.say, last?.progress, last?.find?.progress.length, last?.find?.state, Boolean(heard || interim)]);
 
   const listen = (on: boolean) => {
     paused.current = !on;
@@ -86,12 +88,12 @@ export function ChatScreen() {
         {exchanges.length === 0 && (
           <div className="flex flex-col gap-2 px-1 pt-6 animate-in fade-in duration-300">
             <p className="m-0 text-[15px] leading-5 font-semibold text-text">{talking ? 'I’m listening' : 'Tap to listen, or type'}</p>
-            <h1 className="m-0 text-[30px] leading-[38px] font-bold tracking-[-0.02em] text-ink">Ask me anything about your run.</h1>
+            <h1 className="m-0 text-[30px] leading-[38px] font-bold tracking-[-0.02em] text-ink">What’s on your mind?</h1>
           </div>
         )}
-        {exchanges.map(e => (
-          <ExchangeView key={e.id} e={e} protocolReady={protocol} onGo={open} live={e.id === last?.id} onAnswer={send} />
-        ))}
+        {exchanges.map(e =>
+          e.event ? <Events key={e.id} lines={e.done} /> : <ExchangeView key={e.id} e={e} protocolReady={protocol} onGo={open} live={e.id === last?.id} onAnswer={send} />,
+        )}
         {/* The words of the turn being said, as they are recognized (the browser's recognizer; the server's has none). */}
         {talking && (heard || interim) && (
           <div className="mt-6 flex shrink-0 justify-end">
@@ -144,13 +146,17 @@ export function ChatScreen() {
 
 /** One exchange: the user's bubble, then Chapp's answer and everything that came with it. */
 function ExchangeView({ e, protocolReady: protocol, onGo, live, onAnswer }: { e: Exchange; protocolReady: ReturnType<typeof useChat>['protocol']; onGo: (to: string) => void; live: boolean; onAnswer: (text: string) => void }) {
-  const answer = e.phase === 'reply' ? e.say : e.phase === 'error' ? ERROR_LINE : '';
+  const answer = e.phase === 'error' ? (e.say || ERROR_LINE) : e.say;
   return (
     <section aria-label="Exchange" className="mt-6 flex shrink-0 flex-col first:mt-0">
       <Bubble>{e.ask}</Bubble>
-      <p aria-live="polite" aria-label="Chapp's answer" className={SAY}>
-        {e.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
-      </p>
+      <div aria-live="polite" aria-label="Chapp's answer" className={SAY}>
+        {answer && <ReplyText text={answer} />}
+        {/* While the rest is still coming (the sources being read behind a first answer), what Chapp is doing shows under it. */}
+        {e.phase === 'thinking' && (e.progress || !answer) && <span className={cn('text-muted', answer && 'mt-2 block text-[13px] leading-[18px]')}>{e.progress || '…'}</span>}
+      </div>
+      <ReplySources sources={e.sources} className="px-1" />
+      {e.protocolPreviewId && <PreviewLink id={e.protocolPreviewId} onGo={onGo} />}
       {e.done.length > 0 && (
         <ul aria-label="What Chapp changed" className="mt-3 flex flex-col gap-1.5 px-1">
           {e.done.map((line, i) => (
@@ -164,7 +170,8 @@ function ExchangeView({ e, protocolReady: protocol, onGo, live, onAnswer }: { e:
         </ul>
       )}
       {e.phase === 'reply' && e.a2ui && <A2uiSurface messages={e.a2ui} protocol={protocol} live={live} onAnswer={onAnswer} ask={e.ask} />}
-      {e.phase === 'reply' && e.confirm && <Confirm actions={e.confirm} />}
+      {e.phase === 'reply' && e.confirm && <Confirm actions={e.confirm} onAnswer={onAnswer} />}
+      {e.start && <StartCard protocolId={e.start.protocolId} onGo={onGo} />}
       {e.find && <Found find={e.find} ask={e.ask} onGo={onGo} />}
       {e.go.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-2 px-1">
@@ -178,6 +185,29 @@ function ExchangeView({ e, protocolReady: protocol, onGo, live, onAnswer }: { e:
       )}
     </section>
   );
+}
+
+/** What the user did by hand on the run, between the turns: small lines, so the conversation keeps the whole run. */
+function Events({ lines }: { lines: string[] }) {
+  return (
+    <ul aria-label="Done on the screens" className="mt-5 flex shrink-0 flex-col gap-1 px-1 first:mt-0">
+      {lines.map((line, i) => (
+        <li key={i} className="text-[13px] leading-[18px] font-medium text-muted animate-in fade-in duration-300">
+          {line}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PreviewLink({ id, onGo }: { id: string; onGo: (to: string) => void }) {
+  const preview = useProtocolPreviews(s => s.previews[id]);
+  const status = preview?.state === 'error' ? preview.error || 'Reading stopped; the available overview is kept.' : preview?.state === 'ready' ? 'Overview ready' : preview?.progress?.at(-1) || (preview ? 'Reading the manual…' : 'Open the saved preview');
+  return <Card label="Manual overview">
+    {preview?.title && <span className="text-[17px] leading-[22px] font-semibold text-ink">{preview.title}</span>}
+    <span aria-live="polite" className="text-[14px] leading-[19px] text-text">{status}</span>
+    <button type="button" onClick={() => onGo(`/protocol?preview=${encodeURIComponent(id)}`)} className={cn(PILL, WHITE_PILL, 'mt-1 gap-1.5 self-start px-[18px]')}>Open overview<Arrow /></button>
+  </Card>;
 }
 
 /** A kit's manual looked up from the conversation: its progress as it comes, then the kit with a button to open it. */
@@ -204,8 +234,9 @@ function Found({ find, ask, onGo }: { find: NonNullable<Exchange['find']>; ask: 
             <button
               type="button"
               onClick={() => {
-                if (found.protocolId !== useRun.getState().protocolId) useRun.getState().setProtocol(found.protocolId!);
-                onGo('/protocol');
+                const id = `saved-${found.protocolId}`;
+                useProtocolPreviews.getState().receive({ id, state: 'ready', protocolId: found.protocolId, title: found.kit?.name ?? found.document?.title, source: found.document ? { url: found.document.url, title: found.document.title } : undefined });
+                onGo(`/protocol?preview=${encodeURIComponent(id)}`);
               }}
               className={cn(PILL, 'mt-1 gap-1.5 self-start bg-ink pr-3.5 pl-[18px] text-white')}
             >

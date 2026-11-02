@@ -1,15 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Box } from '../../../shared/ai.ts';
+import { api } from '../../api/client.ts';
+import { layOver, locate, uprightTurn, type Cap } from './whole.ts';
 
 /**
  * The user's photo of a bottle (its 240 px square crop from the kit), cut out of its background on the phone, so it
  * can stand on the bench in place of the drawn bottle. No model: the background is what grows in from the crop's
  * edges in small colour steps (a table, a wall, a gradient, a shadow), and the bottle is the largest thing left near
- * the middle. When SAM 3.1 found the bottle, its mask is the cut instead (cutAlong), which comes out whole. The cut
- * is made as soon as the bottle is matched (screens/kit/store.ts) and says whether it came out whole (`ok`), or why
- * not: the kit screen shows a poor one and asks for a photo of just that bottle, and the bench keeps its drawn bottle
- * until there is a whole one. SAM's cuts are kept on the phone by the crop they were made from, so the bench finds
- * them again after a reload.
+ * the middle. When SAM 3.1 found the bottle, its mask is the cut instead (cutAlong), checked as the phone's own cut
+ * is: a bottle the photo cuts off at its edge is not whole. The cut is made as soon as the bottle is matched
+ * (screens/kit/store.ts) and says whether it came out whole (`ok`), or why not: the kit screen (or the protocol, after
+ * a video) shows a poor one and asks for a photo of just that bottle, unless the user keeps it (keepAsIs), and the
+ * bench keeps its drawn bottle until there is a whole one. SAM's cuts are kept on the phone by the crop they were made
+ * from, so the bench finds them again after a reload.
+ *
+ * On the bench the bottle stands as `benchCut` makes it (whole.ts): turned upright when the photo has it lying down
+ * (which end is its cap, Muse Spark says),
+ * then whole, Muse Image filling in what a hand or the photo's edge hid, the photo laid over its picture. Each step is
+ * shown as soon as it is ready; the whole one is kept on the phone like SAM's cuts, so Muse Image draws a bottle once.
  */
 export type Cut = {
   src: string;
@@ -19,6 +27,12 @@ export type Cut = {
   ok: boolean;
   /** Why not, in Chapp's words ("it’s cut off at the edge"); null when ok. */
   why: string | null;
+  /** Where the cut's top left is on the crop, in its pixels. */
+  at?: [number, number];
+  /** How far along the bench's making it is: turned upright, or made whole (or as whole as it could be made). */
+  stage?: 'upright' | 'whole';
+  /** Of a whole bottle, the share Muse Image drew (what the photo hid); 0 when all of it is the photo. */
+  drawn?: number;
 };
 
 /** Neighbouring background pixels differ by less than this (RGB distance): JPEG noise and gradients, not an edge. */
@@ -92,10 +106,10 @@ function kept(): Kept {
   return table;
 }
 
-const keptCut = (src: string): Cut | undefined => kept().cuts[keyOf(src)];
+const keptCut = (src: string, kind = ''): Cut | undefined => kept().cuts[kind + keyOf(src)];
 
-function keepCut(src: string, cut: Cut) {
-  const key = keyOf(src);
+function keepCut(src: string, cut: Cut, kind = '') {
+  const key = kind + keyOf(src);
   const k = kept();
   k.cuts[key] = cut;
   k.order = [...k.order.filter(o => o !== key), key];
@@ -125,7 +139,37 @@ function alongFrom(img: HTMLImageElement, outline: string, square: Box): Cut {
   trimmed.width = cw;
   trimmed.height = ch;
   trimmed.getContext('2d')!.drawImage(canvas, on.left, on.top, cw, ch, 0, 0, cw, ch);
-  return { src: trimmed.toDataURL('image/png'), width: cw, height: ch, ok: true, why: null };
+  const why = alongWhy(on, w, h);
+  return { src: trimmed.toDataURL('image/png'), width: cw, height: ch, ok: why === null, why, at: [on.left, on.top] };
+}
+
+/**
+ * Why a cut along SAM's outline is not whole, in Chapp's words as the phone's own cut says it; null when it is. The
+ * crop leaves a margin round the bottle (shared/kit.ts squareOn), so an outline reaching the crop's edge is a bottle
+ * the photo cuts off. Pure, so it is tested.
+ */
+export function alongWhy(on: { left: number; top: number; right: number; bottom: number }, w: number, h: number): string | null {
+  return on.left <= 1 || on.top <= 1 || on.right >= w - 2 || on.bottom >= h - 2 ? 'it’s cut off at the edge' : null;
+}
+
+// Cuts the user kept though they did not come out whole ("Keep it"), by their crop: not asked about again.
+const AS_IS = 'chapp.keptAsIs';
+
+export function keptAsIs(src: string): boolean {
+  try {
+    return (JSON.parse(localStorage.getItem(AS_IS) ?? '[]') as string[]).includes(keyOf(src));
+  } catch {
+    return false;
+  }
+}
+
+export function keepAsIs(src: string) {
+  try {
+    const keys = (JSON.parse(localStorage.getItem(AS_IS) ?? '[]') as string[]).filter(k => k !== keyOf(src));
+    localStorage.setItem(AS_IS, JSON.stringify([...keys, keyOf(src)].slice(-KEEP_AT_MOST)));
+  } catch {
+    /* asked again after a reload */
+  }
 }
 
 /**
@@ -149,19 +193,201 @@ export function outlineInCrop(outline: string, square: Box, w: number, h: number
   };
 }
 
-/** The cut-out once it is ready; null before (and on the server, where there is no canvas). */
+/**
+ * The bottle as the bench shows it: its cut-out once ready, then upright, then whole (benchCut), each as it comes;
+ * null before (and on the server, where there is no canvas).
+ */
 export function useCutout(src: string | undefined): Cut | null {
   const [cut, setCut] = useState<Cut | null>(null);
   useEffect(() => {
     setCut(null);
     if (!src) return;
     let live = true;
-    cutOut(src).then(c => live && setCut(c));
+    let shown = -1;
+    const rank = (c: Cut) => (c.stage === 'whole' ? 2 : c.stage === 'upright' ? 1 : 0);
+    const show = (c: Cut) => {
+      if (!live || rank(c) < shown) return;
+      shown = rank(c);
+      setCut(c);
+    };
+    void cutOut(src).then(show);
+    void benchCut(src, show);
     return () => {
       live = false;
     };
   }, [src]);
   return cut;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// On the bench: upright, then whole (whole.ts).
+
+// Kept under a new name when how they are made changes: the first ones took the narrower end for the cap, the
+// second and third let the drawing's words onto the photo's label, the fourth added the drawing's slightly bigger
+// outline to bottles that were whole.
+const WHOLE = 'w5-';
+const benches = new Map<string, Promise<Cut>>();
+/** Set once the server says it draws no bottles (the mock): the bench keeps the upright cut. */
+let noDrawing = false;
+
+/** RGBA of an image, drawn at `w` × `h` (its own size when not given). */
+function pixelsOf(img: CanvasImageSource, w: number, h: number): Uint8ClampedArray {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0, w, h);
+  return g.getImageData(0, 0, w, h).data;
+}
+
+function canvasOf(rgba: Uint8ClampedArray, w: number, h: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext('2d')!;
+  const data = g.createImageData(w, h);
+  data.data.set(rgba);
+  g.putImageData(data, 0, 0);
+  return canvas;
+}
+
+/** `source` turned `deg` clockwise about its centre, on a canvas `size` square, `fill` behind (transparent when none). */
+function turned(source: CanvasImageSource, w: number, h: number, deg: number, size: number, fill?: string): Uint8ClampedArray {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext('2d', { willReadFrequently: true })!;
+  if (fill) {
+    g.fillStyle = fill;
+    g.fillRect(0, 0, size, size);
+  }
+  g.translate(size / 2, size / 2);
+  g.rotate((deg * Math.PI) / 180);
+  g.drawImage(source, -w / 2, -h / 2, w, h);
+  return g.getImageData(0, 0, size, size).data;
+}
+
+/** The trimmed PNG of the opaque part of `rgba`. */
+function trimmedCut(rgba: Uint8ClampedArray, w: number, h: number, extra: Partial<Cut>): Cut | null {
+  let [left, top, right, bottom] = [w, h, -1, -1];
+  for (let i = 0; i < w * h; i++) {
+    if (rgba[i * 4 + 3]! <= 8) continue;
+    const x = i % w, y = (i / w) | 0;
+    left = Math.min(left, x);
+    right = Math.max(right, x);
+    top = Math.min(top, y);
+    bottom = Math.max(bottom, y);
+  }
+  if (right < left) return null;
+  const cw = right - left + 1, ch = bottom - top + 1;
+  const out = document.createElement('canvas');
+  out.width = cw;
+  out.height = ch;
+  out.getContext('2d')!.drawImage(canvasOf(rgba, w, h), left, top, cw, ch, 0, 0, cw, ch);
+  return { src: out.toDataURL('image/png'), width: cw, height: ch, ok: true, why: null, ...extra };
+}
+
+const OVER: Record<Cap, Cap> = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+/**
+ * Which way the cut's cap points (the shape alone cannot say), asked of Muse Spark twice: the bottle alone on white,
+ * and the same turned over. Only an answer the two agree on counts; else null, and the bottle is only straightened.
+ * Alone, so a neighbour's cap cannot answer for it; on the 3T3-L1 kit's crowded vials and the BCA kit's bottles, every
+ * answer was right this way, where the whole crop got one vial of five wrong.
+ */
+async function capOf(piece: HTMLImageElement, w: number, h: number): Promise<Cap | null> {
+  const view = (deg: number) => {
+    const scale = 2, pad = 20;
+    const canvas = document.createElement('canvas');
+    canvas.width = w * scale + 2 * pad;
+    canvas.height = h * scale + 2 * pad;
+    const g = canvas.getContext('2d')!;
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.translate(canvas.width / 2, canvas.height / 2);
+    g.rotate((deg * Math.PI) / 180);
+    g.drawImage(piece, (-w * scale) / 2, (-h * scale) / 2, w * scale, h * scale);
+    const url = canvas.toDataURL('image/jpeg', 0.9);
+    return url.slice(url.indexOf(',') + 1);
+  };
+  try {
+    const [a, b] = await Promise.all([0, 180].map(async deg => (await api.bottleCap({ photo: { type: 'image/jpeg', data: view(deg) } })).cap));
+    return a && b && OVER[a] === b ? a : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The bottle for the bench, from the crop `src`: upright (shown through `show` at once), then whole when Muse Image
+ * can draw it (kept). A cut that is not whole stays as it is; anything that fails leaves the step before.
+ */
+export function benchCut(src: string, show: (cut: Cut) => void = () => {}): Promise<Cut> {
+  if (typeof document === 'undefined') return cutOut(src);
+  const had = keptCut(src, WHOLE);
+  if (had) {
+    show(had);
+    return Promise.resolve(had);
+  }
+  let made = benches.get(src);
+  if (!made) {
+    made = makeBenchCut(src, show).catch(() => cutOut(src));
+    benches.set(src, made);
+  } else void made.then(show);
+  return made;
+}
+
+async function makeBenchCut(src: string, show: (cut: Cut) => void): Promise<Cut> {
+  const base = await cutOut(src);
+  if (!base.ok) return base;
+  const [crop, piece] = await Promise.all([load(src), load(base.src)]);
+  const w = crop.naturalWidth, h = crop.naturalHeight;
+  const cropPx = pixelsOf(crop, w, h);
+  const piecePx = pixelsOf(piece, base.width, base.height);
+  const at = base.at ?? locate(piecePx, base.width, base.height, cropPx, w, h);
+  if (!at) return base;
+
+  // The cut's mask on the crop, the turn that stands it up, and both turned onto a square that holds them.
+  const mask = new Uint8Array(w * h);
+  for (let y = 0; y < base.height; y++)
+    for (let x = 0; x < base.width; x++) {
+      const X = x + at[0], Y = y + at[1];
+      if (X < w && Y < h) mask[Y * w + X] = piecePx[(y * base.width + x) * 4 + 3]!;
+    }
+  const deg = uprightTurn(mask, w, h, await capOf(piece, base.width, base.height));
+  const r = (deg * Math.PI) / 180;
+  const size = Math.ceil(Math.abs(w * Math.cos(r)) + Math.abs(h * Math.sin(r)));
+  const maskRGBA = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) (maskRGBA[i * 4] = maskRGBA[i * 4 + 1] = maskRGBA[i * 4 + 2] = 255), (maskRGBA[i * 4 + 3] = mask[i]!);
+  const upCrop = turned(crop, w, h, deg, size, '#ffffff');
+  const upMaskRGBA = turned(canvasOf(maskRGBA, w, h), w, h, deg, size);
+  const upMask = new Uint8Array(size * size);
+  const upCut = new Uint8ClampedArray(upCrop);
+  for (let i = 0; i < size * size; i++) (upMask[i] = upMaskRGBA[i * 4 + 3]!), (upCut[i * 4 + 3] = upMask[i]!);
+  const upright = deg ? trimmedCut(upCut, size, size, { stage: 'upright' }) : { ...base, stage: 'upright' as const };
+  if (!upright) return base;
+  show(upright);
+  if (noDrawing) return upright;
+
+  // Muse Image's picture of it whole, in the same frame; the photo laid over it.
+  const jpeg = canvasOf(upCrop, size, size).toDataURL('image/jpeg', 0.9);
+  let drawn: string;
+  try {
+    const reply = await api.wholeBottle({ photo: { type: 'image/jpeg', data: jpeg.slice(jpeg.indexOf(',') + 1) } });
+    drawn = `data:${reply.photo.type};base64,${reply.photo.data}`;
+  } catch (error) {
+    // The mock and servers without Muse Image say so (501): no point asking again on this page.
+    if (/cannot draw bottles/.test(String((error as Error)?.message))) noDrawing = true;
+    return upright;
+  }
+  const picture = await load(drawn);
+  const laid = layOver(upCrop, upMask, pixelsOf(picture, size, size), size, size);
+  const whole = laid ? trimmedCut(laid.rgba, laid.width, laid.height, { stage: 'whole', drawn: Math.round((1 - laid.share) * 100) / 100 }) : null;
+  // Kept either way: a picture that did not fit this bottle would not fit it the next time either.
+  const done = whole ?? { ...upright, stage: 'whole' as const, drawn: 0 };
+  keepCut(src, done, WHOLE);
+  show(done);
+  return done;
 }
 
 /** The cut-outs of several photos (by any key), each as it is ready; a key whose photo changed is missing until then. */
@@ -217,7 +443,7 @@ function cutFrom(img: HTMLImageElement): Cut {
   trimmed.width = cw;
   trimmed.height = ch;
   trimmed.getContext('2d')!.drawImage(canvas, cut.left, cut.top, cw, ch, 0, 0, cw, ch);
-  return { src: trimmed.toDataURL('image/png'), width: cw, height: ch, ok: cut.ok, why: cut.why };
+  return { src: trimmed.toDataURL('image/png'), width: cw, height: ch, ok: cut.ok, why: cut.why, at: [cut.left, cut.top] };
 }
 
 export type CutPixels = { alpha: Uint8ClampedArray; left: number; top: number; right: number; bottom: number; ok: boolean; why: string | null };

@@ -4,7 +4,9 @@ import { Toaster } from '../components/ui/Toaster.tsx';
 import { cn } from '../lib/cn.ts';
 import { DebugPanel, useDebugFlag } from './DebugPanel.tsx';
 import { useVisibleArea } from './keyboard.ts';
+import { RunDock } from './RunDock.tsx';
 import { useRunComesBack } from './runAside.ts';
+import { TimeUpHost, useExperimentLink } from './TimeUpHost.tsx';
 import { ScreenContext, type Screen } from './screen.ts';
 import './motion.css';
 
@@ -42,6 +44,7 @@ export function PhoneFrame() {
   const scale = useFitScale(framed);
   const visible = useVisibleArea(!framed);
   useRunComesBack();
+  useExperimentLink();
   const debug = useDebugFlag();
   // On a phone only the screens' own areas scroll, never the page: when iPhone Safari gets the page's height wrong (after
   // the camera), a page that could scroll took the finger's swipe instead of the screen under it.
@@ -96,6 +99,8 @@ export function PhoneFrame() {
                 />
               )}
               <Outlet />
+              <RunDock />
+              <TimeUpHost />
               <div ref={setPortal} data-screen-portal="" />
               <Toaster />
               {debug && <DebugPanel />}

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import type { Box } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
-import { useCutouts } from '../../components/bench/cutout.ts';
+import { keepAsIs, keptAsIs, useCutouts } from '../../components/bench/cutout.ts';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
@@ -12,6 +12,7 @@ import { useConverse } from '../home/useConverse.ts';
 import { SampleBadge } from '../protocol/Body.tsx';
 import { AskBadge, CheckBadge, ForwardIcon } from '../protocol/icons.tsx';
 import { analyzing, bottleAt, readFound } from './analysis.ts';
+import { targetOf } from './found.ts';
 import {
   amounts,
   cantLook,
@@ -21,6 +22,7 @@ import {
   reading,
   needsOf,
   noPhoto,
+  following,
   offered,
   open,
   outlining,
@@ -28,6 +30,7 @@ import {
   rowDetail,
   slotsOf,
   subjectOf,
+  takenOf,
   thingTitle,
   type Need,
   type Pick,
@@ -70,7 +73,13 @@ export function Match({ protocol, onCamera }: MatchProps) {
     () => amounts(protocol, procedure, samples, replicates, standardReplicates, standards),
     [protocol, procedure, samples, replicates, standardReplicates, standards],
   );
-  const [picker, setPicker] = useState<{ shot: number; need: Need } | null>(null);
+  // Sent here by the protocol's "Show me" (kit/Ask.tsx): that bottle's picker, open already.
+  const location = useLocation();
+  const [picker, setPicker] = useState<{ shot: number; need: Need } | null>(() => {
+    const show = (location.state as { show?: string } | null)?.show;
+    const need = show ? needs.find(n => n.id === show) : undefined;
+    return need ? { shot: 0, need } : null;
+  });
   const [typing, setTyping] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
   const { turn, send } = useConverse('kit');
@@ -82,10 +91,11 @@ export function Match({ protocol, onCamera }: MatchProps) {
 
   // Muse Spark reads the labels once SAM is done with every photo (sample photos are drawn already matched).
   useEffect(() => {
-    if (!kit.sample) void readFound(protocol);
+    if (!kit.sample) void readFound(targetOf(protocol));
   }, [kit.seen, kit.sample, protocol]);
 
-  const busy = analyzing(kit.seen);
+  // SAM following the bottles through a sweep or a video counts as busy too: its photos come when it is done.
+  const busy = analyzing(kit.seen) || kit.following !== null;
   // SAM is still finding bottles on some photo; else, while busy, Muse Spark is reading the labels of what it found.
   const finding = Object.values(kit.seen).some(l => l.state === 'finding');
   const found = Object.values(kit.seen).reduce((n, l) => n + l.boxes.length, 0);
@@ -103,7 +113,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
   const [kept, setKept] = useState<Record<string, true>>({});
   // SAM looking at a tap where it had found no bottle.
   const [tapped, setTapped] = useState(false);
-  const retake = complete && !kit.sample ? (needs.find(n => kit.picks[n.id] && cuts[n.id] && !cuts[n.id]!.ok && !kept[n.id]) ?? null) : null;
+  const retake = complete && !kit.sample ? (needs.find(n => kit.picks[n.id] && cuts[n.id] && !cuts[n.id]!.ok && !kept[n.id] && !keptAsIs(kit.picks[n.id]!.crop)) ?? null) : null;
   // The bottle a tap on a photo is for: the one asked about, else the first still open.
   const target = subject && subject.kind !== 'unknown' ? subject.need : (left[0] ?? null);
   /** Left to check once `need` is matched: "Diluent, got it. 1 more to check." */
@@ -133,7 +143,11 @@ export function Match({ protocol, onCamera }: MatchProps) {
       if (choice === TAKE_PHOTO) {
         kit.retake(retake.id, `Take a photo of just the ${retake.name}.`);
         onCamera();
-      } else if (choice === KEEP_IT) setKept(k => ({ ...k, [retake.id]: true }));
+      } else if (choice === KEEP_IT) {
+        // Kept as it is: not asked again here or on the protocol (the bench draws the bottle).
+        keepAsIs(kit.picks[retake.id]!.crop);
+        setKept(k => ({ ...k, [retake.id]: true }));
+      }
       return;
     }
     if (!subject) return;
@@ -216,7 +230,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
       .
     </>
   ) : busy ? (
-    finding ? looking(kit.shots.length) : reading(found)
+    kit.following ? following(kit.following) : finding ? looking(takenOf(kit.shots)) : reading(found)
   ) : (
     kit.said ?? (unseen ? cantLook(needs.length) : opening(kit.shots.length, needs.length))
   ));

@@ -287,7 +287,7 @@ export function wellRoles(plan: PlatePlan): WellRole[] {
 
 // ─── Working reagent ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Amounts worth making (mL): the need plus 10 % for the tips and the trough, rounded up to one of these. */
+/** Amounts worth making (mL): the need plus 10 % for what stays in the tips and the tube, rounded up to one of these. */
 const NICE_ML = [3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100];
 
 /**

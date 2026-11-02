@@ -1,6 +1,7 @@
 import { useRef, type RefObject } from 'react';
 import { useNavigate } from 'react-router';
 import { Menu, MenuItem } from '../../components/ui/Menu.tsx';
+import { isVideo } from '../kit/photo.ts';
 import { CameraIcon, CloseIcon, QrIcon, UploadIcon } from './icons.tsx';
 import { startUpload } from './upload.ts';
 
@@ -16,7 +17,8 @@ type PlusMenuProps = {
 /**
  * The + menu (Home-Plus.dc.html): the ways in besides speaking. Camera photographs the kit (the first photo can be the
  * box: Chapp tells which kit it is, ../kit/analysis.ts whichKit), QR code imports a labmate's setup, Upload takes the
- * vendor's PDF: Chapp reads it into a protocol (./upload.ts) while the Overview opens.
+ * vendor's PDF: Chapp reads it into a protocol (./upload.ts) while the Overview opens; or a video of the kit, which
+ * plays on screen while Chapp finds the kit and its bottles in it (../kit/Watch.tsx), then the protocol opens.
  */
 export function PlusMenu({ open, onClose, coverPlus, plusRef }: PlusMenuProps) {
   const navigate = useNavigate();
@@ -70,13 +72,15 @@ export function PlusMenu({ open, onClose, coverPlus, plusRef }: PlusMenuProps) {
       <input
         ref={file}
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,video/*,.mov,.mp4"
         hidden
         tabIndex={-1}
         onChange={e => {
-          const pdf = e.target.files?.[0];
+          const chosen = e.target.files?.[0];
           e.target.value = '';
-          if (pdf) navigate('/protocol', { state: { upload: startUpload(pdf) } });
+          if (!chosen) return;
+          if (isVideo(chosen)) navigate('/watch', { state: { video: chosen } });
+          else navigate('/protocol', { state: { upload: startUpload(chosen) } });
         }}
       />
     </>

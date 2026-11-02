@@ -15,6 +15,14 @@ export const NO_SPEECH_MS = 8000;
 export const MAX_TURN_MS = 30000;
 /** Wait after Chapp stops talking before listening again, so the tail of its voice is not heard. */
 export const AFTER_SPEAKING_MS = 300;
+/** Words unchanged this long while still being heard go ahead to the conversation, which starts on them (controller.ts). */
+export const STABLE_MS = 400;
+/**
+ * Live speech: words unchanged this long with no end of turn from the transcriber are taken as the turn. A bare command
+ * ("下一步", "next step") reads as an unfinished sentence to its endpointer, which measured 5–7 s before closing such
+ * turns, against 0.2–0.3 s for a complete sentence; the words themselves had settled every time (2026-10-31).
+ */
+export const COMMIT_MS = 1200;
 
 /**
  * tap: one thing said, then stop · hold: everything said while Tap to speak is held, sent when it is let go (a pause

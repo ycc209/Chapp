@@ -3,6 +3,7 @@ import { cn } from '../../lib/cn.ts';
 import { useSession } from '../../state/session.ts';
 import { primeSpeech } from '../../voice/speak.ts';
 import { useVoice } from '../../voice/useVoice.ts';
+import { ListenWave, type GlowSize } from './ListenWave.tsx';
 import { Waveform } from './Waveform.tsx';
 
 export type BottomBarProps = {
@@ -14,7 +15,7 @@ export type BottomBarProps = {
   onUtterance: (text: string) => void;
   /**
    * Paints the idle wash behind the bar (default). A screen that paints one wash under both its pills and the bar
-   * (Plan, Results, Protocol) turns it off, so the two do not double; the listening glow still shows.
+   * (Plan, Results, Protocol) turns it off, so the two do not double; the glow still rises while Chapp listens.
    */
   wash?: boolean;
   /**
@@ -22,6 +23,13 @@ export type BottomBarProps = {
    * Chapp's conversation mode. Holding works the same either way.
    */
   tapTalks?: boolean;
+  /**
+   * Home: a hold grows the glow to the middle of the screen, where the screen shows the words heard (no bubble); let go,
+   * it springs back to small, and stays while Chapp answers (`busy`).
+   */
+  tallGlow?: boolean;
+  /** Chapp is answering what was said (Home's turn, thinking). */
+  busy?: boolean;
 };
 
 /** Held this long, a press is a hold: let go, it sends what was said. A quicker press is a tap. */
@@ -35,12 +43,8 @@ const RISE_PX = 18;
 /** Idle: a soft blue and teal wash at the bottom edge, fading into white. */
 const IDLE_BG =
   'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
-/** Listening, talking and holding: the same wash, stronger and wider. */
-const GLOW =
-  'radial-gradient(120% 100% at 50% 100%, rgba(121, 185, 243, 0.45) 0%, rgba(111, 211, 198, 0.18) 42%, rgba(255, 255, 255, 0) 72%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.9) 62%)';
-/** Slid up to cancel: the glow turns to the notes' caution colour. */
-const CANCEL_GLOW =
-  'radial-gradient(120% 100% at 50% 100%, rgba(255, 214, 153, 0.55) 0%, rgba(255, 244, 224, 0.3) 42%, rgba(255, 255, 255, 0) 72%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.9) 62%)';
+/** Listening, talking and holding: the blue glow rises behind the bar instead (ListenWave), over plain white. */
+const UNDER_WAVE = 'linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.9) 62%)';
 
 /**
  * The design's margin -8px -20px -34px and padding 8px 20px 34px: the screen pads its content 20 px at the sides and
@@ -61,7 +65,7 @@ const LABEL = 'text-[15px] leading-5 font-semibold text-text';
  * appear in a bubble above the bar as they are heard; let go to send them, or slide up first and let go to cancel
  * (sliding back down sends again). Nothing heard, nothing is sent. Enter or Space on the button is a tap.
  */
-export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTalks = false }: BottomBarProps) {
+export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTalks = false, tallGlow = false, busy = false }: BottomBarProps) {
   const { voice, tap, hold, asTap, cancel, talk, send, end } = useVoice(onUtterance);
   const heard = useSession(s => s.heard);
   const interim = useSession(s => s.interim);
@@ -136,7 +140,8 @@ export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTal
 
   if (voice === 'talking') {
     return (
-      <div className={cn('relative grid grid-cols-3 items-center', BAR)} style={{ background: GLOW }}>
+      <div className={cn('relative grid grid-cols-3 items-center', BAR)} style={{ background: UNDER_WAVE }}>
+        <ListenWave size="small" />
         <span />
         <button
           type="button"
@@ -161,14 +166,18 @@ export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTal
   const listening = voice === 'listening';
   const holding = voice === 'holding';
   const words = heard || interim;
-  // The bubble shows once it is a hold (or words came in), and stays while the last words are sent.
-  const bubble = holding && (held || Boolean(words) || sending);
+  // The bubble shows once it is a hold (or words came in), and stays while the last words are sent; Home shows the
+  // words itself, inside the glow.
+  const bubble = !tallGlow && holding && (held || Boolean(words) || sending);
+  const glow: GlowSize =
+    tallGlow && holding && !sending && (held || Boolean(words)) ? 'big' : holding || listening || (tallGlow && busy) ? 'small' : 'off';
   const shift = { transform: `translateY(${-Math.round(Math.min(lift, CANCEL_PX) / CANCEL_PX * RISE_PX)}px)` };
   return (
     <div
       className={cn('relative grid grid-cols-3 items-center', BAR)}
-      style={{ background: holding ? (cancelling ? CANCEL_GLOW : GLOW) : listening ? GLOW : wash ? IDLE_BG : undefined, transition: 'background 0.2s' }}
+      style={{ background: glow !== 'off' ? UNDER_WAVE : wash ? IDLE_BG : undefined, transition: 'background 0.2s' }}
     >
+      <ListenWave size={glow} caution={holding && cancelling && !sending} />
       {bubble && <HoldBubble heard={heard} interim={interim} cancelling={cancelling && !sending} sending={sending} />}
       <button type="button" aria-label="Camera, QR code or upload" onClick={onPlus} className={cn(ROUND, 'justify-self-start')}>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">

@@ -5,6 +5,7 @@ import { ChatScreen } from './screens/chat/Chat.tsx';
 import { Home } from './screens/home/Home.tsx';
 import { Intro } from './screens/intro/Intro.tsx';
 import { KitScreen } from './screens/kit/Kit.tsx';
+import { WatchScreen } from './screens/kit/Watch.tsx';
 import { LibraryScreen } from './screens/library/Library.tsx';
 import { PlanScreen } from './screens/plan/Plan.tsx';
 import { ProtocolScreen } from './screens/protocol/Protocol.tsx';
@@ -26,6 +27,7 @@ export function App() {
           <Route path="chat" element={<ChatScreen />} />
           <Route path="protocol" element={<ProtocolScreen />} />
           <Route path="kit" element={<KitScreen />} />
+          <Route path="watch" element={<WatchScreen />} />
           <Route path="plan" element={<PlanScreen />} />
           <Route path="run/:step" element={<RunScreen />} />
           <Route path="results" element={<ResultsScreen />} />

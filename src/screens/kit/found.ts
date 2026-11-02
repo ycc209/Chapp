@@ -1,8 +1,8 @@
-import type { Box, LabelMatch, LabelTarget, ReadLabels } from '../../../shared/ai.ts';
+import type { Box, LabelMatch, LabelTarget, ProtocolIntro, ReadLabels } from '../../../shared/ai.ts';
 import { area } from '../../../shared/kit.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { bottles } from '../protocol/content.ts';
-import type { Need, Pick as KitPick, Thing } from './matching.ts';
+import { contentsId, needsOf, type Need, type Pick as KitPick, type Thing } from './matching.ts';
 
 /**
  * What the models found on the photos, turned into what the kit screen shows (Recognized.dc.html): bottles whose
@@ -12,7 +12,64 @@ import type { Need, Pick as KitPick, Thing } from './matching.ts';
 
 /** The run's bottles as /api/kit/labels takes them: the kit's own, then the user's. */
 export function labelTargets(p: Protocol): LabelTarget[] {
-  return bottles(p).map(c => ({ id: c.id, name: c.name, role: c.role, kit: c.suppliedBy === 'kit', labels: c.label ?? [] }));
+  return bottles(p).map(c => {
+    // The volumes the kit's sizes have it in: a label prints its bottle's ("25 mL" is Reagent B, not A's 500 mL).
+    const volumes = [...new Set(p.kit.variants.flatMap(v => v.contents.filter(x => x.component === c.id && x.amount).map(x => `${x.amount!.value} ${x.amount!.unit}`)))];
+    return { id: c.id, name: c.name, role: c.role, kit: c.suppliedBy === 'kit', labels: c.label ?? [], ...(volumes.length ? { volumes } : {}) };
+  });
+}
+
+/** What the bottles' labels are read against: the bottles as the kit screens name them, and as /api/kit/labels takes them. */
+export type ReadTarget = { needs: Need[]; components: LabelTarget[] };
+
+export const targetOf = (p: Protocol): ReadTarget => ({ needs: needsOf(p), components: labelTargets(p) });
+
+/**
+ * What a kit new to Chapp holds, as its manual's first read lists it (ProtocolIntro.contents: "Insulin", "1 mL"), as
+ * /api/kit/labels takes it: the labels are read against these as soon as the manual says them, long before its steps
+ * are written, and what they matched moves to the protocol's own bottles once it is read (sameBottles). An amount is
+ * the volume the bottle comes in only when it is one ("10 × 1 mL" is not).
+ */
+export function contentsTargets(contents: ProtocolIntro['contents']): LabelTarget[] {
+  return contents
+    .map(c => ({ name: c.name.trim(), amount: c.amount.trim() }))
+    .filter(c => c.name)
+    .map((c, i) => ({ id: contentsId(i), name: c.name, role: 'kit component', kit: true, labels: [c.name], ...(/^\d+(\.\d+)?\s*(µl|ul|ml|l)$/i.test(c.amount) ? { volumes: [c.amount] } : {}) }));
+}
+
+/** The kit's contents as the kit screens name them. */
+export const contentsTarget = (contents: LabelTarget[]): ReadTarget => ({ needs: contents.map(c => ({ id: c.id, name: c.name, kit: true, role: c.role })), components: contents });
+
+const nameWords = (s: string) => new Set(s.normalize('NFKC').toLowerCase().replace(/[^a-z0-9µ]+/g, ' ').split(' ').filter(Boolean));
+
+/** How alike two names are: 2 for the same words, else the share of the shorter name's words the other has. */
+function alike(a: string, b: string): number {
+  const x = nameWords(a);
+  const y = nameWords(b);
+  if (!x.size || !y.size) return 0;
+  const shared = [...x].filter(w => y.has(w)).length;
+  return shared === x.size && shared === y.size ? 2 : shared / Math.min(x.size, y.size);
+}
+
+/**
+ * Which of the protocol's bottles each of the kit's contents is, by their words: the manual's first read and its
+ * protocol name them alike ("1000X Differentiation Cocktail", "Differentiation Cocktail (1000X)"). The most alike pairs
+ * first, each bottle once, more than half the shorter name's words shared ("Buffer A" is not "Buffer B"); null for
+ * one the protocol has no bottle like. Pure, so it is tested.
+ */
+export function sameBottles(contents: LabelTarget[], targets: LabelTarget[]): Record<string, string | null> {
+  const pairs = contents
+    .flatMap(c => targets.map(t => ({ c: c.id, t: t.id, score: Math.max(...[t.name, ...t.labels].map(n => alike(c.name, n))) })))
+    .filter(p => p.score > 0.5)
+    .sort((p, q) => q.score - p.score);
+  const ids: Record<string, string | null> = Object.fromEntries(contents.map(c => [c.id, null]));
+  const taken = new Set<string>();
+  for (const p of pairs) {
+    if (ids[p.c] !== null || taken.has(p.t)) continue;
+    ids[p.c] = p.t;
+    taken.add(p.t);
+  }
+  return ids;
 }
 
 /** One bottle SAM found and what its label said. */

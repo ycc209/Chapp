@@ -1,3 +1,4 @@
+import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { useScreen } from '../../app/screen.ts';
 import { useSession } from '../../state/session.ts';
 import { cn } from '../../lib/cn.ts';
@@ -8,24 +9,36 @@ const DISPLAY = 'text-[30px] leading-[38px] font-bold tracking-[-0.02em] text-in
 // A longer answer steps down to the title size so it still fits above the bar.
 const LONG = 'text-[22px] leading-[30px] font-[650] tracking-[-0.01em] text-ink';
 const LONG_AFTER = 110;
-// The small line above it: the greeting, or what the user asked once Chapp answers.
+// The small line above it: the greeting.
 const SMALL = 'text-[15px] leading-5 font-semibold text-text';
+// What the user said, once sent: at the top on the left, Chapp's answer under it on the right.
+const SAID = 'text-[20px] leading-[26px] font-semibold tracking-[-0.01em] text-text';
 
 export const ERROR_LINE = "Sorry, I couldn't get an answer. Try again?";
 
-/** The middle of the home screen: the greeting, the words being heard, or the last exchange with Chapp. */
+/**
+ * The middle of the home screen: the greeting, the words being heard (held, inside the bar's glow, which has grown up
+ * behind them), or the last exchange with Chapp: what the user said at the top on the left, the answer under it on the
+ * right.
+ */
 export function HomeCenter({ turn }: { turn: Turn | null }) {
   const voice = useSession(s => s.voice);
   const heard = useSession(s => s.heard);
   const interim = useSession(s => s.interim);
-  // Held, the words show in the bar's own bubble.
-  const hearing = voice !== 'idle' && voice !== 'holding' && (heard || interim);
-  const answer = turn?.phase === 'reply' ? turn.say : turn?.phase === 'error' ? ERROR_LINE : '';
+  const hearing = voice !== 'idle' && (heard || interim);
+  const answer = turn?.phase === 'reply' || turn?.phase === 'thinking' ? turn.say || '' : turn?.phase === 'error' ? turn.error || ERROR_LINE : '';
   // With the keyboard up there is little room left: the words sit close to the message box.
   const { keyboard } = useScreen();
 
   return (
-    <div className={cn('flex min-h-0 grow flex-col justify-center-safe gap-2 overflow-y-auto px-2 [scrollbar-width:none]', keyboard ? 'pb-3' : 'pb-16')}>
+    // In front of the bar's glow, which rises behind these words while Chapp listens.
+    <div
+      className={cn(
+        'relative z-[1] flex min-h-0 grow flex-col gap-2 overflow-y-auto px-2 [scrollbar-width:none]',
+        turn && !hearing ? 'justify-start pt-4' : 'justify-center-safe',
+        keyboard ? 'pb-3' : 'pb-16',
+      )}
+    >
       {/* Always mounted, so screen readers announce each answer as it arrives. */}
       <p aria-live="polite" className="sr-only">
         {answer}
@@ -41,12 +54,18 @@ export function HomeCenter({ turn }: { turn: Turn | null }) {
             </span>
           )}
         </p>
-      ) : turn?.phase === 'thinking' ? (
-        <p className={DISPLAY}>{turn.text}</p>
       ) : turn ? (
         <>
-          <p className={cn(SMALL, 'line-clamp-2')}>{turn.text}</p>
-          {answer && <p className={answer.length > LONG_AFTER ? LONG : DISPLAY}>{answer}</p>}
+          {/* Up from the glow, where it was heard. */}
+          <p className={cn(SAID, 'line-clamp-3 animate-in fade-in slide-in-from-bottom-8 duration-500')}>{turn.text}</p>
+          <div className="mt-4 flex max-w-[88%] flex-col gap-2 self-end animate-in fade-in duration-500">
+            {turn.phase === 'thinking' ? (
+              answer ? <ReplyText text={answer} className={LONG} /> : <p className={DISPLAY}>{turn.progress || '…'}</p>
+            ) : (
+              answer && <ReplyText text={answer} className={answer.length > LONG_AFTER ? LONG : DISPLAY} />
+            )}
+            {turn.phase === 'reply' && <ReplySources sources={turn.sources} />}
+          </div>
         </>
       ) : (
         <>

@@ -36,6 +36,10 @@ export type RunState = {
   aside: boolean;
   /** What changed on the plate during the run (a well moved, wells or a condition added): every screen lays it out so. */
   edits: PlateEdits;
+  /** The user set the plan (samples, replicates, standards) for this run: starting it needs no start card. */
+  planned: boolean;
+  /** The run was started (Start, or yes to the start card): its steps are under way, even before anything is ticked. */
+  begun: boolean;
 };
 
 type RunActions = {
@@ -56,6 +60,8 @@ type RunActions = {
   moveWell: (from: string, to: string) => void;
   /** Wells added: more of a tube on the plate (`of`), or a new sample with a name. */
   addWells: (added: PlateEdits['added'][number]) => void;
+  /** Start: the plan is the user's, and the run is under way (src/state/start.ts). */
+  begin: () => void;
   reset: () => void;
 };
 
@@ -76,6 +82,8 @@ const fresh: RunState = {
   readingsFrom: null,
   aside: false,
   edits: NO_EDITS,
+  planned: false,
+  begun: false,
 };
 
 export const useRun = create<RunState & RunActions>()(
@@ -91,9 +99,11 @@ export const useRun = create<RunState & RunActions>()(
           timers: {},
           aside: false,
           edits: NO_EDITS,
+          planned: false,
+          begun: false,
           photos: protocolId === s.protocolId ? s.photos : protocolId ? kitPhotos(protocolId) : {},
         })),
-      setPlan: plan => set(plan),
+      setPlan: plan => set({ ...plan, planned: true }),
       goTo: step => set({ step: Math.max(0, step) }),
       next: () => set(s => ({ step: s.step + 1 })),
       previous: () => set(s => ({ step: Math.max(0, s.step - 1) })),
@@ -112,15 +122,16 @@ export const useRun = create<RunState & RunActions>()(
           return { edits: { moved: { ...moved, [from]: to }, added } };
         }),
       addWells: added => set(s => ({ edits: { ...s.edits, added: [...s.edits.added, added] } })),
+      begin: () => set({ planned: true, begun: true }),
       reset: () => set(fresh),
     }),
     { name: 'chapp.run' },
   ),
 );
 
-/** The run has begun: a step past the first, or anything ticked, timed, read or changed on the plate. */
-export const runStarted = (s: RunState) =>
-  s.step > 0 || [s.done, s.timers, s.readings, s.edits.moved].some(r => Object.keys(r).length > 0) || s.edits.added.length > 0;
+/** The run has begun: started, a step past the first, or anything ticked, timed, read or changed on the plate. */
+export const runStarted = (s: Pick<RunState, 'begun' | 'step' | 'done' | 'timers' | 'readings' | 'edits'>) =>
+  s.begun || s.step > 0 || [s.done, s.timers, s.readings, s.edits.moved].some(r => Object.keys(r).length > 0) || s.edits.added.length > 0;
 
 // The library follows the run: every protocol it runs is this phone's, and its photos are that protocol's kit.
 bringIn(useRun.getState());

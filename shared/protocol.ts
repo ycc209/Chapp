@@ -90,7 +90,8 @@ export const Mix = z.object({
   id: Id,
   name: z.string(),
   short: z.string(),
-  parts: z.array(z.object({ component: Id, parts: z.number().positive() })).min(2),
+  /** Each part's share, and the amount as the manual prints it ("44 µL", "1 mL", "50 parts") when it gives one. */
+  parts: z.array(z.object({ component: Id, parts: z.number().positive(), amount: z.string().max(40).optional() })).min(2),
   notes: z.array(Note),
   cite: Cite,
 });
@@ -251,7 +252,8 @@ export type Analysis = z.infer<typeof Analysis>;
 export type Protocol = z.infer<typeof Protocol>;
 
 /** A protocol as Library lists it (GET /api/protocols): its card and what a search looks in. `updated` in ms. */
-export type ProtocolSummary = { id: string; title: string; kit: string; catalogs: string[]; procedure: string; steps: number; updated: number };
+/** A protocol as Library lists it; `imported` ones were read from a manual by Chapp and can be deleted (DELETE /api/protocols/:id). */
+export type ProtocolSummary = { id: string; title: string; kit: string; catalogs: string[]; procedure: string; steps: number; updated: number; imported?: boolean };
 
 // The sample : reagent ratio is printed by some kits and not others (ATP's 50 µL + 50 µL): the volumes say it.
 const ASSAY = ['sample', 'mixPerSample', 'mix', 'standardCurve', 'range'] as const;

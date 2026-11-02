@@ -9,7 +9,10 @@ import { PlateCheckView, checkSay } from './PlateCheck.tsx';
 
 /**
  * The same six steps with gloves on (Gloves-*.dc.html): Chapp keeps listening, so there are no buttons to aim for;
- * the instruction is big enough to read from arm's length and the rest of the step stays in view below it.
+ * the instruction is big enough to read from arm's length and the rest of the step stays in view below it. The step's
+ * picture plays big (view.picture), the amounts written big on it, and the words under it by choice (view.words);
+ * where a grid is the step (the standards, the plate), the picture is small beside the line, the grid in view under
+ * them.
  */
 
 const B = ({ children }: { children: ReactNode }) => <b className="font-bold">{children}</b>;
@@ -23,6 +26,16 @@ function Say({ children, className }: { children: ReactNode; className?: string 
   );
 }
 
+/** The big line with the step's small picture beside it, where the grid under them is the step. */
+function Beside({ v, children }: { v: View; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex min-w-0 grow flex-col">{children}</div>
+      {v.picture?.small}
+    </div>
+  );
+}
+
 /** A small label over a big line: "Incubate at", "Read at". */
 const Over = ({ children }: { children: ReactNode }) => <p className="m-0 mb-1 text-[15px] leading-5 font-semibold text-text">{children}</p>;
 
@@ -33,29 +46,36 @@ export function GlovesStandards({ v }: { v: View }) {
   const levels = shadeLevels(series.vials);
   return (
     <div className="flex shrink-0 flex-col">
-      {ready ? (
-        <BenchLine size="md" className="px-1">Your {standardsOf(series.vials).length} standards are already made.</BenchLine>
-      ) : line.kind === 'all' ? (
-        <BenchLine size="md" className="px-1">All {line.total} standards are ready.</BenchLine>
-      ) : (
-        <VialNow vial={line.vial} level={levels[series.vials.indexOf(line.vial)]!} />
-      )}
+      <Beside v={v}>
+        {ready ? (
+          <BenchLine size="md" className="px-1">Your {standardsOf(series.vials).length} standards are already made.</BenchLine>
+        ) : line.kind === 'all' ? (
+          <BenchLine size="md" className="px-1">All {line.total} standards are ready.</BenchLine>
+        ) : (
+          <VialNow vial={line.vial} level={levels[series.vials.indexOf(line.vial)]!} />
+        )}
+      </Beside>
       <StandardsTable unit={series.unit} vials={series.vials} done={ready ? Object.fromEntries(series.vials.map(x => [x.id, true])) : v.done} className="mt-5" />
     </div>
   );
 }
 
-/** Gloves-Mix: how much to make, then the two amounts in big type. */
+/** Gloves-Mix: the step played with the user's bottles, the two amounts big on it; with the words on, how much to make, then the two amounts in big type. */
 export function GlovesMix({ v }: { v: View }) {
   const r = v.bench.reagent;
   // Read from arm's length: the keeping note without its fine print ("in a closed container").
   const keeps = keepsFor(v.bench, v.p).replace(/\s+in an? [^,.]+$/, '');
   return (
     <div className="flex shrink-0 flex-col">
-      <Say>
-        Make <B>{amountText(r.make)}</B> of {r.name.toLowerCase()}.{keeps ? ` ${keeps[0]!.toUpperCase()}${keeps.slice(1)}.` : ''}
-      </Say>
-      <ReagentParts plan={r} size="gloves" note="Add B last. Swirl until it is clear green." className="mt-5" />
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Say>
+            Make <B>{amountText(r.make)}</B> of {r.name.toLowerCase()}.{keeps ? ` ${keeps[0]!.toUpperCase()}${keeps.slice(1)}.` : ''}
+          </Say>
+          <ReagentParts plan={r} size="gloves" note="Add B last. Swirl until it is clear green." className="mt-5" />
+        </>
+      )}
     </div>
   );
 }
@@ -67,52 +87,59 @@ export function GlovesLoad({ v }: { v: View }) {
   const t = plate.tubes[k];
   return (
     <div className="flex shrink-0 flex-col">
-      {t ? (
-        <div className="flex flex-col px-1">
-          <Over>
-            Tube {k + 1} of {plate.tubes.length} · {load} µL in each
-          </Over>
-          <BenchLine size="lg">{t.name}</BenchLine>
-          <BenchLine size="xl" className="mt-0.5">
-            <span className="-mx-1.5 rounded-[8px] bg-sample-bg px-1.5">{t.wells.join(' · ')}</span>
-          </BenchLine>
-        </div>
-      ) : (
-        <BenchLine size="lg" className="px-1">All {plate.wells} wells are loaded.</BenchLine>
-      )}
+      <Beside v={v}>
+        {t ? (
+          <div className="flex flex-col px-1">
+            <Over>
+              Tube {k + 1} of {plate.tubes.length} · {load} µL in each
+            </Over>
+            <BenchLine size="lg">{t.name}</BenchLine>
+            <BenchLine size="xl" className="mt-0.5">
+              <span className="-mx-1.5 rounded-[8px] bg-sample-bg px-1.5">{t.wells.join(' · ')}</span>
+            </BenchLine>
+          </div>
+        ) : (
+          <BenchLine size="lg" className="px-1">All {plate.wells} wells are loaded.</BenchLine>
+        )}
+      </Beside>
       <PlateMap plan={plate} now={k} dense aria-label={t ? `${t.name} goes into ${t.wells.join(' and ')}` : `All ${plate.wells} wells loaded`} className="mt-[22px]" />
     </div>
   );
 }
 
-/** Gloves-Add: the reagent into every well, then shake and cover. */
+/** Gloves-Add: the reagent into every well, its volume big on the picture; with the words on, the volume, then shake and cover. */
 export function GlovesAdd({ v }: { v: View }) {
   const { add, plate, incubation } = v.bench;
   const then = [add.shake && <>shake <B>{add.shake}</B></>, incubation?.covered && 'cover the plate'].filter(Boolean);
   return (
     <div className="flex shrink-0 flex-col">
-      <Say>Same order as you loaded, so every well gets the same time.</Say>
-      <div className="mt-5 flex flex-col px-1">
-        <BenchLine className="font-medium">
-          <b className="font-[750]">{amountText(add.volume)}</b> into all <b className="font-[750]">{plate.wells}&nbsp;wells</b>
-        </BenchLine>
-        {then.length > 0 && (
-          <p className="m-0 mt-3.5 text-[20px] leading-7 font-medium text-ink">
-            Then {then.map((x, i) => (
-              <span key={i}>
-                {i > 0 && ' and '}
-                {x}
-              </span>
-            ))}
-            .
-          </p>
-        )}
-      </div>
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Say>Same order as you loaded, so every well gets the same time.</Say>
+          <div className="mt-5 flex flex-col px-1">
+            <BenchLine className="font-medium">
+              <b className="font-[750]">{amountText(add.volume)}</b> into all <b className="font-[750]">{plate.wells}&nbsp;wells</b>
+            </BenchLine>
+            {then.length > 0 && (
+              <p className="m-0 mt-3.5 text-[20px] leading-7 font-medium text-ink">
+                Then {then.map((x, i) => (
+                  <span key={i}>
+                    {i > 0 && ' and '}
+                    {x}
+                  </span>
+                ))}
+                .
+              </p>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-/** Gloves-Incubate, then Gloves-Timer: the temperature and time in big type, then the clock itself. */
+/** Gloves-Incubate (the temperature and time big on the picture; when it is done, and the words by choice), then Gloves-Timer: the clock itself. */
 export function GlovesIncubate({ v }: { v: View }) {
   const inc = v.bench.incubation;
   const t = v.timer;
@@ -123,15 +150,22 @@ export function GlovesIncubate({ v }: { v: View }) {
     const chosen = inc.options.find(o => o.seconds === t.total) ?? first!;
     return (
       <div className="flex shrink-0 flex-col">
+        {v.picture?.big}
         <div className="flex flex-col px-1">
-          <Over>Incubate at</Over>
-          <BenchLine size="xl">{[inc.temperature, chosen.label].filter(Boolean).join(' · ')}</BenchLine>
-          <DoneAt seconds={t.total} size="gloves" className="mt-2" />
+          {v.words && (
+            <>
+              <Over>Incubate at</Over>
+              <BenchLine size="xl">{[inc.temperature, chosen.label].filter(Boolean).join(' · ')}</BenchLine>
+            </>
+          )}
+          <DoneAt seconds={t.total} size="gloves" className={v.words ? 'mt-2' : undefined} />
         </div>
+        {v.words && (
         <Say className="mt-5">
           {first!.label} is the standard.
           {alts.length > 0 && ` ${alts.map(a => a.label.replace(/^2 h$/, 'Two hours')).join(' or ')} gives more signal and a lower floor.`} I start the clock when the plate is in.
         </Say>
+        )}
       </div>
     );
   }
@@ -171,7 +205,7 @@ export function GlovesIncubate({ v }: { v: View }) {
   );
 }
 
-/** Gloves-Read: cool, read, then show Chapp the reader's screen ("photo"). */
+/** Gloves-Read: cool, read (the wavelength big on the reader; the words by choice), then show Chapp the reader's screen ("photo"). */
 export function GlovesRead({ v }: { v: View }) {
   if (v.check) {
     return (
@@ -185,13 +219,18 @@ export function GlovesRead({ v }: { v: View }) {
   }
   return (
     <div className="flex shrink-0 flex-col">
-      <Say>Cool the plate to room temperature and read every well. Then show me the reader’s screen.</Say>
-      <div className="mt-5 flex flex-col px-1">
-        <Over>Read at</Over>
-        <BenchLine size="xxl">
-          {v.bench.readout.value} {v.bench.readout.unit}
-        </BenchLine>
-      </div>
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Say>Cool the plate to room temperature and read every well. Then show me the reader’s screen.</Say>
+          <div className="mt-5 flex flex-col px-1">
+            <Over>Read at</Over>
+            <BenchLine size="xxl">
+              {v.bench.readout.value} {v.bench.readout.unit}
+            </BenchLine>
+          </div>
+        </>
+      )}
       <ReadingsIn v={v} className="mt-6" />
     </div>
   );

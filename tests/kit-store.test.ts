@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { outlineAt, useKit } from '../src/screens/kit/store.ts';
+import { putCover } from '../src/screens/kit/cover.ts';
+import { addedTo, forgetAdded, outlineAt, roundNow, useAdded, useKit } from '../src/screens/kit/store.ts';
+import { kitCover, useCovers } from '../src/state/library.ts';
 import { useRun } from '../src/state/run.ts';
 
 // The kit session (src/screens/kit/store.ts): a matched bottle's crop goes into the run, and a retake drops the match
@@ -16,6 +18,8 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', memory());
   useKit.getState().clear();
   useRun.setState({ protocolId: 'pierce-bca', photos: {} });
+  useAdded.setState({ protocolId: null, photos: {}, cover: false });
+  useCovers.setState({ covers: {} });
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -47,5 +51,57 @@ describe('retake', () => {
     useKit.getState().found({ 'reagent-a': { shot: 's2', box, crop: 'data:a2', how: 'read' } }, [], 'Found 1.');
     expect(useKit.getState().picks['reagent-a']?.crop).toBe('data:a2');
     expect(useRun.getState().photos['reagent-a']).toBe('data:a2');
+  });
+});
+
+describe('a new kit’s contents', () => {
+  it('keep what their labels matched out of the run until the protocol is read, then move it to its bottles', () => {
+    useRun.setState({ protocolId: null, photos: {} });
+    useKit.getState().setContents([
+      { id: 'contents:0', name: 'Insulin', role: 'kit component', kit: true, labels: ['Insulin'] },
+      { id: 'contents:1', name: 'Mystery', role: 'kit component', kit: true, labels: ['Mystery'] },
+    ]);
+    useKit.getState().found(
+      { 'contents:0': { shot: 's1', box, crop: 'data:ins', how: 'read' }, 'contents:1': { shot: 's1', box: { ...box, x: 0.6 }, crop: 'data:m', how: 'read' } },
+      [{ id: 't1', shot: 's1', box, crop: 'data:g', looks: 'small vial', text: '', component: 'contents:0', match: 'guess' }],
+      'Found 2.',
+    );
+    expect(useRun.getState().photos).toEqual({});
+
+    useRun.setState({ protocolId: '3t3-l1' });
+    useKit.getState().adopt({ 'contents:0': 'insulin', 'contents:1': null });
+    const kit = useKit.getState();
+    expect(Object.keys(kit.picks)).toEqual(['insulin']);
+    expect(useRun.getState().photos).toEqual({ insulin: 'data:ins' });
+    // One the protocol has no bottle like is asked about; a guess at a content is a guess at its bottle.
+    expect(kit.things.map(t => [t.component, t.match, t.crop])).toEqual([['insulin', 'guess', 'data:g'], [null, 'none', 'data:m']]);
+    expect(kit.contents).toBeNull();
+  });
+});
+
+describe('the protocol’s ×', () => {
+  it('takes back what this tab’s round added: its photos still in the run, the cover, the round under way', () => {
+    useRun.setState({ photos: { bsa: 'data:older' } });
+    useKit.getState().addShots([{ id: 's1', src: 'data:s1', width: 10, height: 10 }]);
+    useKit.getState().found({ 'reagent-a': { shot: 's1', box, crop: 'data:a', how: 'read' }, 'reagent-b': { shot: 's1', box, crop: 'data:b', how: 'read' } }, [], 'Found 2.');
+    putCover('pierce-bca', { src: 'data:cover', box, round: 's1' });
+    expect(addedTo(useAdded.getState(), 'pierce-bca', 0)).toBe(true);
+    expect(addedTo(useAdded.getState(), 'other-kit', 0)).toBe(false);
+    // A later photo of Reagent B, not from this round, stays.
+    useRun.getState().setPhoto('reagent-b', 'data:b-later');
+    const before = roundNow();
+
+    forgetAdded();
+    expect(useRun.getState().photos).toEqual({ bsa: 'data:older', 'reagent-b': 'data:b-later' });
+    expect(kitCover('pierce-bca')).toBeUndefined();
+    expect(useKit.getState().shots).toEqual([]);
+    // Work still under way for the round is for one that is over.
+    expect(roundNow()).toBe(before + 1);
+    expect(addedTo(useAdded.getState(), 'pierce-bca', 0)).toBe(false);
+  });
+
+  it('shows while a round is under way, before anything is matched', () => {
+    expect(addedTo(useAdded.getState(), 'pierce-bca', 2)).toBe(true);
+    expect(addedTo(useAdded.getState(), null, 2)).toBe(false);
   });
 });

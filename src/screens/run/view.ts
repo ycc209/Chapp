@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Protocol } from '../../../shared/protocol.ts';
 import type { PlanFit } from '../../../shared/plate.ts';
 import type { Bench, PlateCheck, TimerPhase } from './model.ts';
@@ -26,6 +27,14 @@ export type View = {
   readings: { count: number; sample: boolean };
   /** The user's photo of each bottle, by component id (useRun().photos). */
   photos: Record<string, string>;
+  /**
+   * The step's picture (Picture.tsx): small, to sit beside Chapp's line where a grid is the step (the vials, the plate),
+   * or big, played above the line (gloves on too: the big picture over the big type). Null in the list, and for a step
+   * with none.
+   */
+  picture: { small: ReactNode; big: ReactNode } | null;
+  /** The words under the big picture (what to do, written out), shown by the user's choice (useBench().words). */
+  words: boolean;
   /** Something just changed with what was said: the wells now (Run-Load), the end time (Run-Incubate). */
   flash: boolean;
   tickVial: (id: string) => void;

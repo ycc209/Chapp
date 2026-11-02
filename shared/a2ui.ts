@@ -43,12 +43,12 @@ const PROPS: Record<ComponentType, readonly string[]> = {
   Text: ['text', 'variant'],
   Divider: ['axis'],
   ChoicePicker: ['options', 'variant'],
-  ReagentCard: ['samples', 'replicates'],
-  PlateCard: ['samples', 'replicates'],
-  StandardsCard: [],
+  ReagentCard: ['samples', 'replicates', 'standardReplicates'],
+  PlateCard: ['samples', 'replicates', 'standardReplicates'],
+  StandardsCard: ['samples', 'replicates', 'standardReplicates'],
   StepCard: ['stepId'],
   TimerCard: ['stepId'],
-  Compare: ['need', 'have', 'samples', 'replicates'],
+  Compare: ['need', 'have', 'samples', 'replicates', 'standardReplicates'],
   Ask: ['fields'],
 };
 /** What an Ask may ask about, filled in with the run's values. */
@@ -277,7 +277,8 @@ export function checkA2ui(raw: unknown, rules: A2uiRules): { messages: A2uiMessa
           break;
         }
         case 'samples':
-        case 'replicates': {
+        case 'replicates':
+        case 'standardReplicates': {
           const n = Number(value);
           const max = key === 'samples' ? 96 : 4;
           // Numbers the user named ("what if 30 samples"); any other is dropped and the card shows the run's plan.

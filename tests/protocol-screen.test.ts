@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Protocol } from '../shared/protocol.ts';
-import { alsoNeed, answer, bottleDetail, kitContents, precautions, principle, shortName, splitName, stepLines } from '../src/screens/protocol/content.ts';
+import { answer, bottleDetail, kitContents, notInKit, precautions, principle, shortName, splitName, stepLines } from '../src/screens/protocol/content.ts';
 import { amounts, asked, gotIt, heardAnswer, needsOf, noPhoto, open, opening, rowDetail, type Need } from '../src/screens/kit/matching.ts';
 import { boxOnCover, squareAround } from '../src/screens/kit/photo.ts';
 
@@ -29,18 +29,17 @@ describe('protocol screen wording', () => {
     });
 
     it('lists the kit as the design does, from the document', () => {
-      const kit = kitContents(doc, 'microplate');
+      const kit = kitContents(doc);
       expect(kit.items.map(i => [i.name, i.detail])).toEqual([
         ['BCA Reagent A', null],
         ['BCA Reagent B', null],
         ['Albumin Standard', 'BSA · 2 mg/mL'],
       ]);
       expect(kit.store).toBe('Store them at 15–30 °C.');
-      const nb = (s: string) => s.replace(/‑/g, '-');
-      expect(nb(alsoNeed(doc, 'microplate', false))).toBe(
-        'You also need a diluent (same buffer as your samples), a 96-well plate, a plate shaker, a 37 °C incubator and a plate reader.',
-      );
-      expect(nb(alsoNeed(doc, 'microplate', true))).toBe('You also need a 96-well plate, a plate shaker, a 37 °C incubator and a plate reader.');
+      // What the box does not hold: the user's own diluent, then the equipment (the pipette goes without saying).
+      const own = notInKit(doc, 'microplate');
+      expect(own.bottles).toEqual([{ id: 'diluent', name: 'Diluent', aside: 'same buffer as your samples' }]);
+      expect(own.gear.map(g => g.replace(/‑/g, '-'))).toEqual(['96-well plate', 'Plate shaker', '37 °C incubator', 'Plate reader']);
       expect(doc.components.map(bottleDetail)).toEqual([
         'Kit · store at 15–30 °C',
         'Kit · store at 15–30 °C',

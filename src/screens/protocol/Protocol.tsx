@@ -1,8 +1,11 @@
+import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useBottomWhileTyping } from '../../app/keyboard.ts';
 import { useScreen } from '../../app/screen.ts';
 import { A2uiSurface } from '../../components/a2ui/Surface.tsx';
+import { benchCut, keepAsIs, keptAsIs, useCutouts } from '../../components/bench/cutout.ts';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/Dialog.tsx';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SHEET_DURATION, SHEET_EASE } from '../../components/ui/Sheet.tsx';
@@ -12,17 +15,27 @@ import { isPlannable } from '../../../shared/calc.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
 import { saveProtocol, useKits, useMine } from '../../state/library.ts';
+import { executeAssistantAction } from '../../state/assistantActions.ts';
+import { useProtocolPreviews } from '../../state/protocolPreview.ts';
+import { useChatLog } from '../../state/conversationLog.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { runStarted, useRun } from '../../state/run.ts';
+import { noteEvent } from '../../state/runEvents.ts';
+import { beginRun } from '../../state/start.ts';
 import { useSession } from '../../state/session.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { PlusMenu } from '../home/PlusMenu.tsx';
 import { Sidebar } from '../home/Sidebar.tsx';
 import { TypingBar } from '../home/TypingBar.tsx';
-import { useConverse } from '../home/useConverse.ts';
+import { converseContext, useConverse } from '../home/useConverse.ts';
+import { claimCover } from '../kit/cover.ts';
 import { samplePhotos } from '../kit/sample.ts';
-import { Answer, Glance, QuickSections, Sections, type Section } from './Body.tsx';
-import { bottles, procedureFor, shortName, startPath } from './content.ts';
+import { Answer, Glance, ProgressiveOverview, QuickSections, Sections, type Section } from './Body.tsx';
+import { KitAsk } from '../kit/Ask.tsx';
+import { ModelTag } from '../kit/ModelTag.tsx';
+import { kitProgress } from '../kit/progress.ts';
+import { addedTo, forgetAdded, useAdded, useKit } from '../kit/store.ts';
+import { bottles, procedureFor, shortName, splitName } from './content.ts';
 import { BookmarkIcon, CheckIcon, DocumentIcon, PlayIcon } from './icons.tsx';
 import { useFinding, wasShown, type Stage } from './useFinding.ts';
 import { useImporting } from './useImporting.ts';
@@ -38,8 +51,6 @@ const KIT_TOP = 474;
 const STORY_ASK = 'I just got a Pierce BCA protein assay kit. Help me run it.';
 // Under what Chapp read of a new manual first, while the rest is read (the status line says "Turning it into steps"):
 // its steps as printed are there already, their amounts not yet checked; or it could not list them.
-const STILL_CHECKING = 'Still checking the amounts';
-const STILL_READING = 'Still reading the steps';
 
 type Review = 'overview' | 'protocol' | 'kit' | 'full';
 
@@ -53,6 +64,12 @@ type Review = 'overview' | 'protocol' | 'kit' | 'full';
  * (with drawn sample photos if the run has none) or full (every section open).
  */
 export function ProtocolScreen() {
+  const [params] = useSearchParams();
+  const previewId = params.get('preview');
+  return previewId ? <ProtocolPreviewScreen key={previewId} id={previewId} /> : <CurrentProtocolScreen />;
+}
+
+function CurrentProtocolScreen() {
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -68,9 +85,10 @@ export function ProtocolScreen() {
 
   const exchange = useSession(s => s.exchange);
   const voice = useSession(s => s.voice);
-  // The Overview, once per thing said on Home; opened again later it is the protocol on its own.
+  // An explicit legacy lookup may open the Overview. Ordinary conversation history
+  // must never become a new search merely because the user opened their protocol.
   const [ask] = useState(() =>
-    upload ? null : review === 'overview' ? (exchange?.ask ?? STORY_ASK) : review ? null : exchange && !wasShown(exchange) ? exchange.ask : null,
+    upload ? null : review === 'overview' ? (exchange?.ask ?? STORY_ASK) : review ? null : exchange?.query && !wasShown(exchange) ? exchange.ask : null,
   );
   const [askedIn] = useState(() => (ask && exchange?.ask === ask ? exchange : null));
   // What to search for: the kit Chapp named (a findProtocol action), or else what the user said.
@@ -83,11 +101,13 @@ export function ProtocolScreen() {
   const protocolId = finding.protocolId ?? runProtocolId ?? 'pierce-bca';
   const procedure = useRun(s => s.procedure);
   const runPhotos = useRun(s => s.photos);
-  const started = useRun(runStarted);
   const { protocol, error } = useProtocol(protocolId);
 
   const all = protocol ? bottles(protocol) : [];
-  const allPhotographed = all.length > 0 && all.every(c => runPhotos[c.id]);
+  // Every bottle in the kit's box or bag photographed (the user's own are theirs to show or not); a protocol whose
+  // bottles are all the user's, every one.
+  const inKit = all.some(c => c.suppliedBy === 'kit') ? all.filter(c => c.suppliedBy === 'kit') : all;
+  const allPhotographed = inKit.length > 0 && inKit.every(c => runPhotos[c.id]);
   // Protocol-Kit by address with no photos in the run: drawn samples, labelled as such, never saved.
   const sample = review === 'kit' && protocol !== null && !all.some(c => runPhotos[c.id]);
   const photos = useMemo(
@@ -95,6 +115,62 @@ export function ProtocolScreen() {
     [sample, protocol, runPhotos],
   );
   const matched = sample || allPhotographed;
+  // Bottles photographed before (or on another visit) are made ready for the step pictures as the protocol opens,
+  // not when a step first shows them; each is made once and kept (bench/cutout.ts).
+  useEffect(() => {
+    if (!sample) for (const src of Object.values(runPhotos)) void benchCut(src);
+  }, [runPhotos, sample]);
+  // A bottle whose cut-out did not come out whole. After a video the kit screen that asks about it is skipped, so Chapp
+  // asks here as the kit screen would: a photo of just that bottle, or keep it (asked once; the bench draws it then).
+  const cuts = useCutouts(
+    useMemo(() => (sample || !protocol ? {} : Object.fromEntries(bottles(protocol).flatMap(c => (runPhotos[c.id] ? [[c.id, runPhotos[c.id]!]] : [])))), [protocol, runPhotos, sample]),
+  );
+  const [keptHere, setKeptHere] = useState<Record<string, true>>({});
+  const poor = all.find(c => cuts[c.id] && !cuts[c.id]!.ok && !keptHere[c.id] && !keptAsIs(runPhotos[c.id]!)) ?? null;
+  const poorFrom = useKit(s => {
+    const shot = poor ? s.shots.find(sh => sh.id === s.picks[poor.id]?.shot) : undefined;
+    return shot?.video ? 'your video' : shot?.sweep ? 'your sweep' : 'your photo';
+  });
+  const retakePhoto = (id: string, name: string) => {
+    useKit.getState().retake(id, `Take a photo of just the ${name}.`);
+    navigate('/kit', { state: { camera: true } });
+  };
+  const keepPhoto = (id: string) => {
+    keepAsIs(runPhotos[id]!);
+    setKeptHere(k => ({ ...k, [id]: true }));
+  };
+  // Not doing this protocol after all: × takes back what was just photographed or uploaded for it (its bottles'
+  // photos, the cover, a video still being looked at) and leaves it, before the run has begun.
+  const added = useAdded();
+  const roundShots = useKit(s => (s.sample ? 0 : s.shots.length));
+  // What the models are doing with the round's photos behind this page (a video's bottles followed, found and read).
+  const kitShots = useKit(s => s.shots);
+  const kitSeen = useKit(s => s.seen);
+  const kitPicks = useKit(s => s.picks);
+  const kitFollowing = useKit(s => s.following);
+  // Of which bottles: the kit's, or a new kit's contents as its manual lists them until its protocol is read.
+  const kitContents = useKit(s => s.contents);
+  const counted = useMemo(
+    () => (finding.protocolId || runProtocolId ? inKit.map(c => c.id) : (kitContents ?? []).map(c => c.id)),
+    [finding.protocolId, runProtocolId, inKit, kitContents],
+  );
+  const kitWork = useMemo(
+    () => kitProgress({ shots: kitShots, seen: kitSeen, picks: kitPicks, following: kitFollowing, sample }, counted),
+    [kitShots, kitSeen, kitPicks, kitFollowing, sample, counted],
+  );
+  const begun = useRun(s => runStarted(s));
+  const closable = !sample && !begun && addedTo(added, protocol?.id, roundShots);
+  const [closing, setClosing] = useState(false);
+  const close = () => {
+    setClosing(false);
+    forgetAdded();
+    useRun.getState().setProtocol(null);
+    navigate('/', { replace: true });
+  };
+  // Packaging photographed before Chapp had this kit (Home's +, then its manual found) is its cover now (kit/cover.ts).
+  useEffect(() => {
+    if (protocol && !sample) claimCover(protocol);
+  }, [protocol, sample]);
 
   const [open, setOpen] = useState<Section | ''>(fromKit ? 'kit' : '');
   const [sidebar, setSidebar] = useState(false);
@@ -136,6 +212,35 @@ export function ProtocolScreen() {
     };
   }, [fromKit, matched]);
 
+  // The kit's photos still being worked on behind the page (a video's bottles found and read): Chapp thinks, and the
+  // line under its name says what it is on; once they are done it is pleased for a moment. Its search's own face and
+  // line (useFinding) come first.
+  const kitBusy = kitWork.busy && !begun;
+  const lookingUp = finding.stage < 3 && !finding.notFound;
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (lookingUp) return;
+    const session = useSession.getState();
+    if (kitBusy) {
+      wasBusy.current = true;
+      if (session.expression === 'neutral') session.setExpression('thinking');
+      return;
+    }
+    if (!wasBusy.current) return;
+    wasBusy.current = false;
+    if (session.expression !== 'thinking') return;
+    session.setExpression('happy');
+    const t = window.setTimeout(() => useSession.getState().expression === 'happy' && useSession.getState().setExpression('neutral'), 1600);
+    return () => clearTimeout(t);
+  }, [kitBusy, lookingUp]);
+  useEffect(
+    () => () => {
+      const s = useSession.getState();
+      if (wasBusy.current && s.expression === 'thinking') s.setExpression('neutral');
+    },
+    [],
+  );
+
   // A new question or answer at the bottom of the conversation: bring it into view.
   useEffect(() => {
     if (!turn) return;
@@ -163,7 +268,7 @@ export function ProtocolScreen() {
   // Plan is for a run with standards and a plate Chapp can work out; any protocol can be started and followed step by
   // step (a cell protocol, or amounts Chapp cannot convert: run/Follow.tsx).
   const plannable = protocol !== null && isPlannable(protocol, procedureFor(protocol, procedure));
-  const answer = turn?.phase === 'reply' ? turn.say : turn?.phase === 'error' ? ERROR_LINE : '';
+  const answer = turn?.phase === 'reply' || turn?.phase === 'thinking' ? turn.say || '' : turn?.phase === 'error' ? turn.error || ERROR_LINE : '';
 
   return (
     <div
@@ -203,12 +308,11 @@ export function ProtocolScreen() {
               {error}
             </p>
           )}
-          {intro ? <Answer protocol={intro} /> : protocol && !finding.notFound && stage >= 1 && <Answer protocol={protocol} />}
+          {intro ? <Answer protocol={intro} /> : protocol && !finding.notFound && stage >= 1 && <Answer protocol={protocol} cover={sample ? undefined : protocol.id} />}
           {intro ? <Glance protocol={intro} /> : protocol && !finding.notFound && stage >= 2 && <Glance protocol={protocol} />}
-          {intro && intro.procedure.steps.length > 0 && <QuickSections intro={intro} open={open} onOpen={openSection} />}
-          {intro && (
-            <Progress lines={[intro.procedure.steps.length ? STILL_CHECKING : STILL_READING]} searching label="What Chapp is reading now" className="mt-4" />
-          )}
+          {/* Where the kit's bottles stand, above the kit itself, until every bottle is matched (then the line below says so). */}
+          {kitWork.lines.length > 0 && !begun && !matched && <Progress lines={kitWork.lines} by={kitWork.by} searching={kitWork.busy} label="What Chapp is doing with your kit" className="mt-1" />}
+          {intro && <QuickSections intro={intro} open={open} onOpen={openSection} />}
           {done && (
             <Sections
               protocol={protocol}
@@ -224,16 +328,34 @@ export function ProtocolScreen() {
               All <b className="font-bold">{all.length} bottles</b> are matched. Plan the run, or start now.
             </p>
           )}
+          {done && poor && (
+            <div className="mt-[22px] flex shrink-0 flex-col gap-3">
+              <p aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
+                I couldn’t cut the <b className="font-bold">{splitName(poor.name).name}</b> out of {poorFrom} cleanly: {cuts[poor.id]!.why}. Take a photo of just that
+                bottle?
+              </p>
+              <div className="flex gap-2 px-1">
+                <button type="button" onClick={() => retakePhoto(poor.id, splitName(poor.name).name)} className={cn(PILL, 'bg-ink px-4 text-white')}>
+                  Take a photo
+                </button>
+                <button type="button" onClick={() => keepPhoto(poor.id)} className={cn(PILL, WHITE_PILL, 'px-4')}>
+                  Keep it
+                </button>
+              </div>
+            </div>
+          )}
+          {done && protocol && !sample && !begun && !poor && <KitAsk protocol={protocol} />}
           {done && protocol && !sample && <SaveToLibrary protocol={protocol} />}
           {turn && (
             <div className="mt-6 flex shrink-0 flex-col">
               <Bubble>{turn.text}</Bubble>
               {/* Always mounted, so screen readers announce each answer as it arrives. */}
-              <p aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
-                {turn.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
-              </p>
+              <div aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
+                {answer ? <ReplyText text={answer} /> : <span className="text-muted">{turn.phase === 'thinking' ? turn.progress || '…' : ''}</span>}
+              </div>
+              {turn.phase === 'reply' && <ReplySources sources={turn.sources} className="px-1" />}
               {turn.phase === 'reply' && turn.a2ui ? <A2uiSurface messages={turn.a2ui} protocol={protocol} live onAnswer={send} ask={turn.text} /> : null}
-              {turn.phase === 'reply' && turn.confirm ? <Confirm actions={turn.confirm} /> : null}
+              {turn.phase === 'reply' && turn.confirm ? <Confirm actions={turn.confirm} onAnswer={send} /> : null}
             </div>
           )}
         </div>
@@ -270,27 +392,74 @@ export function ProtocolScreen() {
       )}
 
       <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />
+      {/* Anything still being worked on (the manual searched for or read, the kit's photos): a light running under the header. */}
+      {(lookingUp || intro !== null || kitBusy) && <WorkingBar />}
       <ChappHeader
         compact
         onMenu={() => setSidebar(true)}
-        subtitle={protocol && !finding.notFound ? shortName(protocol) : undefined}
+        // While a manual is being searched for, no kit's name: the one on screen is only the fallback until it is found.
+        // While the kit's photos are worked on, what Chapp is on.
+        subtitle={kitBusy ? kitWork.lines.at(-1) : protocol && !finding.notFound && (!query || stage >= 1) ? shortName(protocol) : undefined}
         actions={
-          done && (
-            // Next: plan the run (when Chapp can work out its amounts) or start it.
-            <nav aria-label="Next" className="contents">
-              {plannable && (
-                <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-3.5')}>
-                  Plan
-                </Link>
+          (done || closable) && (
+            <>
+              {done && (
+                // Next: plan the run (when Chapp can work out its amounts) or start it.
+                <nav aria-label="Next" className="contents">
+                  {plannable && (
+                    <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-3.5')}>
+                      Plan
+                    </Link>
+                  )}
+                  <button type="button" onClick={() => navigate(protocol ? beginRun(protocol) : '/run/1')} className={cn(PILL, 'gap-1.5 bg-ink pr-3.5 pl-3 text-white')}>
+                    <PlayIcon />
+                    Start
+                  </button>
+                </nav>
               )}
-              <Link to={protocol ? startPath(protocol, procedure, started) : '/run/1'} className={cn(PILL, 'gap-1.5 bg-ink pr-3.5 pl-3 text-white')}>
-                <PlayIcon />
-                Start
-              </Link>
-            </nav>
+              {closable && (
+                <button
+                  type="button"
+                  aria-label="Close and delete what you just added"
+                  onClick={() => setClosing(true)}
+                  className="flex size-9 shrink-0 items-center justify-center rounded-full bg-sunken text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              )}
+            </>
           )
         }
       />
+      {/* ×: the one question before what was just added goes. */}
+      <Dialog open={closing} onOpenChange={setClosing}>
+        <DialogContent
+          footer={
+            <div className="flex gap-2">
+              <DialogClose asChild>
+                <button type="button" className="min-h-11 grow rounded-full bg-sunken text-[15px] leading-5 font-[650] text-ink outline-none active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-blue">
+                  Keep it
+                </button>
+              </DialogClose>
+              <button
+                type="button"
+                onClick={close}
+                className="min-h-11 grow rounded-full bg-[#e5484d] text-[15px] leading-5 font-[650] text-white outline-none active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-offset-2"
+              >
+                Delete
+              </button>
+            </div>
+          }
+        >
+          <DialogTitle>Delete what you just added?</DialogTitle>
+          <DialogDescription>
+            This deletes what you just photographed or uploaded: the bottles’ photos and the kit’s cover from them, and a video still being looked at. The
+            protocol stays in your library; there is no undo.
+          </DialogDescription>
+        </DialogContent>
+      </Dialog>
       <Sidebar
         open={sidebar}
         onOpenChange={setSidebar}
@@ -299,6 +468,85 @@ export function ProtocolScreen() {
           navigate('/');
         }}
       />
+    </div>
+  );
+}
+
+/** A conversation's confirmed document is a preview until the user explicitly chooses Plan or Start. */
+function ProtocolPreviewScreen({ id }: { id: string }) {
+  const navigate = useNavigate();
+  // Opened from Library, back is Library; from the conversation, the conversation.
+  const fromLibrary = (useLocation().state as { from?: string } | null)?.from === '/library';
+  const preview = useProtocolPreviews(s => s.previews[id]);
+  const exchange = useChatLog(s => s.exchanges.find(e => e.protocolPreviewId === id));
+  const { protocol, error } = useProtocol(preview?.state === 'ready' ? preview.protocolId ?? null : null);
+  const [open, setOpen] = useState<Section | ''>('');
+  const [typing, setTyping] = useState(false);
+  const [plus, setPlus] = useState(false);
+  const [adopting, setAdopting] = useState(false);
+  const adoptingRef = useRef(false);
+  const plusRef = useRef<HTMLButtonElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  useBottomWhileTyping(scroller, typing, useScreen().keyboard);
+  const { turn, send } = useConverse('protocol-preview', {
+    protocol: () => null,
+    context: () => converseContext('protocol-preview', null, { ...(preview?.protocolId ? { previewProtocolId: preview.protocolId } : {}), pending: `Viewing manual preview ${id}. Not adopted. ${preview?.state ?? 'unavailable'}.`.slice(0, 200) }),
+    executePage: () => ({ ok: false, message: 'This is a manual preview. Open the current experiment to change its setup.' }),
+  });
+  const ready = preview?.state === 'ready' && protocol !== null;
+  const failed = preview?.state === 'error' || Boolean(error);
+  const status = failed ? 'Reading stopped' : ready ? shortName(protocol) : preview?.progress?.at(-1) || 'Reading the manual';
+  const adopt = async (plan: boolean) => {
+    if (!ready || !protocol || adoptingRef.current) return;
+    adoptingRef.current = true; setAdopting(true);
+    try {
+      const receipt = await executeAssistantAction({ type: 'openProtocol', protocolId: protocol.id }, {
+        callId: `preview:${id}:${Date.now()}`, navigate, protocol: null,
+        context: converseContext('protocol', null), loadProtocol: async () => protocol,
+      });
+      if (!receipt.ok) { toast(receipt.message); return; }
+      noteEvent(`Opened ${shortName(protocol)}${plan ? ' to plan it' : ''}`);
+      navigate(plan ? '/plan' : beginRun(protocol));
+    } catch (failure) {
+      toast(failure instanceof Error ? failure.message : 'The protocol could not be opened.');
+    } finally { adoptingRef.current = false; setAdopting(false); }
+  };
+  const answer = turn?.phase === 'error' ? turn.error : turn?.say;
+  return (
+    <div className="relative h-full overflow-hidden bg-bg">
+      <div ref={scroller} className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none]">
+        <div className="flex min-h-full flex-col px-5 pt-[calc(116px+var(--screen-top))] pb-[calc(124px+var(--screen-bottom))]">
+          {exchange?.ask && <Bubble>{exchange.ask}</Bubble>}
+          {!preview ? <p role="alert" className="mb-6 px-1 text-[17px] leading-6 text-ink">This preview is no longer available. Return to the conversation to open the manual again.</p> : <>
+            {preview.progress?.length ? <Progress lines={preview.progress} searching={!ready && !failed} label="Reading the manual" /> : null}
+            {failed && <p role="alert" className="mb-5 px-1 text-[15px] leading-[22px] text-text">{preview.error || error || 'Reading the manual stopped.'} {preview.intro ? 'The overview already read is kept below.' : ''}</p>}
+            {ready ? <>
+              <Answer protocol={protocol} />
+              <Glance protocol={protocol} />
+              <Sections protocol={protocol} procedure={protocol.defaults.procedure} photos={{}} open={open} onOpen={setOpen} preview />
+              <SaveToLibrary protocol={protocol} />
+            </> : <ProgressiveOverview preview={failed ? { ...preview, state: 'error' } : preview} open={open} onOpen={setOpen} />}
+            {preview.source && <ReplySources sources={[preview.source]} className="px-1" />}
+          </>}
+          <Link to={fromLibrary ? '/library' : '/chat'} className={cn(PILL, WHITE_PILL, 'mt-5 self-start px-3.5')}>{fromLibrary ? 'Back to the library' : 'Back to conversation'}</Link>
+          {turn && <div className="mt-6 flex flex-col">
+            <Bubble>{turn.text}</Bubble>
+            <div aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 text-ink">{answer ? <ReplyText text={answer} /> : <span className="text-muted">{turn.phase === 'thinking' ? turn.progress || '…' : ERROR_LINE}</span>}</div>
+            {turn.phase === 'reply' && <ReplySources sources={turn.sources} className="px-1" />}
+            {turn.phase === 'reply' && turn.confirm && <Confirm actions={turn.confirm} onAnswer={send} />}
+          </div>}
+        </div>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
+        <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
+          {typing ? <TypingBar plusOpen={plus} plusRef={plusRef} onPlus={() => setPlus(value => !value)} onSend={send} onClose={() => { setTyping(false); setPlus(false); }} /> : <BottomBar wash={false} onPlus={() => setPlus(value => !value)} onKeyboard={() => setTyping(true)} onUtterance={send} />}
+        </div>
+      </div>
+      <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />
+      <ChappHeader compact back={fromLibrary ? { to: '/library', label: 'Back to the library' } : { to: '/chat', label: 'Back to conversation' }} subtitle={preview ? status : 'Preview unavailable'} actions={ready && <nav aria-label="Next" className="contents">
+        {isPlannable(protocol, procedureFor(protocol, protocol.defaults.procedure)) && <button disabled={adopting} type="button" className={cn(PILL, WHITE_PILL, 'px-3.5 disabled:opacity-50')} onClick={() => void adopt(true)}>Plan</button>}
+        <button disabled={adopting} type="button" className={cn(PILL, 'gap-1.5 bg-ink pr-3.5 pl-3 text-white disabled:opacity-50')} onClick={() => void adopt(false)}><PlayIcon />Start</button>
+      </nav>} />
     </div>
   );
 }
@@ -355,20 +603,31 @@ export function Bubble({ children }: { children: string }) {
 }
 
 /** What Chapp did to find the manual, ticked off as it went (FoundProtocol.progress). */
-export function Progress({ lines, searching = false, label = 'How Chapp found the manual', className }: { lines: string[]; searching?: boolean; label?: string; className?: string }) {
+/** A light running under the compact header while something on the page is still being worked on. */
+export function WorkingBar() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-x-5 top-[calc(106px+var(--screen-top))] z-[6] h-[3px] overflow-hidden rounded-full bg-blue/10">
+      <span className="chapp-anim block h-full w-2/5 rounded-full bg-[linear-gradient(90deg,transparent,var(--color-blue),transparent)]" style={{ animation: 'chapp-progress 1.5s ease-in-out infinite' }} />
+    </div>
+  );
+}
+
+/** `by`: which model did each line ("SAM 3.1", "Muse Spark"), line for line, as a tag after it. */
+export function Progress({ lines, by, searching = false, label = 'How Chapp found the manual', className }: { lines: string[]; by?: string[]; searching?: boolean; label?: string; className?: string }) {
   return (
     <ul aria-label={label} aria-live="polite" className={cn('mb-5 flex shrink-0 flex-col gap-1.5 px-1 animate-in fade-in duration-300', className)}>
       {lines.map((line, i) => (
-        <li key={i} className="grid grid-cols-[16px_minmax(0,1fr)] gap-2 text-[13px] leading-[18px] font-medium text-text animate-in fade-in duration-300">
-          {/* While Chapp searches, the line it is on is still under way: a ring until the next one ticks it off. */}
+        <li key={i} className={cn('grid gap-2 text-[13px] leading-[18px] font-medium text-text animate-in fade-in duration-300', by ? 'grid-cols-[16px_minmax(0,1fr)_auto]' : 'grid-cols-[16px_minmax(0,1fr)]')}>
+          {/* While Chapp searches, the line it is on is still under way: a spinner until the next one ticks it off. */}
           {searching && i === lines.length - 1 ? (
-            <span className="mt-px size-4 animate-pulse rounded-full border-2 border-blue" />
+            <span aria-label="Under way" className="chapp-anim mt-px size-4 animate-spin rounded-full border-2 border-blue/20 border-t-blue" />
           ) : (
             <span className="mt-px flex size-4 items-center justify-center rounded-full bg-blue text-white">
               <CheckIcon size={10} width={3.4} />
             </span>
           )}
-          {line}
+          <span>{line}</span>
+          {by && (by[i] ? <ModelTag>{by[i]}</ModelTag> : <span />)}
         </li>
       ))}
     </ul>

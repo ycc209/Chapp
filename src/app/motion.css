@@ -1,7 +1,9 @@
 /*
  * The design's motion, copied from each artboard's <helmet> (data/design/*.dc.html): Chapp breathing, blinking,
- * nodding and the rings while it listens, and the bars of Tap to speak. Elements that use them also carry
- * .chapp-anim, which stops them for people who ask for reduced motion (app.css).
+ * nodding and the rings while it listens, the bars of Tap to speak, and the glow behind the bar while it listens.
+ * Then the waiting: placeholders shimmering, SAM's light sweeping the video, the bar of a page still being written,
+ * and what arrives (a name on a bottle, the kit's card). Elements that use them also carry .chapp-anim, which stops
+ * them for people who ask for reduced motion (app.css).
  */
 @keyframes chapp-breathe {
   0%,
@@ -56,5 +58,145 @@
   }
   50% {
     transform: scaleY(1);
+  }
+}
+
+/* Listening: the glow behind the bar (src/components/voice/ListenWave.tsx), each pool of light drifting sideways by
+   --dx, rising by --rise and swelling, there and back. */
+@keyframes chapp-glow {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(var(--dx), calc(-1 * var(--rise))) scale(1.18, 1.1);
+  }
+}
+
+/* Let go of a hold (sent): the glow springs down from big past small, back up, and settles in a ripple on small's
+   scale(1, 0.4) (ListenWave's SCALE), its width breathing with it. */
+@keyframes chapp-glow-settle {
+  0% {
+    transform: scale(1, 1);
+  }
+  34% {
+    transform: scale(1.04, 0.3);
+  }
+  54% {
+    transform: scale(0.97, 0.5);
+  }
+  71% {
+    transform: scale(1.02, 0.35);
+  }
+  86% {
+    transform: scale(0.99, 0.43);
+  }
+  100% {
+    transform: scale(1, 0.4);
+  }
+}
+
+/* Something still to come (src/components/ui/Shimmer.tsx): a band of light crossing its placeholder, left to right. */
+@keyframes chapp-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+/* SAM looking at the video (src/screens/kit/Watch.tsx): a line of light in a background 2.5 times the picture's
+   height, carried from above the picture to below it. */
+@keyframes chapp-scan {
+  from {
+    background-position: 0 100%;
+  }
+  to {
+    background-position: 0 0%;
+  }
+}
+
+/* A page still being written (the protocol's top bar): a short light running across, again and again. */
+@keyframes chapp-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+/* Something read arriving (a bottle's name on the video): it pops in, a little past its size, and settles. */
+@keyframes chapp-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* A bottle SAM has just outlined on the video: its edge drawn round it, as if traced (the path's length is 1). */
+@keyframes chapp-trace {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* The kit's card arriving from the middle of the video (--from-x, --from-y), larger, to its corner. */
+@keyframes chapp-arrive {
+  from {
+    transform: translate(var(--from-x, 0), var(--from-y, 0)) scale(1.5);
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* A bottle's photo arriving on the bench where the drawn one waited for it. */
+@keyframes chapp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The drawn bottle waiting for the user's photo of it: breathing lighter and back. */
+@keyframes chapp-waiting {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* A tap on a run step's page (src/screens/run/TapNav.tsx): what it did shows, and goes. */
+@keyframes chapp-tap-flash {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }

@@ -1,141 +1,77 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { A2uiMessage } from '../../../shared/a2ui.ts';
-import type { Action, ConverseContext, ConverseReply } from '../../../shared/ai.ts';
+import type { Action, ConverseContext, Source } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
-import { api } from '../../api/client.ts';
 import { benchSteps } from '../../components/lab/model.ts';
-import { applyActions } from '../../state/actions.ts';
+import { converse, speculate, type ConversationOptions } from '../../state/conversation.ts';
+import { attachPreparer } from '../../voice/controller.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { useSession } from '../../state/session.ts';
 import { useShown } from '../../state/shown.ts';
+import { alarmName, runningTimers } from '../../state/alarms.ts';
+import { useChatLog } from '../../state/conversationLog.ts';
+import { newConversation as startNewConversation } from '../../state/threads.ts';
 import { useBench } from '../run/bench.ts';
-import { matchCommand } from '../../voice/commands.ts';
-import { speak } from '../../voice/speak.ts';
 
-/** One exchange with Chapp: what the user said, then Chapp thinking, then its answer (or a failure). */
 export type Turn =
-  | { id: number; text: string; phase: 'thinking' }
-  | { id: number; text: string; phase: 'reply'; say: string; a2ui?: A2uiMessage[]; confirm?: Action[] }
-  | { id: number; text: string; phase: 'error' };
+  | { id: number; text: string; phase: 'thinking'; say?: string; progress?: string }
+  | { id: number; text: string; phase: 'reply'; say: string; sources: Source[]; a2ui?: A2uiMessage[]; confirm?: Action[] }
+  | { id: number; text: string; phase: 'error'; error?: string };
 
-// After Chapp has finished speaking, how long its face keeps the reply's expression before going back to neutral.
-const SETTLE_MS = 2500;
+export type ConverseOptions = Partial<Pick<ConversationOptions, 'context' | 'protocol' | 'executePage'>>;
 
-/**
- * Sends what the user said or typed to Chapp and plays the answer: Chapp's face and the line under its name while it
- * thinks, then the reply shown, read aloud and its actions applied (a new utterance cancels the one in flight).
- * The bench's everyday commands ("next", "12 samples", "make it triplicates") are answered on the phone first, with
- * no call to the server.
- */
-export function useConverse(screen: string) {
+/** Every utterance uses the same conversation and tool-result loop, on every screen. */
+export function useConverse(screen: string, options: ConverseOptions = {}) {
   const navigate = useNavigate();
-  // For the step's title in what Chapp is told (the same document every screen of the run has loaded).
   const { protocol } = useProtocol(useRun(s => s.protocolId));
-  const protocolRef = useRef(protocol);
-  useEffect(() => {
-    protocolRef.current = protocol;
-  });
+  const current = useRef({ protocol, options, screen });
+  current.current = { protocol, options, screen };
   const [turn, setTurn] = useState<Turn | null>(null);
   const latest = useRef(0);
-  const inflight = useRef<AbortController | null>(null);
-
-  // Leaving the screen mid-question: drop it, and don't leave Chapp stuck thinking on the next screen.
-  useEffect(
-    () => () => {
-      latest.current++;
-      inflight.current?.abort();
-      const session = useSession.getState();
-      if (session.status === 'Thinking') {
-        session.setStatus('');
-        session.setExpression('neutral');
-      }
-    },
-    [],
-  );
-
-  // Back to neutral after a while, unless another turn or another screen has changed Chapp's face since.
-  const settle = (id: number, face: string, ms: number) =>
-    setTimeout(() => {
-      const session = useSession.getState();
-      if (id === latest.current && session.expression === face) session.setExpression('neutral');
-    }, ms);
-
-  const send = useCallback(
-    async (said: string) => {
-      const text = said.trim();
-      if (!text) return;
-      const id = ++latest.current;
-      inflight.current?.abort();
-      const session = useSession.getState();
-      session.setHeard('');
-
-      const command = matchCommand(text);
-      if (command) {
-        const say = acknowledge(command);
-        session.setStatus('');
-        session.setExpression('happy');
-        setTurn({ id, text, phase: 'reply', say });
-        session.addTurns({ role: 'user', text }, { role: 'chapp', text: say });
-        applyActions(command, navigate);
-        await speak(say).catch(() => {});
-        settle(id, 'happy', SETTLE_MS);
-        return;
-      }
-
-      const abort = (inflight.current = new AbortController());
-      session.setExpression('thinking');
-      session.setStatus('Thinking');
-      setTurn({ id, text, phase: 'thinking' });
-
-      let reply: ConverseReply;
-      try {
-        reply = await api.converse({ text, context: converseContext(screen, protocolRef.current), history: session.history, previousResponseId: session.thread?.id }, abort.signal);
-      } catch {
-        if (id !== latest.current) return;
-        session.setStatus('');
-        session.setExpression('sad');
-        setTurn({ id, text, phase: 'error' });
-        settle(id, 'sad', 4000);
-        return;
-      }
-      if (id !== latest.current) return;
-
-      const face = reply.expression ?? 'neutral';
-      session.setStatus('');
-      session.setExpression(face);
-      session.setExchange({ ask: text, say: reply.say });
-      session.answered(reply.responseId, { role: 'user', text }, { role: 'chapp', text: reply.say });
-      if (reply.a2ui) useShown.getState().clear();
-      setTurn({ id, text, phase: 'reply', say: reply.say, ...(reply.a2ui ? { a2ui: reply.a2ui } : {}), ...(reply.confirm ? { confirm: reply.confirm } : {}) });
-      applyActions(reply.actions, navigate, protocolRef.current);
-      if (reply.say) await speak(reply.say).catch(() => {});
-      settle(id, face, SETTLE_MS);
-    },
-    [navigate, screen],
-  );
-
-  /** Clears the exchange (a new conversation). */
-  const reset = useCallback(() => {
-    latest.current++;
-    inflight.current?.abort();
-    setTurn(null);
-    const session = useSession.getState();
-    if (session.status === 'Thinking') session.setStatus('');
-    session.setExpression('neutral');
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
+  // Words that have settled before the user finishes start the conversation early (src/voice/controller.ts). Not for
+  // the confirmation buttons' own hook, which no microphone feeds.
+  useEffect(() => {
+    if (screen === 'confirmation') return;
+    return attachPreparer(text => speculate(text, {
+      navigate,
+      context: () => current.current.options.context?.() ?? converseContext(current.current.screen, current.current.protocol),
+      protocol: () => current.current.options.protocol ? current.current.options.protocol() : current.current.protocol,
+    }));
+  }, [navigate, screen]);
 
-  /**
-   * The sidebar's New conversation: nothing said yet, no history, and the run set aside, so Chapp on Home stops
-   * assuming the last kit (it stays in the sidebar to go back to).
-   */
+  const send = useCallback(async (said: string) => {
+    const text = said.trim();
+    if (!text) return;
+    const id = ++latest.current;
+    setTurn({ id, text, phase: 'thinking' });
+    const visible = () => mounted.current && latest.current === id;
+    try {
+      const reply = await converse(text, {
+        navigate,
+        context: () => current.current.options.context?.() ?? converseContext(current.current.screen, current.current.protocol),
+        protocol: () => current.current.options.protocol ? current.current.options.protocol() : current.current.protocol,
+        executePage: action => mounted.current ? current.current.options.executePage?.(action) ?? null : null,
+        onText: say => { if (visible()) setTurn({ id, text, phase: 'thinking', say }); },
+        onProgress: progress => { if (visible()) setTurn(t => t?.id === id && t.phase === 'thinking' ? { ...t, progress } : t); },
+      });
+      if (visible()) setTurn({ id, text, phase: 'reply', say: reply.say, sources: reply.sources, a2ui: reply.a2ui, confirm: reply.confirm });
+    } catch (error) {
+      if (visible()) setTurn({ id, text, phase: 'error', error: error instanceof Error ? error.message : undefined });
+    }
+  }, [navigate]);
+
+  const reset = useCallback(() => { latest.current++; setTurn(null); }, []);
   const newConversation = useCallback(() => {
     reset();
-    useSession.getState().newConversation();
-    if (useRun.getState().protocolId) useRun.getState().setAside(true);
+    startNewConversation();
   }, [reset]);
-
   return { turn, send, reset, newConversation };
 }
 
@@ -146,8 +82,9 @@ export function useConverse(screen: string) {
  */
 export function converseContext(screen: string, protocol: Protocol | null, at: Partial<ConverseContext> = {}): ConverseContext {
   const run = useRun.getState();
-  // On Home or in the conversation with no kit yet, or after New conversation set the run aside: nothing to assume.
-  if ((screen === 'home' || screen === 'chat') && (!run.protocolId || run.aside)) return { screen, ...at };
+  // On Home or in the conversation with no kit yet, or after New conversation set the run aside: nothing to assume,
+  // but the timers running anywhere ("how long is left on the BCA?").
+  if ((screen === 'home' || screen === 'chat') && (!run.protocolId || run.aside)) return { screen, ...elsewhere(false), ...at };
   const now = Date.now();
   const timers = Object.entries(run.timers).map(([id, ends]) => ({ id, secondsLeft: Math.max(0, Math.round((ends - now) / 1000)) }));
   const step = at.step ?? run.step;
@@ -159,23 +96,43 @@ export function converseContext(screen: string, protocol: Protocol | null, at: P
     // A procedure the protocol does not have: no title.
   }
   const lengths = useBench.getState().lengths;
+  const paused = Object.entries(useBench.getState().paused).map(([id, secondsLeft]) => ({ id, secondsLeft }));
   const shown = useShown.getState().plan;
+  // The start card is waiting while it is the last thing Chapp showed and the run has not been started since.
+  const lastShown = useChatLog.getState().exchanges.filter(e => e.phase !== 'thinking' && !e.event).at(-1);
+  const startCard = lastShown?.start?.protocolId === run.protocolId && !run.begun;
   return {
     screen,
     protocolId: run.protocolId,
     procedure: run.procedure,
+    ...(run.planned ? { planned: true } : {}),
+    ...elsewhere(true),
+    ...(startCard ? { startCard: true } : {}),
     ...(started ? { step, ...(stepTitle ? { stepTitle } : {}) } : {}),
     samples: run.samples,
     replicates: run.replicates,
     standardReplicates: run.standardReplicates,
     standards: run.standards,
     ...(timers.length ? { timers } : {}),
+    ...(paused.length ? { paused } : {}),
     readingsFrom: run.readingsFrom,
+    done: run.done,
+    readings: run.readings,
     ...(Object.keys(lengths).length ? { lengths } : {}),
     ...(Object.keys(run.edits.moved).length || run.edits.added.length ? { edits: run.edits } : {}),
-    ...(shown && (shown.samples !== run.samples || shown.replicates !== run.replicates) ? { shown } : {}),
+    ...(shown && (shown.samples !== run.samples || shown.replicates !== run.replicates || (shown.standardReplicates !== undefined && shown.standardReplicates !== run.standardReplicates)) ? { shown } : {}),
     ...at,
   };
+}
+
+/** Timers running in other experiments (state/alarms.ts), and the run's own too when it is not the one in context. */
+function elsewhere(liveInContext: boolean): Pick<ConverseContext, 'elsewhere'> {
+  const now = Date.now();
+  const list = runningTimers()
+    .filter(a => !(liveInContext && a.live))
+    .slice(0, 8)
+    .map(a => ({ experiment: alarmName(a), step: a.stepId, secondsLeft: Math.max(0, Math.round((a.endsAt - now) / 1000)) }));
+  return list.length ? { elsewhere: list } : {};
 }
 
 const REPLICATES = ['', 'Once each.', 'In duplicate.', 'In triplicate.'];

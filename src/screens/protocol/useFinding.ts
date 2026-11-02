@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FoundProtocol, ProtocolIntro } from '../../../shared/ai.ts';
 import { otherCatalog } from '../../../shared/catalog.ts';
-import { api } from '../../api/client.ts';
+import { findProtocol } from './prefetch.ts';
 import { useSession } from '../../state/session.ts';
 
 /**
@@ -97,7 +97,7 @@ export function useFinding(ask: string | null, hold: Stage | null, exchange: obj
       session.setStatus(STAGE_STATUS[2]);
     };
 
-    api.findProtocolLive(ask, heard, abort.signal, told).then(
+    findProtocol(ask, heard, abort.signal, told).then(
       (found: FoundProtocol) => {
         if (!live) return;
         // A number said that is not the kit found: kept with whatever is shown next.

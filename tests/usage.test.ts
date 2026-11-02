@@ -55,4 +55,32 @@ describe('the daily cap', () => {
     meter.setCap(Number(undefined));
     expect(meter.cap()).toBe(0);
   });
+
+  it('reserves capacity for concurrent calls and releases each reservation only once', () => {
+    const meter = createMeter({ cap: 1 });
+    meter.spend(0.2);
+    const releaseFirst = meter.reserve(0.5);
+    expect(() => meter.reserve(0.4)).toThrow(UpstreamError);
+    const releaseSecond = meter.reserve(0.2);
+    expect(meter.spent()).toBe(0.2); // Reserved estimates are not reported as billed spend.
+    releaseFirst();
+    releaseFirst();
+    // Releasing twice must not erase the second call's $0.20 reservation.
+    expect(() => meter.reserve(0.7)).toThrow(UpstreamError);
+    meter.spend(0.1);
+    releaseSecond();
+    expect(() => meter.reserve(0.6)).not.toThrow();
+  });
+
+  it('keeps in-flight reservations across the UTC daily rollover until they settle', () => {
+    let now = new Date('2026-10-30T23:59:59Z');
+    const meter = createMeter({ cap: 1, now: () => now });
+    meter.spend(0.2);
+    const release = meter.reserve(0.7);
+    now = new Date('2026-10-31T00:00:01Z');
+    expect(meter.spent()).toBe(0);
+    expect(() => meter.reserve(0.4)).toThrow(UpstreamError);
+    release();
+    expect(() => meter.reserve(0.9)).not.toThrow();
+  });
 });

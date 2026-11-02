@@ -72,7 +72,7 @@ const CHAPP_CARDS = new Set(['ReagentCard', 'PlateCard', 'StandardsCard', 'StepC
 const EMPTY: DataModel = { plan: { samples: '', replicates: '' }, steps: {} };
 /** The cards drawn for a plan, whose samples and replicates the user may change. */
 const PLAN_CARDS = new Set(['ReagentCard', 'PlateCard', 'Compare']);
-type Edit = { samples: number; replicates: number };
+type Edit = { samples: number; replicates: number; standardReplicates: number };
 
 type Scope = {
   components: Map<string, A2uiComponent>;
@@ -172,7 +172,7 @@ function Frame({ label, aside, children }: { label: string; aside?: string; chil
 function planOf(c: A2uiComponent, plan: RunPlan): RunPlan {
   const samples = typeof c.samples === 'number' ? c.samples : plan.samples;
   const replicates = typeof c.replicates === 'number' ? c.replicates : plan.replicates;
-  return { ...plan, samples, replicates, standardReplicates: typeof c.replicates === 'number' ? c.replicates : plan.standardReplicates };
+  return { ...plan, samples, replicates, standardReplicates: typeof c.standardReplicates === 'number' ? c.standardReplicates : plan.standardReplicates };
 }
 
 /**
@@ -182,16 +182,16 @@ function planOf(c: A2uiComponent, plan: RunPlan): RunPlan {
 function useCardPlan(c: A2uiComponent) {
   const { plan: run, answer, edit, setEdit, controlsAt } = useScope();
   const base = planOf(c, run);
-  const plan: RunPlan = edit ? { ...base, samples: edit.samples, replicates: edit.replicates, standardReplicates: edit.replicates } : base;
+  const plan: RunPlan = edit ? { ...base, ...edit } : base;
   const change = (next: Edit) => {
     setEdit(next);
     useShown.getState().set(next);
   };
-  return { plan, editable: Boolean(answer) && c.id === controlsAt, change, differs: plan.samples !== run.samples || plan.replicates !== run.replicates };
+  return { plan, editable: Boolean(answer) && c.id === controlsAt, change, differs: plan.samples !== run.samples || plan.replicates !== run.replicates || plan.standardReplicates !== run.standardReplicates };
 }
 
 /** Under a card the user may change: its samples and replicates, and "Use this plan" when they are not the run's. */
-function PlanControls({ plan, differs, onChange }: { plan: RunPlan; differs: boolean; onChange: (p: { samples: number; replicates: number }) => void }) {
+function PlanControls({ plan, differs, onChange }: { plan: RunPlan; differs: boolean; onChange: (p: Edit) => void }) {
   const { protocol, zh } = useScope();
   const [used, setUsed] = useState(false);
   let max = 96;
@@ -201,15 +201,15 @@ function PlanControls({ plan, differs, onChange }: { plan: RunPlan; differs: boo
     // A kit with no plate: the card says so.
   }
   const use = () => {
-    useRun.getState().setPlan({ samples: plan.samples, replicates: plan.replicates, standardReplicates: plan.replicates });
+    useRun.getState().setPlan({ samples: plan.samples, replicates: plan.replicates, standardReplicates: plan.standardReplicates });
     useShown.getState().clear();
     setUsed(true);
   };
   return (
     <div className="mt-1 flex flex-col gap-2.5 border-t border-line pt-3">
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-2">
-        <Stepper label="Samples" value={plan.samples} min={1} max={max} onChange={samples => onChange({ samples, replicates: plan.replicates })} />
-        <Replicates label="Replicates" value={Math.min(3, plan.replicates)} onChange={replicates => onChange({ samples: plan.samples, replicates })} />
+        <Stepper label="Samples" value={plan.samples} min={1} max={max} onChange={samples => onChange({ samples, replicates: plan.replicates, standardReplicates: plan.standardReplicates })} />
+        <Replicates label="Sample replicates" value={Math.min(3, plan.replicates)} onChange={replicates => onChange({ samples: plan.samples, replicates, standardReplicates: plan.standardReplicates })} />
       </div>
       {differs && !used && (
         <button type="button" onClick={use} className={cn(PILL, 'self-start bg-ink px-[18px] text-white')}>
@@ -391,7 +391,7 @@ function Ask({ c }: { c: A2uiComponent }) {
   const [sent, setSent] = useState(false);
   let max = 96;
   try {
-    max = maxSamples(protocol!, run.procedure, { ...run, replicates, standardReplicates: replicates, standards });
+    max = maxSamples(protocol!, run.procedure, { ...run, replicates, standards });
   } catch {
     // A kit with no plate: Chapp says so.
   }
@@ -404,8 +404,7 @@ function Ask({ c }: { c: A2uiComponent }) {
     }
     if (fields.includes('replicates')) {
       plan.replicates = replicates;
-      plan.standardReplicates = replicates;
-      said.push(zh ? ['單次', '二重複', '三重複'][replicates - 1]! : ['once each', 'in duplicate', 'in triplicate'][replicates - 1]!);
+      said.push(zh ? `樣本${['單次', '二重複', '三重複'][replicates - 1]}，標準品維持 ${run.standardReplicates} 次` : `samples ${['once each', 'in duplicate', 'in triplicate'][replicates - 1]}, keeping standards at ${run.standardReplicates} replicates`);
     }
     if (fields.includes('standards')) {
       plan.standards = standards;
@@ -427,7 +426,7 @@ function Ask({ c }: { c: A2uiComponent }) {
           </Field>
         )}
         {fields.includes('replicates') && (
-          <Field label={zh ? '每個做幾次' : 'Each'}>
+          <Field label={zh ? '每個樣本做幾次' : 'Each sample'}>
             <Replicates label="Replicates" value={replicates} onChange={setReplicates} />
           </Field>
         )}

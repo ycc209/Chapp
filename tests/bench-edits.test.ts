@@ -4,12 +4,12 @@ import { Protocol } from '../shared/protocol.ts';
 import { authorize, names, type Rules } from '../server/ai/authorize.ts';
 import { checkReply } from '../server/ai/meta.ts';
 import { editPlate, freeWells, plateMap, runSetup, standardsFor, wellRoles, NO_EDITS } from '../src/components/lab/model.ts';
-import { redoVials, refsSaid, runCommand, tubeKey } from '../src/screens/run/model.ts';
+import { redoVials, tubeKey } from '../src/screens/run/model.ts';
 import { addWells, moveWells, redo } from '../src/state/benchEdits.ts';
 import { useRun } from '../src/state/run.ts';
 
 // Changes said at the bench: several vials or tubes at once, one to do again, a well gone wrong, a well or a condition
-// added (src/components/lab/model.ts editPlate, src/state/benchEdits.ts, src/screens/run/model.ts runCommand,
+// added (src/components/lab/model.ts editPlate, src/state/benchEdits.ts,
 // server/ai/authorize.ts). No network.
 
 const file = new URL('../data/protocols/pierce-bca.json', import.meta.url);
@@ -21,39 +21,6 @@ const standards = [
 ];
 // 3 standards × 2 and 4 samples × 2: A1–C2, then samples D1–G2 (one 2-wide block down the rows).
 const plan = plateMap({ standards, standardReplicates: 2, samples: 4, sampleReplicates: 2 });
-
-describe('runCommand: the bench’s items', () => {
-  it('takes several vials or tubes done at once, in English and Chinese', () => {
-    expect(runCommand('A B C D ok')).toEqual({ type: 'done', refs: ['A', 'B', 'C', 'D'] });
-    expect(runCommand('ABCD OK')).toEqual({ type: 'done', refs: ['A', 'B', 'C', 'D'] });
-    expect(runCommand('A到D好了')).toEqual({ type: 'done', refs: ['A', 'B', 'C', 'D'] });
-    expect(runCommand('1 to 5 loaded')).toEqual({ type: 'done', refs: ['1', '2', '3', '4', '5'] });
-    expect(runCommand('標準品 A、B、C 都好了')).toEqual({ type: 'done', refs: ['A', 'B', 'C'] });
-  });
-
-  it('takes one to do again, and a well gone wrong with or without where it goes', () => {
-    expect(runCommand('B 重做')).toEqual({ type: 'redo', refs: ['B'] });
-    expect(runCommand('redo B and D')).toEqual({ type: 'redo', refs: ['B', 'D'] });
-    expect(runCommand('B3 壞了，改到 H1')).toEqual({ type: 'badWell', wells: ['B3'], to: 'H1' });
-    expect(runCommand('B3 has a bubble, use H1')).toEqual({ type: 'badWell', wells: ['B3'], to: 'H1' });
-    expect(runCommand('B3 B4 灑了')).toEqual({ type: 'badWell', wells: ['B3', 'B4'], to: null });
-  });
-
-  it('leaves a single vial, a question and anything else in the words to the others', () => {
-    expect(runCommand('C is OK')).toBeNull();
-    expect(runCommand('are A to D ok?')).toBeNull();
-    expect(runCommand('A B C D look a bit cloudy, ok')).toBeNull();
-    expect(runCommand('B3 好了')).toBeNull();
-    expect(runCommand('done')).toEqual({ type: 'advance' });
-  });
-
-  it('fills in ranges and runs of letters', () => {
-    expect(refsSaid('A - C')).toEqual(['A', 'B', 'C']);
-    expect(refsSaid('3 和 5')).toEqual(['3', '5']);
-    expect(refsSaid('D 到 A')).toBeNull();
-    expect(refsSaid('cloudy')).toBeNull();
-  });
-});
 
 describe('editPlate', () => {
   it('leaves a well gone wrong empty and puts what it held in the well chosen', () => {

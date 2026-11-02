@@ -11,7 +11,7 @@ import { assemble, introOf } from '../server/ai/import.ts';
 import { createMockProvider } from '../server/ai/mock.ts';
 import { knownProtocols, localProtocolId, protocolBySha } from '../server/ai/protocols.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
-import { downloadPdf, findAndImport, READING_LINE } from '../server/imports.ts';
+import { downloadPdf, findAndImport, READING_LINE, sameFileLinks } from '../server/imports.ts';
 import type { ProtocolSummary } from '../shared/protocol.ts';
 import { intro, parts } from './import-fixture.ts';
 
@@ -188,6 +188,83 @@ describe('findAndImport', () => {
     expect((await findAndImport(none, 'nothing', undefined, o)).protocolId).toBeUndefined();
     const cannot = { ...(noImport as AIProvider), findProtocol: async () => found() };
     expect((await findAndImport(cannot, 'demo', undefined, o)).progress).toEqual(['Looking for the manual']);
+  });
+
+  it('starts reading the manual once the search names it, and shows the search’s intro until the manual’s own', async () => {
+    const lines: string[] = [];
+    const intros: string[] = [];
+    const { fetch, asked } = web({ 'https://demo.example/manual.pdf': [200, 'application/pdf', pdf('early')] });
+    const late = (async (...args: Parameters<typeof fetch>) => (await new Promise(r => setTimeout(r, 20)), fetch(...args))) as typeof fetch;
+    const draft = { ...introOf(intro(), 'https://demo.example/manual.pdf')!, title: 'Drafted by the search' };
+    let readingBeforeAnswer = false;
+    const provider: AIProvider = {
+      ...reader,
+      findProtocol: async (_q, live) => {
+        live?.onDocument?.(found());
+        readingBeforeAnswer = lines.includes(READING_LINE);
+        return found({ intro: draft });
+      },
+    };
+    const out = await findAndImport(provider, 'demo', { onProgress: l => lines.push(l), onIntro: i => intros.push(i.title) }, { ...opts(), download: { fetch: late } });
+    expect(readingBeforeAnswer).toBe(true);
+    expect(asked).toEqual(['https://demo.example/manual.pdf']);
+    expect(intros).toEqual(['Drafted by the search', 'Demo Assay']);
+    expect(out).toMatchObject({ protocolId: 'demo-assay', progress: ['Looking for the manual', READING_LINE, 'Turning it into steps'] });
+    expect(out.intro).toBeUndefined();
+  });
+
+  it('never shows the search’s intro over the manual’s own, and reads the manual the search settled on', async () => {
+    const intros: string[] = [];
+    const { fetch, asked } = web({
+      'https://demo.example/manual.pdf': [200, 'application/pdf', pdf('first')],
+      'https://demo.example/v2.pdf': [200, 'application/pdf', pdf('second')],
+    });
+    const draft = { ...introOf(intro(), 'https://demo.example/manual.pdf')!, title: 'Drafted by the search' };
+    const slow: AIProvider = {
+      ...reader,
+      findProtocol: async (_q, live) => (live?.onDocument?.(found()), await new Promise(r => setTimeout(r, 100)), found({ intro: draft })),
+    };
+    await findAndImport(slow, 'demo', { onIntro: i => intros.push(i.title) }, { ...opts(), download: { fetch } });
+    expect(intros).toEqual(['Demo Assay']);
+
+    const o = opts();
+    const moved: AIProvider = {
+      ...reader,
+      findProtocol: async (_q, live) => (live?.onDocument?.(found()), found({ document: { title: 'Demo manual v2', url: 'https://demo.example/v2.pdf' } })),
+    };
+    const out = await findAndImport(moved, 'demo', undefined, { ...o, download: { fetch } });
+    expect(out.protocolId).toBe('demo-assay');
+    expect(asked.at(-1)).toBe('https://demo.example/v2.pdf');
+    expect(knownProtocols(o.protocols).map(p => p.source.url)).toEqual(['https://demo.example/v2.pdf']);
+  });
+
+  // As GPT-6.1 sol and GPT-6 astra named Thermo's old host on 2026-11-01: 403 there, the same file on the current one.
+  const old = 'https://tools.example/content/sfs/manuals/man0011430_demo_ug.pdf';
+  const current = 'https://documents.example/TFS-Assets%2FLSG%2Fmanuals%2FMAN0011430_Demo_UG.pdf';
+
+  it('finds the same file at the search’s other links, by its name', () => {
+    const sources = [{ url: 'https://demo.example/other.pdf' }, { url: old }, { url: current }, { url: current.toLowerCase() }, { url: 'https://demo.example/man0011430_demo_ug.html' }];
+    expect(sameFileLinks(old, sources)).toEqual([current]);
+    expect(sameFileLinks('https://demo.example/page', sources)).toEqual([]);
+  });
+
+  it('reads the same file from another link the search found, when the one it named refuses Chapp', async () => {
+    const { fetch, asked } = web({ [old]: [403, 'text/html', 'denied'], [current]: [200, 'application/pdf', pdf('current')] });
+    const o = opts();
+    const provider: AIProvider = { ...reader, findProtocol: async () => found({ document: { title: 'Demo manual', url: old }, sources: [{ url: 'https://demo.example/other.pdf' }, { url: current }] }) };
+    const out = await findAndImport(provider, 'demo', undefined, { ...o, download: { fetch } });
+    expect(asked).toEqual([old, current]);
+    expect(out.protocolId).toBe('demo-assay');
+    expect(knownProtocols(o.protocols)[0]!.source.url).toBe(current);
+  });
+
+  it('tries the links the whole search found when the early read could not download', async () => {
+    const { fetch, asked } = web({ [old]: [403, 'text/html', 'denied'], [current]: [200, 'application/pdf', pdf('later')] });
+    const named = { document: { title: 'Demo manual', url: old } };
+    const provider: AIProvider = { ...reader, findProtocol: async (_q, live) => (live?.onDocument?.(found(named)), found({ ...named, sources: [{ url: current }] })) };
+    const out = await findAndImport(provider, 'demo', undefined, { ...opts(), download: { fetch } });
+    expect(asked).toEqual([old, current]);
+    expect(out.protocolId).toBe('demo-assay');
   });
 
   it('keeps the search answer when the manual cannot be fetched', async () => {

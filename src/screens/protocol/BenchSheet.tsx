@@ -12,7 +12,7 @@ import { CloseIcon, DocumentIcon } from './icons.tsx';
  * the protocol (its field and page, its words) or drawn, and which of its looks are drawn rather than said. The kit
  * bottles the user photographed (`photos`, by component id) stand on the bench as theirs.
  */
-export function BenchSheet({ scenes, at, onAt, onClose, photos }: { scenes: { n: number; scene: BenchScene }[]; at: number | null; onAt: (i: number) => void; onClose: () => void; photos?: Record<string, string> }) {
+export function BenchSheet({ scenes, at, onAt, onClose, photos, big }: { scenes: { n: number; scene: BenchScene }[]; at: number | null; onAt: (i: number) => void; onClose: () => void; photos?: Record<string, string>; big?: boolean }) {
   const shown = at === null ? null : scenes[at];
   const [replay, setReplay] = useState(0);
   const [picked, setPicked] = useState<string | null>(null);
@@ -34,7 +34,7 @@ export function BenchSheet({ scenes, at, onAt, onClose, photos }: { scenes: { n:
               </SheetClose>
             </div>
             <div className="aspect-square w-full shrink-0 overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,#f7f9fc_0%,#eef2f7_78%,#e4e9f0_100%)]">
-              <BenchView key={at} scene={shown.scene} mode="play" replay={replay} picked={picked} onPick={setPicked} photos={photos} />
+              <BenchView key={at} scene={shown.scene} mode="play" replay={replay} picked={picked} onPick={setPicked} photos={photos} big={big} />
             </div>
             <p className="text-[15px] leading-[21px] text-ink">{shown.scene.caption.text}</p>
             <div className="min-h-0 grow overflow-y-auto">{item ? <About item={item} photo={photoOf(item, photos)} /> : <p className="text-[14px] leading-5 text-text">Tap anything on the bench to see what it is and where it comes from.</p>}</div>
@@ -102,7 +102,7 @@ function About({ item, photo }: { item: Item; photo?: string }) {
   );
 }
 
-/** The user's own bottle as it stands on the bench, cut out of their kit photo. */
+/** The user’s own bottle as it stands on the bench, cut out of their kit photo (upright, and whole where Muse Image filled it in). */
 function YourBottle({ cut }: { cut: Cut }) {
   return (
     <span className="flex items-center gap-3">
@@ -112,6 +112,7 @@ function YourBottle({ cut }: { cut: Cut }) {
       <span className="flex flex-col text-[13px] leading-[18px] text-text">
         <span className="font-semibold text-ink">Your bottle</span>
         From the photo you took of the kit
+        {cut.drawn ? <span>What your photo hid is drawn by Muse Image</span> : null}
       </span>
     </span>
   );
@@ -137,7 +138,7 @@ const Chevron = ({ left }: { left?: boolean }) => (
   </svg>
 );
 
-const ReplayIcon = () => (
+export const ReplayIcon = () => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
     <path d="M3 3v5h5" />

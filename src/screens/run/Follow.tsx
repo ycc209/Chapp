@@ -16,22 +16,30 @@ import { shortName } from '../protocol/content.ts';
 import { EyeIcon } from '../protocol/icons.tsx';
 import { endsText, followNote, followSteps, leftText, prepItems, type FollowStep } from './follow.ts';
 import { stepFromParam } from './model.ts';
-import { cancelPushTimer, enablePush, pushTimer, usePush, type PushState } from './push.ts';
-import { Answer, Asked, LockScreenLine, YouSaid } from './Steps.tsx';
+import { enablePush, usePush, type PushState } from './push.ts';
+import { Answer, Asked, LockScreenLine, StepNav, YouSaid } from './Steps.tsx';
 import { useRunVoice, type Handled, type RunHandlers } from './voice.ts';
+import { MinimizeRun } from './Minimize.tsx';
+import { goToRunStep, skipRunStep } from './navigation.ts';
+import { useTapNav } from './TapNav.tsx';
+import { useStepPictures } from './Picture.tsx';
 
 const PILL = 'flex min-h-10 cursor-pointer items-center rounded-[20px] border-0 px-[18px] font-[inherit] text-[15px] leading-5 font-semibold outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const INK = 'bg-ink text-white';
 const WHITE = 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
 const NOTE_LABEL = { caution: 'Caution', tip: 'Tip', info: 'Note' } as const;
+/** The pictures' words big, as on Run (no plan sizes anything here). */
+const BIG = { big: true };
 
 type TimerPhase = 'ready' | 'running' | 'done';
 
 /**
  * Start for a protocol Chapp cannot plan (follow.ts): one step at a time, /run/1 … /run/N, and /run/all for the list.
  * Each step says what to do, its timer, what the user should see when it works (apart from what to do) and the
- * manual's cautions and tips; Next and Back move on, or the voice: "next", "back", "start", "stop", and anything else
- * is a question for Chapp. Progress is the run's (useRun), so a reload picks up where it was.
+ * manual's cautions and tips; Next, Skip and Back move on, as does a tap on the page (its right side Next, its left
+ * Back, twice Skip: TapNav), or the voice: "next", "back", "start", "stop", and anything else is a question for Chapp.
+ * The button at the top right makes the run small, floating over Home (src/app/RunDock.tsx). Progress is the run's
+ * (useRun), so a reload picks up where it was.
  */
 export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
   const { step: param } = useParams();
@@ -67,9 +75,7 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
   }, [runStep]);
 
   const goStep = (i: number) => {
-    const to = Math.max(0, Math.min(total - 1, i));
-    if (to === at + 1) useRun.getState().setDone(step.id);
-    navigate(`/run/${to + 1}`);
+    goToRunStep(steps, i, navigate);
   };
   const finish = () => {
     useRun.getState().setDone(step.id);
@@ -82,41 +88,21 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
   const phase: TimerPhase | null = !step.timer ? null : ends === undefined ? 'ready' : ends > now ? 'running' : 'done';
   const next = steps[at + 1];
   const startTimer = () => step.timer && useRun.getState().startTimer(step.id, step.timer.seconds);
-  const stopTimer = () => {
-    useRun.getState().stopTimer(step.id);
-    void cancelPushTimer(step.id);
-  };
-  // Time's up on the lock screen, even with Chapp closed (push.ts): a cell protocol waits for hours or days.
-  useEffect(() => {
-    if (!step.timer) return;
-    if (ends !== undefined && ends - Date.now() > 3000) {
-      if (push === 'ready')
-        void pushTimer({
-          id: step.id,
-          endsAt: ends,
-          title: `${step.title} done · ${lengthText(step.timer.seconds)}`,
-          body: next ? `Next: ${next.key}` : 'That was the last step.',
-          url: `/run/${at + 1}`,
-        });
-    } else void cancelPushTimer(step.id);
-  }, [step.id, ends, push]);
-  // Ending while on screen: a buzz.
-  const rang = useRef<number | null>(null);
-  useEffect(() => {
-    if (phase !== 'done' || ends === undefined || rang.current === ends) return;
-    rang.current = ends;
-    if (Date.now() - ends < 5000) navigator.vibrate?.([300, 120, 300]);
-  }, [phase, ends]);
+  // Stopped, its push is called off; ending, it rings and goes to the lock screen from state/alarms.ts, for every
+  // experiment and on any screen (a cell protocol waits for hours or days, rarely on this screen).
+  const stopTimer = () => useRun.getState().stopTimer(step.id);
 
   // ─── The voice ─────────────────────────────────────────────────────────────────────────────────────────────────
   const stepSay = (i: number) => `Step ${i + 1}: ${steps[i]!.key}.`;
   const advance = (): Handled => {
-    if (at >= total - 1) return { say: 'That’s the last step.' };
+    const at = useRun.getState().step;
+    if (at >= total - 1) return { say: 'That’s the last step.', ok: false };
     goStep(at + 1);
     return { say: stepSay(at + 1) };
   };
   const back = (): Handled => {
-    if (at === 0) return { say: 'This is the first step.' };
+    const at = useRun.getState().step;
+    if (at === 0) return { say: 'This is the first step.', ok: false };
     goStep(at - 1);
     return { say: stepSay(at - 1) };
   };
@@ -145,12 +131,12 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
           startTimer();
           return { say: `${lengthText(step.timer.seconds)}. It ends ${endsText(Date.now() + step.timer.seconds * 1000)}.` };
         case 'answer':
-          return { say: '' };
+          return { say: 'There is no pending question on this step.', ok: false };
         default:
           return null;
       }
     },
-    context: () => converseContext('run', p, { step: at, stepTitle: step.title }),
+    context: () => converseContext('run', p, { step: useRun.getState().step, stepTitle: steps[useRun.getState().step]?.title }),
     protocol: () => p,
   };
   const { exchange, send, clear } = useRunVoice(handlers);
@@ -161,6 +147,9 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
     clear();
   }, [at, list, clear]);
 
+  const photos = useRun(s => s.photos);
+  const pictures = useStepPictures(p, proc.id, steps.map(s => s.id), photos, BIG);
+
   const backTo = list
     ? { to: `/run/${at + 1}`, label: 'Back to the current step' }
     : at === 0
@@ -168,11 +157,18 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
         ? { to: '/run/prep', label: 'Back to reagent prep' }
         : { to: '/protocol', label: 'Back to the conversation' }
       : { to: `/run/${at}`, label: `Back to ${steps[at - 1]!.title.toLowerCase()}` };
+  const taps = useTapNav({
+    onNext: next ? () => goStep(at + 1) : undefined,
+    onBack: at > 0 ? () => goStep(at - 1) : undefined,
+    onSkip: next ? () => skipRunStep(steps, at, navigate) : undefined,
+  });
 
   return (
     <RunFrame
       send={send}
       atKey={list ? 'all' : at}
+      taps={list ? undefined : taps}
+      corner={list ? undefined : <MinimizeRun titles={steps.map(s => s.title)} className="right-5" />}
       header={{
         back: backTo,
         subtitle: list ? `${shortName(p)} · All ${total} steps` : undefined,
@@ -185,6 +181,7 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
         <>
           {exchange ? <Asked exchange={exchange} /> : heard ? <YouSaid text={heard} /> : null}
           {note && at === 0 && <p className="m-0 mb-4 shrink-0 px-1 text-[15px] leading-[22px] text-text">{note}</p>}
+          {pictures.pictureOf(at)?.big}
           <Answer>{step.key}</Answer>
           {step.timer && phase && (
             <StepTimer timer={step.timer} phase={phase} ends={ends ?? null} now={now} push={push} onStart={startTimer} onStop={stopTimer} />
@@ -199,22 +196,14 @@ export function FollowScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
               ))}
             </ul>
           )}
-          <nav aria-label="Move through the steps" className="mt-auto flex shrink-0 items-center gap-2 px-1 pt-2">
-            {at > 0 && (
-              <button type="button" onClick={() => goStep(at - 1)} className={cn(PILL, WHITE, 'shrink-0')}>
-                Back
-              </button>
-            )}
-            {next ? (
-              <button type="button" onClick={() => goStep(at + 1)} className={cn(PILL, INK, 'min-w-0')}>
-                <span className="truncate">Next · {next.title}</span>
-              </button>
-            ) : (
-              <button type="button" onClick={finish} className={cn(PILL, INK, 'shrink-0')}>
-                Finish
-              </button>
-            )}
-          </nav>
+          <StepNav
+            onBack={at > 0 ? () => goStep(at - 1) : undefined}
+            onSkip={() => skipRunStep(steps, at, navigate)}
+            next={next ? { title: next.title, go: () => goStep(at + 1) } : undefined}
+            last={{ label: 'Finish', go: finish }}
+          />
+
+          {pictures.sheet}
         </>
       )}
     </RunFrame>
@@ -248,7 +237,7 @@ export function PrepScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
       applyActions(actions, navigate);
       return { say: acknowledge(actions) };
     },
-    local: c => (c.type === 'advance' ? toStep1() : c.type === 'answer' ? { say: '' } : null),
+    local: c => (c.type === 'advance' ? toStep1() : c.type === 'answer' ? { say: 'There is no pending question on this step.', ok: false } : null),
     // Not a step of the experiment: no step index, the screen says where the user is.
     context: () => converseContext('run-prep', p, { step: undefined }),
     protocol: () => p,
@@ -296,8 +285,25 @@ export function PrepScreen({ p, proc }: { p: Protocol; proc: Procedure }) {
   );
 }
 
-/** A run screen's frame: the page, the bar to speak or type at the bottom, its + menu, and Chapp's header. */
-function RunFrame({ send, atKey, header, children }: { send: (text: string) => void; atKey: string | number; header: ChappHeaderProps; children: ReactNode }) {
+/**
+ * A run screen's frame: the page, the bar to speak or type at the bottom, its + menu, and Chapp's header; `taps`, when
+ * tapping the page moves through the steps (TapNav), and `corner`, a button at the top right.
+ */
+function RunFrame({
+  send,
+  atKey,
+  header,
+  taps,
+  corner,
+  children,
+}: {
+  send: (text: string) => void;
+  atKey: string | number;
+  header: ChappHeaderProps;
+  taps?: ReturnType<typeof useTapNav>;
+  corner?: ReactNode;
+  children: ReactNode;
+}) {
   const [typing, setTyping] = useState(false);
   const [plus, setPlus] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
@@ -305,9 +311,13 @@ function RunFrame({ send, atKey, header, children }: { send: (text: string) => v
   useEffect(() => setPlus(false), [atKey]);
   return (
     <div className="relative h-full overflow-hidden bg-bg">
-      <div className="flex h-full flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(92px+var(--screen-bottom))] [scrollbar-width:none]">
+      <div
+        onClick={taps?.onClick}
+        className="flex h-full touch-manipulation flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] pb-[calc(92px+var(--screen-bottom))] [scrollbar-width:none]"
+      >
         {children}
       </div>
+      {taps?.overlay}
 
       <div className="absolute inset-x-0 bottom-0 z-[6] px-5 pt-2 pb-[var(--screen-bottom)]">
         {typing ? (
@@ -328,6 +338,7 @@ function RunFrame({ send, atKey, header, children }: { send: (text: string) => v
       <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />
 
       <ChappHeader {...header} />
+      {corner}
     </div>
   );
 }

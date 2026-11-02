@@ -14,7 +14,7 @@ import {
   type StandardVial,
 } from '../../components/lab/model.ts';
 import type { RunState } from '../../state/run.ts';
-import { count } from '../../voice/commands.ts';
+import { count } from '../../lib/count.ts';
 
 /**
  * The results screen's numbers and words, worked out from the run's plan and readings: which well holds what

@@ -2,6 +2,7 @@ import { analyzePlate, type WellRole } from '../../../shared/fit.ts';
 import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
 import { SHARE_FORMAT, type SharedComponent, type SharedPlan, type SharedSetup, type ShareScope, type StoredShare } from '../../../shared/share.ts';
 import { NO_EDITS, runSetup, type RunPlan } from '../../components/lab/model.ts';
+import type { Cover } from '../../state/library.ts';
 import type { RunState } from '../../state/run.ts';
 
 /**
@@ -47,15 +48,15 @@ const PHOTO = /^data:image\/(?:jpeg|png|webp);base64,/;
 
 /**
  * The setup to share for one trim. The plan travels unless it is just the protocol; the results only with everything,
- * and only when there are readings. The kit photos travel with any trim unless the user leaves them out (10/28: on by
- * default). `from` names the sharer ("CJ Yu shared…").
+ * and only when there are readings. The kit photos and the kit's `cover` travel with any trim unless the user leaves
+ * them out (10/28: on by default). `from` names the sharer ("CJ Yu shared…").
  */
 export function buildShare(
   scope: ShareScope,
   run: RunSnapshot,
   protocol: Protocol,
   results: { r2?: number; sampleData?: boolean } = {},
-  options: { photos?: boolean; from?: string } = {},
+  options: { photos?: boolean; from?: string; cover?: Cover } = {},
 ): SharedSetup {
   const photos = options.photos ?? true;
   const setup: SharedSetup = {
@@ -68,6 +69,8 @@ export function buildShare(
       return photos && photo && PHOTO.test(photo) ? { ...c, photo } : c;
     }),
   };
+  const cover = options.cover;
+  if (photos && cover && PHOTO.test(cover.src)) setup.cover = { photo: cover.src, ...(cover.box ? { box: cover.box } : {}) };
   if (options.from) setup.from = options.from;
   if (scope !== 'protocol') {
     setup.plan = { samples: run.samples, replicates: run.replicates, standardReplicates: run.standardReplicates, standards: run.standards };
@@ -134,9 +137,11 @@ export type Travels = {
   results?: { samples: number; r2?: number };
   /** How many bottles' photos come along. */
   photos?: number;
+  /** The kit's cover comes along. */
+  cover?: true;
 };
 
-type Shareable = Pick<SharedSetup, 'procedure' | 'plan' | 'results'> & { kit?: SharedComponent[] };
+type Shareable = Pick<SharedSetup, 'procedure' | 'plan' | 'results' | 'cover'> & { kit?: SharedComponent[] };
 
 export function travels(share: Shareable, protocol: Protocol): Travels {
   const procedure = protocol.procedures.find(p => p.id === share.procedure) ?? protocol.procedures[0]!;
@@ -160,6 +165,7 @@ export function travels(share: Shareable, protocol: Protocol): Travels {
   }
   const photos = share.kit?.filter(c => c.photo).length ?? 0;
   if (photos > 0) out.photos = photos;
+  if (share.cover) out.cover = true;
   return out;
 }
 

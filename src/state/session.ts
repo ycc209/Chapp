@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { ConverseTurn, Expression } from '../../shared/ai.ts';
 
 /**
@@ -27,10 +28,12 @@ type Session = {
   exchange: Exchange | null;
   /** This conversation's turns, oldest first, the last few of which go with each question. New conversation clears it. */
   history: ConverseTurn[];
+  summary: string;
+  /** Changes only when the user explicitly starts a new conversation. */
+  generation: number;
   /**
    * Meta's copy of this conversation: the last reply's id, sent with the next question so only the new words go and
-   * Chapp's reasoning carries on. Dropped after a few replies, and by a turn answered on the phone (Meta has not seen
-   * it): the next question then goes with `history` instead.
+   * Chapp's reasoning carries on. Only a local-only exchange clears it, because Meta has not seen that exchange.
    */
   thread: { id: string; replies: number } | null;
   setVoice: (voice: Voice) => void;
@@ -48,11 +51,17 @@ type Session = {
 export type Exchange = { ask: string; say: string; query?: string };
 
 // Turns kept: enough for the last few questions and answers.
-const HISTORY = 8;
-// Replies Meta's copy runs to before the next question starts afresh from `history`, so it does not grow all day.
-const THREAD = 8;
+const HISTORY = 64;
+const EXCERPTS = 'Earlier conversation excerpts (verbatim; may begin partway through a turn):\n';
 
-export const useSession = create<Session>()(set => ({
+function rememberTurns(state: Pick<Session, 'history' | 'summary'>, turns: ConverseTurn[]) {
+  const all = [...state.history, ...turns];
+  const removed = all.slice(0, Math.max(0, all.length - HISTORY));
+  const older = [state.summary.replace(EXCERPTS, ''), ...removed.map(t => `${t.role}: ${t.text}`)].filter(Boolean).join('\n\n');
+  return { history: all.slice(-HISTORY), summary: older ? EXCERPTS + older.slice(-(24_000 - EXCERPTS.length)) : '' };
+}
+
+export const useSession = create<Session>()(persist(set => ({
   voice: 'idle',
   heard: '',
   interim: '',
@@ -60,17 +69,19 @@ export const useSession = create<Session>()(set => ({
   status: '',
   exchange: null,
   history: [],
+  summary: '',
+  generation: 0,
   thread: null,
   setVoice: voice => set({ voice }),
   setHeard: (heard, interim = '') => set({ heard, interim }),
   setExpression: expression => set({ expression }),
   setStatus: status => set({ status }),
   setExchange: exchange => set({ exchange }),
-  addTurns: (...turns) => set(s => ({ history: [...s.history, ...turns].slice(-HISTORY), thread: null })),
+  addTurns: (...turns) => set(s => ({ ...rememberTurns(s, turns), thread: null })),
   answered: (responseId, ...turns) =>
     set(s => {
       const replies = (s.thread?.replies ?? 0) + 1;
-      return { history: [...s.history, ...turns].slice(-HISTORY), thread: responseId && replies < THREAD ? { id: responseId, replies } : null };
+      return { ...rememberTurns(s, turns), thread: responseId ? { id: responseId, replies } : null };
     }),
-  newConversation: () => set({ history: [], thread: null, exchange: null, heard: '', interim: '' }),
-}));
+  newConversation: () => set(s => ({ history: [], summary: '', thread: null, exchange: null, heard: '', interim: '', generation: s.generation + 1 })),
+}), { name: 'chapp.conversation', partialize: s => ({ history: s.history, summary: s.summary, thread: s.thread, exchange: s.exchange, generation: s.generation }) }));

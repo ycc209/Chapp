@@ -31,6 +31,13 @@ export function needsOf(p: Protocol): Need[] {
   return bottles(p).map(c => ({ id: c.id, name: splitName(c.name).name, kit: c.suppliedBy === 'kit', role: c.role }));
 }
 
+/**
+ * The id of one of a kit's contents as its manual's first read lists them (found.ts contentsTargets): what a bottle is
+ * matched to before the kit's protocol, and its bottles' own ids, are read.
+ */
+export const contentsId = (n: number) => `contents:${n}`;
+export const isContents = (id: string) => id.startsWith('contents:');
+
 type Progress = { picks: Record<string, Pick | undefined>; skipped: Record<string, boolean | undefined> };
 
 /** Bottles neither matched nor skipped, in the order Chapp asks about them. */
@@ -82,25 +89,37 @@ export const thingTitle = (thing: { looks: string }) => thing.looks.charAt(0).to
 
 const SAM = 'SAM 3.1';
 const SPARK = 'Muse Spark';
-const nBottles = (n: number) => `${n} bottle${n === 1 ? '' : 's'}`;
+/** "the bottles", never how many: SAM can count one bottle twice (two photos of it, or a video that leaves it and comes back). */
+const theBottles = (n: number) => (n === 1 ? 'the bottle' : 'the bottles');
 const nPhotos = (n: number) => `${n} photo${n === 1 ? '' : 's'}`;
 
-/** While SAM looks: "SAM 3.1 is finding the bottles in your 3 photos…" */
-export function looking(shots: number): string {
-  return `${SAM} is finding the bottles in your ${shots === 1 ? 'photo' : nPhotos(shots)}…`;
+/**
+ * What the bottles were looked for in: so many photos, one sweep of the camera, or a video the user chose (the frames
+ * of either are not the user's photos).
+ */
+export type Taken = number | 'sweep' | 'video';
+export const takenOf = (shots: readonly { sweep?: boolean; video?: boolean }[]): Taken =>
+  shots.length && shots.every(s => s.sweep) ? 'sweep' : shots.length && shots.every(s => s.video) ? 'video' : shots.length;
+
+/** While SAM looks: "SAM 3.1 is finding the bottles in your 3 photos…", "… in your sweep…", "… in your video…" */
+export function looking(shots: Taken): string {
+  return `${SAM} is finding the bottles in your ${typeof shots === 'string' ? shots : shots === 1 ? 'photo' : nPhotos(shots)}…`;
 }
+
+/** While SAM follows the bottles through a video: "SAM 3.1 is following the bottles through your sweep…" */
+export const following = (kind: 'sweep' | 'video') => `${SAM} is following the bottles through your ${kind}…`;
 
 /** While SAM looks at a tap where it had found no bottle: "SAM 3.1 is outlining what you tapped…" */
 export const outlining = () => `${SAM} is outlining what you tapped…`;
 
-/** While Muse Spark reads what SAM found: "SAM 3.1 found 5 bottles. Muse Spark is reading their labels…" */
+/** While Muse Spark reads what SAM found: "SAM 3.1 found the bottles. Muse Spark is reading their labels…" */
 export function reading(found: number): string {
-  return `${SAM} found ${nBottles(found)}. ${SPARK} is reading ${found === 1 ? 'its label' : 'their labels'}…`;
+  return `${SAM} found ${theBottles(found)}. ${SPARK} is reading ${found === 1 ? 'its label' : 'their labels'}…`;
 }
 
-/** Recognized.dc.html, by who did what: "SAM 3.1 found 12 bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2." */
-export function recognized(found: number, shots: number, read: number, unsure: number): string {
-  return `${SAM} found ${nBottles(found)} in ${nPhotos(shots)}.${read ? ` ${SPARK} read ${read} label${read === 1 ? '' : 's'}.` : ''}${unsure ? ` I’m not sure about ${unsure}.` : ''}`;
+/** Recognized.dc.html, by who did what: "SAM 3.1 found the bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2." */
+export function recognized(found: number, shots: Taken, read: number, unsure: number): string {
+  return `${SAM} found ${theBottles(found)} in ${typeof shots === 'string' ? `your ${shots}` : nPhotos(shots)}.${read ? ` ${SPARK} read ${read} label${read === 1 ? '' : 's'}.` : ''}${unsure ? ` I’m not sure about ${unsure}.` : ''}`;
 }
 
 /** The models could not look (offline, or they failed): over to the user's taps. */
@@ -109,8 +128,8 @@ export function cantLook(needs: number): string {
 }
 
 /** The models looked and found none of the run's bottles. */
-export function noneFound(shots: number, needs: number): string {
-  return `${SAM} couldn’t find the bottles in ${shots === 1 ? 'this photo' : 'these photos'}. Show me the ${needs} bottle${needs === 1 ? '' : 's'}.`;
+export function noneFound(shots: Taken, needs: number): string {
+  return `${SAM} couldn’t find the bottles in ${typeof shots === 'string' ? `your ${shots}` : shots === 1 ? 'this photo' : 'these photos'}. Show me the ${needs} bottle${needs === 1 ? '' : 's'}.`;
 }
 
 /**

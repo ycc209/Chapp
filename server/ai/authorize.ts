@@ -1,5 +1,5 @@
 import { numbersIn } from '../../shared/a2ui.ts';
-import type { Action } from '../../shared/ai.ts';
+import type { Action, ConverseContext } from '../../shared/ai.ts';
 
 /**
  * What the model may change on its own word, checked against the user's. Muse Spark reads what was meant; this only
@@ -13,13 +13,15 @@ import type { Action } from '../../shared/ai.ts';
 
 export type Verdict = 'apply' | 'confirm' | 'drop';
 
-/** A timed step of the protocol on screen: its id and its length in seconds. */
-export type TimedStep = { id: string; seconds: number };
+/** A timed step of the protocol on screen: its id, its length in seconds, and the manual's alternatives where it gives some. */
+export type TimedStep = { id: string; seconds: number; options?: readonly number[] };
 
 export type Rules = {
   /** The protocol's step ids (a markDone may name one), and its timed steps. */
   steps: readonly string[];
   timed: readonly TimedStep[];
+  /** The app has asked a question of its own ("Stop the timer?") and waits for yes or no. */
+  pending?: boolean;
   /** The standards' vial ids ("A" … "I"). */
   vials: readonly string[];
   /** How many samples are on the plate (numbered from 1), samples added during the run included. */
@@ -40,6 +42,10 @@ const TIMER = /\btimer\b|\bstart\b|\bbegin\b|\bcount ?down\b|\btime it\b|計時|
 const REDO = /\bredo\b|\bre-do\b|\bremake\b|\bagain\b|\bbroke|\bspill|\bbad\b|重做|重來|重新|再做|再加|壞|灑|打翻|弄翻/i;
 const BAD_WELL = /\bbad\b|\bbubbles?\b|\bspill|\bwrong\b|\bbroke|\bcontaminat|\bempty\b|\bmissed\b|\bmove\b|壞|氣泡|灑|錯|污染|漏|空的|沒加到|改到|換到|移到/i;
 const ADD = /\badd\b|\bextra\b|\banother\b|\bone more\b|\bnew\b|多|加|新增|再一/i;
+const STOP = /\bstop\b|\bpause\b|\bhold\b|\btake (?:it|the plate) out\b|停|暫停|拿出來/i;
+const RESUME = /\bresume\b|\bcontinue\b|\bgo on\b|\bkeep going\b|\bput (?:it|the plate) back\b|\bstart (?:it )?again\b|\bback in\b|繼續|恢復|放回|再開始|接著/i;
+const PHOTO = /\bphoto\b|\bpicture\b|\bcamera\b|\bscan\b|\bread\b|\blook\b|\bshow\b|\bhere\b|\bsee\b|拍|照|相機|掃|看|讀|給你/i;
+const SAMPLE = /\bsample\b|\bexample\b|\bdemo\b|\btest data\b|範例|示範|樣本資料|例子|測試資料/i;
 
 /** Whether the user's words name this vial, sample or well: on its own ("B", "3", "B3"), in a run ("ABCD") or a range ("A 到 D"). */
 export function names(said: string, id: string): boolean {
@@ -98,6 +104,20 @@ export function durationsSaid(said: string): number[] {
     if (unit) out.push(Math.round((n + (half ? 0.5 : 0)) * unit[1]));
   }
   return [...new Set(out)];
+}
+
+// "直接開始", "用預設", "just start": start without looking at the plan first.
+const AT_ONCE = /直接|馬上|立刻|現在就|就用|預設|照這樣|不用(?:改|看|調)|right away|straight away|straight in|immediately|as it is|with the defaults?|just start/i;
+
+/**
+ * startRun's `now` skips the start card. It holds only when the card is up and the user answers it (startCard), or the
+ * user said to start at once; a "好" in front of "let's start" is not that, so the card comes first, whatever the
+ * model read into it (Alexa collects what a request needs before acting; Apple asks before going on in the app).
+ */
+export function startWhenAsked(action: Action, said: string, context: ConverseContext): Action {
+  if (action.type !== 'startRun' || !action.now || context.startCard || AT_ONCE.test(said)) return action;
+  const { now: _now, ...rest } = action;
+  return rest;
 }
 
 /** Whether these words could be a request at all: not a plain question, not a "not yet". */
@@ -162,13 +182,32 @@ export function authorize(action: Action, said: string, rules: Rules): { verdict
     case 'addCondition':
       return { verdict: verdict(ADD.test(said)), action };
     case 'setStepTime': {
-      // Always the user's tap, and only to a length the user said: one they named, or the one that matches.
+      // Only a length the user said: one they named, or the one that matches. One of the manual's own alternatives
+      // for the step ("30 min or 2 h") is their pick, made at once; any other length is the user's tap.
       const step = rules.timed.find(s => s.id === action.id);
       const named = durationsSaid(said);
       const seconds = named.includes(action.seconds) ? action.seconds : named.length === 1 ? named[0]! : null;
       if (!step || seconds === null) return { verdict: 'drop', action };
+      if (step.options?.includes(seconds)) return { verdict: verdict(true), action: { ...action, seconds } };
       return { verdict: 'confirm', action: { ...action, seconds } };
     }
+    case 'stopTimer':
+    case 'resumeTimer': {
+      if (!rules.timed.some(s => s.id === action.id)) return { verdict: 'drop', action };
+      return { verdict: verdict((action.type === 'stopTimer' ? STOP : RESUME).test(said)), action };
+    }
+    case 'takePhoto':
+      return { verdict: verdict(PHOTO.test(said)), action };
+    case 'useSample':
+      return { verdict: verdict(SAMPLE.test(said)), action };
+    case 'answer':
+      // Only an answer to a question the app itself asked; which answer it was is the model's reading of the words.
+      return { verdict: rules.pending ? 'apply' : 'drop', action };
+    // Legacy reply replay only; the live conversation validates actions as tools, without phrase matching.
+    case 'undo':
+    case 'openProtocol':
+    case 'startRun':
+      return { verdict: 'confirm', action };
   }
 }
 

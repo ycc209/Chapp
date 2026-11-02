@@ -37,7 +37,8 @@ export const LINES: { label: string; text: string; context: ConverseContext }[] 
 
 const args = process.argv.slice(2);
 const flag = args.indexOf('--effort');
-const effort = (flag >= 0 ? args.splice(flag, 2)[1] : EFFORT.converse) as Effort;
+// --effort sets every conversation agent to one level; without it each agent keeps its own (EFFORT.front and so on).
+const effort = flag >= 0 ? args.splice(flag, 2)[1] as Effort : undefined;
 const only = args;
 const lines = only.length ? LINES.filter(l => only.some(o => l.label.startsWith(o))) : LINES;
 
@@ -61,7 +62,7 @@ const recording = (async (url: string, init: RequestInit) => {
   return new Response(text, { status: res.status, headers: res.headers });
 }) as typeof fetch;
 
-const meta = createMetaProvider({ apiKey: key, fetch: recording, log: () => {}, effort: { converse: effort } });
+const meta = createMetaProvider({ apiKey: key, fetch: recording, log: () => {}, effort: effort ? { converse: effort } : {} });
 const times: number[] = [];
 for (const line of lines) {
   raw = [];
@@ -84,4 +85,4 @@ for (const line of lines) {
   if (pages?.length) console.log(`  pages ${pages.join(', ')}`);
 }
 times.sort((a, b) => a - b);
-console.log(`\n${times.length} line(s) at ${effort} effort: median ${times[Math.floor(times.length / 2)]?.toFixed(1)} s, max ${times.at(-1)?.toFixed(1)} s. Raw replies in data/smoke/converse/${stamp}-*.json`);
+console.log(`\n${times.length} line(s) at ${effort ?? `each agent's own (front ${EFFORT.front})`} effort: median ${times[Math.floor(times.length / 2)]?.toFixed(1)} s, max ${times.at(-1)?.toFixed(1)} s. Raw replies in data/smoke/converse/${stamp}-*.json`);

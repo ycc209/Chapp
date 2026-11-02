@@ -23,7 +23,7 @@ export const parts = (): Parts => ({
       { id: 'wr', name: 'Working Reagent', short: 'WR', cite: 'p1: Mix 10 parts A with 1 part B.' },
       { id: 'lonely', name: 'Half a mix', short: '', cite: 'p1: x' },
     ],
-    mixParts: [{ mix: 'wr', component: 'Reagent A', parts: 10 }, { mix: 'wr', component: 'reagent-b', parts: 1 }, { mix: 'lonely', component: 'std', parts: 1 }],
+    mixParts: [{ mix: 'wr', component: 'Reagent A', parts: 10, amount: '' }, { mix: 'wr', component: 'reagent-b', parts: 1, amount: '' }, { mix: 'lonely', component: 'std', parts: 1, amount: '' }],
     curves: [{ id: 'curve', name: 'Standard', stock: 'std', diluent: 'buffer', range: '10-1000 ug/mL', cite: 'p1 table: Table 1' }],
     procedures: [{ id: 'plate', name: 'Microplate', format: 'microplate', ratio: '1:10', sample: '20 uL', mixPerSample: '200 uL', mix: 'wr', curve: 'curve', range: '10-1000 ug/mL' }],
   },

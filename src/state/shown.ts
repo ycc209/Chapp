@@ -6,8 +6,8 @@ import { create } from 'zustand';
  * card is drawn. Not the run's plan: that changes only with "Use this plan".
  */
 type Shown = {
-  plan: { samples: number; replicates: number } | null;
-  set: (plan: { samples: number; replicates: number }) => void;
+  plan: { samples: number; replicates: number; standardReplicates?: number } | null;
+  set: (plan: { samples: number; replicates: number; standardReplicates?: number }) => void;
   clear: () => void;
 };
 

@@ -6,7 +6,6 @@ import {
   currentTube,
   loadUpTo,
   parsePlateExport,
-  runCommand,
   spoken,
   standardsLine,
   standardsText,
@@ -116,33 +115,7 @@ describe('the timer', () => {
   });
 });
 
-describe('what is said at the bench', () => {
-  it('knows the timer, the length, the photo and the sample export', () => {
-    expect(runCommand('Start the timer')).toEqual({ type: 'timer', what: 'start' });
-    expect(runCommand('OK, start.')).toEqual({ type: 'timer', what: 'start' });
-    expect(runCommand('stop')).toEqual({ type: 'timer', what: 'stop' });
-    expect(runCommand('pause the timer please')).toEqual({ type: 'timer', what: 'stop' });
-    expect(runCommand('resume')).toEqual({ type: 'timer', what: 'resume' });
-    expect(runCommand('two hours')).toEqual({ type: 'length', seconds: 7200 });
-    expect(runCommand('Make it 30 minutes')).toEqual({ type: 'length', seconds: 1800 });
-    expect(runCommand('2 h')).toEqual({ type: 'length', seconds: 7200 });
-    expect(runCommand('photo')).toEqual({ type: 'photo' });
-    expect(runCommand('Take a photo')).toEqual({ type: 'photo' });
-    expect(runCommand('Use the sample export')).toEqual({ type: 'sample' });
-    expect(runCommand('use the sample data')).toEqual({ type: 'sample' });
-    expect(runCommand('yes')).toEqual({ type: 'answer', yes: true });
-    expect(runCommand('mixed')).toEqual({ type: 'advance' });
-    expect(runCommand('covered')).toEqual({ type: 'advance' });
-    expect(runCommand('show me the results')).toEqual({ type: 'results' });
-  });
-
-  it('leaves questions and everything else to Chapp', () => {
-    expect(runCommand('What if it turns cloudy when I add B?')).toBeNull();
-    expect(runCommand('should I stop?')).toBeNull();
-    expect(runCommand('next')).toBeNull();
-    expect(runCommand('C is OK')).toBeNull();
-  });
-
+describe('how units are spoken at the bench', () => {
   it('reads units out loud in words', () => {
     expect(spoken('Next is D: 70 µL from B and 70 µL of diluent.')).toBe('Next is D: 70 microliters from B and 70 microliters of diluent.');
     expect(spoken('Timer started: 30 min at 37 °C.')).toBe('Timer started: 30 minutes at 37 degrees.');

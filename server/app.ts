@@ -11,9 +11,9 @@ import { createShareHandler } from './share.ts';
 import { createImportHandler, findAndImport } from './imports.ts';
 import { createKitHandler } from './kit.ts';
 import { createPictureHandler } from './pictures.ts';
-import { streamFindProtocol, wantsEvents } from './events.ts';
+import { streamConverse, streamFindProtocol, wantsEvents } from './events.ts';
 import { createPlateHandler } from './ai/plate.ts';
-import { protocolList } from './ai/protocols.ts';
+import { deleteProtocol, loadProtocol, protocolList } from './ai/protocols.ts';
 import { createPushHandler, type PushOptions } from './push.ts';
 
 /**
@@ -23,6 +23,8 @@ import { createPushHandler, type PushOptions } from './push.ts';
  *   GET  /api/health          → Health
  *   GET  /api/protocols       → ProtocolSummary[]: every protocol in data/protocols/, the newest first (Library)
  *   GET  /api/protocols/:id   → a chapp.protocol/1 document from data/protocols/
+ *   DELETE /api/protocols/:id → { deleted }: a protocol Chapp read from a manual goes, with its manual and pictures
+ *                             (409 for a built-in one, which stays)
  *   GET  /api/protocols/:id/pictures/:step.svg → a step card's picture, drawn once and kept (server/pictures.ts)
  *   POST /api/voice           audio/wav (≤ 10 MB) → Transcript
  *   POST /api/converse        ConverseRequest (≤ 100 KB) → ConverseReply
@@ -30,7 +32,7 @@ import { createPushHandler, type PushOptions } from './push.ts';
  *                             as it happens, then the FoundProtocol (server/events.ts)
  *   POST /api/share          SharedSetup (≤ 3 MB) → 201 { id }   (server/share.ts, stored in data/shares/)
  *   GET  /api/share/:id       → StoredShare
- *   POST /api/kit/recognize, /api/kit/segment, /api/kit/labels (≤ 8 MB)   (server/kit.ts: kit photos; 501 without)
+ *   POST /api/kit/* (≤ 8 MB of JSON; a video to follow ≤ 150 MB)   (server/kit.ts: kit photos and videos; 501 without)
  *   POST /api/read-plate      ReadPlateRequest (≤ 12 MB) → PlateReading   (server/ai/plate.ts)
  *   GET  /api/push/key, POST /api/push/timer, POST /api/push/cancel        (server/push.ts: time's up on the lock screen)
  *   POST /api/import-protocol application/pdf (≤ 20 MB) → ImportedProtocol, saved to data/protocols/   (server/imports.ts)
@@ -53,6 +55,8 @@ export type AppOptions = {
   shares?: string;
   /** Where step pictures are kept (data/pictures/). */
   pictures?: string;
+  /** Where Muse Image's whole bottles are kept, by the crop they were drawn from (data/whole/). */
+  wholes?: string;
   /** Web Push for timers (server/push.ts): its folder (data/push/) and, in tests, a sender that stays off the network. */
   push?: Partial<PushOptions>;
 };
@@ -97,9 +101,9 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
 
 const mediaType = (req: IncomingMessage) => (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
 
-async function readJson<T>(req: IncomingMessage, schema: z.ZodType<T>): Promise<T> {
+async function readJson<T>(req: IncomingMessage, schema: z.ZodType<T>, limit = MAX_JSON): Promise<T> {
   if (mediaType(req) !== 'application/json') throw new HttpError(415, 'Send JSON (content-type: application/json)');
-  const raw = (await readBody(req, MAX_JSON)).toString('utf8');
+  const raw = (await readBody(req, limit)).toString('utf8');
   let body: unknown;
   try {
     body = JSON.parse(raw);
@@ -129,13 +133,14 @@ export function createHandler(options: AppOptions) {
   const protocols = options.protocols ?? fileURLToPath(new URL('../data/protocols/', import.meta.url));
   const health: Health = { ok: true, provider: options.providerName, metaModelApi: options.metaModelApi };
   const share = createShareHandler(options.shares ?? fileURLToPath(new URL('../data/shares/', import.meta.url)));
-  const kit = createKitHandler(provider);
+  const kit = createKitHandler(provider, options.wholes ?? fileURLToPath(new URL('../data/whole/', import.meta.url)));
   const manuals = options.manuals ?? fileURLToPath(new URL('../data/sources/', import.meta.url));
   const imports = createImportHandler({ provider, protocols, manuals });
   // A manual the search finds for a kit without a protocol here is read into one (server/imports.ts).
   const find = (query: string, live?: FindProtocolLive) => findAndImport(provider, query, live, { protocols, manuals });
   const plate = createPlateHandler(provider);
-  const pictures = createPictureHandler({ provider, protocols, pictures: options.pictures ?? fileURLToPath(new URL('../data/pictures/', import.meta.url)) });
+  const picturesDir = options.pictures ?? fileURLToPath(new URL('../data/pictures/', import.meta.url));
+  const pictures = createPictureHandler({ provider, protocols, pictures: picturesDir });
   const push = createPushHandler({ dir: fileURLToPath(new URL('../data/push/', import.meta.url)), ...options.push });
 
   const post = (req: IncomingMessage) => {
@@ -153,7 +158,9 @@ export function createHandler(options: AppOptions) {
       }
       if (path === '/api/converse') {
         post(req);
-        return json(res, 200, await provider.converse(await readJson(req, ConverseRequestSchema)));
+        const request = await readJson(req, ConverseRequestSchema, 1024 * 1024);
+        if (wantsEvents(req)) return await streamConverse(res, live => provider.converse(request, live));
+        return json(res, 200, await provider.converse(request));
       }
       if (path === '/api/find-protocol') {
         post(req);
@@ -171,6 +178,13 @@ export function createHandler(options: AppOptions) {
       if (path === '/api/protocols') return json(res, 200, protocolList(protocols));
       if (req.method === 'GET' && (await pictures(res, path))) return;
       const id = /^\/api\/protocols\/([a-z0-9-]+)$/.exec(path)?.[1];
+      if (id && req.method === 'DELETE') {
+        const p = loadProtocol(id, protocols);
+        if (!p) return json(res, 404, { error: 'No such protocol' });
+        if (!p.imported) return json(res, 409, { error: 'This protocol is built into Chapp and stays on this computer.' });
+        deleteProtocol(id, { dir: protocols, manuals, pictures: picturesDir });
+        return json(res, 200, { deleted: id });
+      }
       if (id) {
         const raw = await readFile(resolve(protocols, `${id}.json`), 'utf8').catch(() => null);
         return raw ? json(res, 200, Protocol.parse(JSON.parse(raw))) : json(res, 404, { error: 'No such protocol' });

@@ -1,26 +1,39 @@
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { ProtocolIntro } from '../../../shared/ai.ts';
+import type { ProtocolIntro, ProtocolPreview } from '../../../shared/ai.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
+import { Shimmer } from '../../components/ui/Shimmer.tsx';
 import { cn } from '../../lib/cn.ts';
 import { useKits } from '../../state/library.ts';
-import { answer, bottles, bottleDetail, kitContents, precautions, prepLines, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
-import { BulbIcon, CameraIcon, CheckBadge, DocumentIcon, EyeIcon, FlaskIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
+import { answer, bottleDetail, kitContents, notInKit, precautions, prepLines, principle, sourceLine, splitName, stepLines, type Preview } from './content.ts';
+import { BagIcon, BulbIcon, CameraIcon, CheckBadge, DocumentIcon, EyeIcon, FlaskIcon, NudgeIcon, PlusIcon, StageIcon, StepsIcon, WarningIcon } from './icons.tsx';
 import { BenchSheet } from './BenchSheet.tsx';
+import { KitCover, useHasCover } from '../kit/KitCover.tsx';
 import { scenesFor, StepPicture } from './StepPicture.tsx';
 
-export type Section = 'kit' | 'prep' | 'steps' | 'principle' | 'precautions';
-export const SECTIONS: Section[] = ['kit', 'prep', 'steps', 'principle', 'precautions'];
+export type Section = 'kit' | 'own' | 'prep' | 'steps' | 'principle' | 'precautions';
+export const SECTIONS: Section[] = ['kit', 'own', 'prep', 'steps', 'principle', 'precautions'];
 
-/** Chapp's answer about the kit (Overview.dc.html, Protocol.dc.html): what it is and what happens in the well. */
-export function Answer({ protocol }: { protocol: Pick<Protocol, 'title' | 'summary'> }) {
+/**
+ * Chapp's answer about the kit (Overview.dc.html, Protocol.dc.html): what it is and what happens in the well, beside
+ * the kit's cover when the user photographed its box or bag (`cover`: the protocol's id).
+ */
+export function Answer({ protocol, cover }: { protocol: Pick<Protocol, 'title' | 'summary'>; cover?: string }) {
   const { lead, text } = answer(protocol);
-  return (
-    <p aria-label="Chapp's answer" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink animate-in fade-in duration-300">
+  const covered = useHasCover(cover);
+  const said = (
+    <p aria-label="Chapp's answer" className={cn('px-1 text-[17px] leading-6 font-medium text-ink animate-in fade-in duration-300', covered ? 'min-w-0 flex-1' : 'mb-6 shrink-0')}>
       <b className="font-bold">{lead}</b>
       {text}
     </p>
+  );
+  if (!covered) return said;
+  return (
+    <div className="mb-6 flex shrink-0 items-start gap-2.5 pl-1 animate-in fade-in duration-300">
+      <KitCover protocolId={cover} className="mt-1 size-[72px] rounded-[18px]" />
+      {said}
+    </div>
   );
 }
 
@@ -95,43 +108,48 @@ type SectionsProps = {
   onOpen: (open: Section | '') => void;
   /** Says the bottle photos are drawn samples (review by address), not the user's. */
   sample?: boolean;
+  /** A document preview has no active kit camera or run photos yet. */
+  preview?: boolean;
 };
 
 /**
- * In the kit, Reagent prep (when the manual has some), Steps, Principle, Precautions: rows that open in place, a +
- * turning into × (Overview.dc.html). The black tab on "In the kit" goes to the camera; once the bottles are
- * photographed the row shows them. Steps are the experiment itself; getting the reagents ready comes before it.
+ * In the kit, Not in the kit, Reagent prep (when the manual has some), Steps, Principle, Precautions: rows that open in
+ * place, a + turning into × (Overview.dc.html). In the kit is what the box or bag holds; its black tab goes to the
+ * camera, and once its bottles are photographed the row shows them. Not in the kit is what the user brings, their own
+ * bottles (with a photo, when they gave one) and the equipment. Steps are the experiment itself; getting the reagents
+ * ready comes before it.
  */
-export function Sections({ protocol, procedure, photos, open, onOpen, sample }: SectionsProps) {
-  const kit = kitContents(protocol, procedure);
+export function Sections({ protocol, procedure, photos, open, onOpen, sample, preview }: SectionsProps) {
+  const kit = kitContents(protocol);
+  const own = notInKit(protocol, procedure);
   const steps = stepLines(protocol, procedure);
   const prep = prepLines(protocol, procedure);
   const why = principle(protocol);
   const care = precautions(protocol);
-  const all = bottles(protocol);
-  const photographed = all.some(c => photos[c.id]);
+  const inKit = protocol.components.filter(c => c.suppliedBy === 'kit');
+  const photographed = inKit.some(c => photos[c.id]);
   const pdfPage = steps[0]?.page ?? 1;
 
   const items = (
     <>
       <AccordionPrimitive.Item value="kit">
         <AccordionPrimitive.Header data-kit="" className="relative flex flex-col">
-          <Link
+          {!preview && <Link
             to="/kit"
             aria-label="Photograph your kit"
             className="absolute top-2 -left-5 z-[1] flex h-10 w-11 items-center justify-end gap-px rounded-r-[20px] bg-ink pr-[5px] text-white shadow-[4px_0_14px_rgba(17,17,19,0.18)] outline-none focus-visible:ring-2 focus-visible:ring-blue"
           >
             <CameraIcon />
             <NudgeIcon />
-          </Link>
+          </Link>}
           <Trigger
             className="pl-9"
             title="In the kit"
             aside={
               photographed ? (
                 <span aria-hidden="true" className="flex pl-1.5">
-                  {all.map(c => (
-                    <Thumb key={c.id} src={photos[c.id]} className="-ml-1.5 size-6 rounded-[7px] shadow-[0_0_0_2px_#ffffff]" />
+                  {inKit.map(c => (
+                    <Thumb key={c.id} src={photos[c.id]} mark={false} className="-ml-1.5 size-6 rounded-[7px] shadow-[0_0_0_2px_#ffffff]" />
                   ))}
                 </span>
               ) : (
@@ -144,7 +162,7 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
           {photographed ? (
             <div className="flex flex-col gap-3 pt-0.5 pr-1 pb-[18px] pl-9">
               <ul className="flex flex-col gap-2.5">
-                {all.map(c => (
+                {inKit.map(c => (
                   <li key={c.id} className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-3">
                     <span aria-hidden="true" className="relative size-12">
                       <Thumb src={photos[c.id]} className="size-12 rounded-[12px]" />
@@ -158,23 +176,53 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
                 ))}
               </ul>
               {sample && <SampleBadge>Sample photos, drawn for review</SampleBadge>}
-              <p className="text-[15px] leading-[22px] text-text">{kit.need(true)}</p>
             </div>
           ) : (
             <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
-              <ul className="flex flex-col gap-2 text-[16px] leading-[22px] font-semibold text-ink">
+              {/* Before any photo: each bottle with the place its photo will take, laid out as the photographed list is.
+                  A manual whose products are long names with no amounts (four CellMask stains) would be heavy lines
+                  wrapping in the design's semibold: those read lighter. */}
+              <ul className="flex flex-col gap-2.5">
                 {kit.items.map(item => (
-                  <li key={item.id} className="flex justify-between gap-3">
-                    {item.name}
-                    {item.detail && <span className="font-medium text-text">{item.detail}</span>}
+                  <li key={item.id} className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-3">
+                    <Thumb className="size-12 rounded-[12px]" />
+                    <span className="flex min-w-0 flex-col gap-px">
+                      <span className={cn('text-ink', !item.detail && item.name.length > 28 ? 'text-[15px] leading-5 font-medium [overflow-wrap:anywhere]' : 'text-[16px] leading-[21px] font-semibold')}>{item.name}</span>
+                      {item.detail && <span className="text-[13px] leading-[18px] text-text">{item.detail}</span>}
+                    </span>
                   </li>
                 ))}
               </ul>
-              <p className="text-[15px] leading-[22px] text-text">{[kit.store, kit.need(false)].filter(Boolean).join(' ')}</p>
+              {kit.store && <p className="text-[15px] leading-[22px] text-text">{kit.store}</p>}
             </div>
           )}
         </Content>
       </AccordionPrimitive.Item>
+
+      {own.bottles.length + own.gear.length > 0 && (
+        <AccordionPrimitive.Item value="own">
+          <AccordionPrimitive.Header className="flex flex-col">
+            <Trigger icon={<BagIcon />} title="Not in the kit" aside={<Aside>{own.bottles.length + own.gear.length} items</Aside>} />
+          </AccordionPrimitive.Header>
+          <Content>
+            <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
+              <p className="m-0 text-[15px] leading-[22px] text-text">What you bring yourself.</p>
+              {/* A bottle of the user's they photographed shows it; the rest are plain lines. */}
+              <ul aria-label="Not in the kit" className="m-0 flex list-none flex-col gap-2 p-0">
+                {[...own.bottles.map(b => ({ key: b.id, name: b.name, aside: b.aside, photo: photos[b.id] })), ...own.gear.map(g => ({ key: g, name: g, aside: null, photo: undefined }))].map(item => (
+                  <li key={item.key} className="grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3">
+                    {item.photo ? <Thumb src={item.photo} mark={false} className="size-8 rounded-[9px]" /> : <span aria-hidden="true" className="size-1.5 justify-self-center rounded-full bg-text" />}
+                    <span className="text-[16px] leading-[22px] font-medium text-ink">
+                      {item.name}
+                      {item.aside && <span className="font-normal text-text"> · {item.aside}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </Content>
+        </AccordionPrimitive.Item>
+      )}
 
       {prep.length > 0 && (
         <AccordionPrimitive.Item value="prep">
@@ -263,20 +311,26 @@ export function Sections({ protocol, procedure, photos, open, onOpen, sample }: 
 }
 
 type QuickSectionsProps = {
-  intro: Pick<ProtocolIntro, 'procedure' | 'contents' | 'source'>;
+  intro?: Pick<ProtocolIntro, 'procedure' | 'contents' | 'source' | 'summary'>;
   open: Section | '' | 'all';
   onOpen: (open: Section | '') => void;
+  failed?: boolean;
 };
 
 /**
  * In the kit and Steps from what Chapp read of a new manual first (ProtocolIntro): the bottles and the main procedure's
  * steps as the manual words them, in the same rows as Sections. The checked protocol replaces them when it is read;
- * until then there is no camera tab (matching bottles needs it), and Principle and Precautions wait.
+ * until then there is no camera tab (matching bottles needs it). Principle uses the available overview summary. What
+ * is still being read shimmers in its place (the count, the bottles, the checked steps' cards, the lines), and the rows
+ * the protocol will have (Not in the kit, Precautions) wait greyed, so the page grows into place instead of jumping.
  */
-export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
-  const { steps, others } = intro.procedure;
+export function QuickSections({ intro, open, onOpen, failed = false }: QuickSectionsProps) {
+  const { steps, others } = intro?.procedure ?? { steps: [], others: [] };
   const pdfPage = steps[0]?.page ?? 1;
-  const value = open === 'kit' || open === 'steps' ? open : '';
+  const value = open === 'kit' || open === 'steps' || open === 'principle' ? open : '';
+  const waiting = 'This part of the manual is not available yet.';
+  const coming = failed ? 'Not ready' : <Shimmer className="inline-block h-3.5 w-14 rounded-full align-middle" />;
+  const lines = (widths: string[]) => widths.map((w, i) => <Shimmer key={i} className={cn('h-3.5 rounded-full', w)} />);
   return (
     <AccordionPrimitive.Root
       type="single"
@@ -285,32 +339,34 @@ export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
       onValueChange={v => onOpen(v as Section | '')}
       className="flex shrink-0 flex-col border-b border-line animate-in fade-in duration-300"
     >
-      {intro.contents.length > 0 && (
         <AccordionPrimitive.Item value="kit">
           <AccordionPrimitive.Header className="flex flex-col">
-            <Trigger className="pl-9" title="In the kit" aside={<Aside>{intro.contents.length} items</Aside>} />
+            <Trigger className="pl-9" title="In the kit" aside={<Aside>{intro?.contents.length ? `${intro.contents.length} items` : coming}</Aside>} />
           </AccordionPrimitive.Header>
           <Content>
             <ul className="flex flex-col gap-2 pr-1 pb-[18px] pl-9 text-[16px] leading-[22px] font-semibold text-ink">
-              {intro.contents.map((item, i) => (
+              {(intro?.contents ?? []).map((item, i) => (
                 <li key={i} className="flex justify-between gap-3">
                   {item.name}
                   {item.amount && <span className="font-medium text-text">{item.amount}</span>}
                 </li>
               ))}
+              {!intro?.contents.length && (failed ? <li className="font-medium text-muted">{waiting}</li> : <li className="flex flex-col gap-3 py-1">{lines(['w-[62%]', 'w-[48%]', 'w-[55%]'])}</li>)}
             </ul>
           </Content>
         </AccordionPrimitive.Item>
-      )}
+        <WaitingRow icon={<BagIcon />} title="Not in the kit" aside={coming} />
       <AccordionPrimitive.Item value="steps">
         <AccordionPrimitive.Header className="flex flex-col">
-          <Trigger icon={<StepsIcon />} title="Steps" aside={<Aside>{steps.length}</Aside>} />
+          <Trigger icon={<StepsIcon />} title="Steps" aside={<Aside>{steps.length || coming}</Aside>} />
         </AccordionPrimitive.Header>
         <Content>
           <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
-            <StepCards steps={steps} />
+            {/* The manual's own steps first, then the checked ones' cards still being written. */}
+            {failed ? steps.length ? <StepCards steps={steps} /> : <p className="text-[15px] leading-[22px] text-muted">{waiting}</p> : <StepCards steps={steps} pending />}
+            {!failed && <p className="m-0 text-[14px] leading-5 text-text">{steps.length ? 'Checking each step’s amounts…' : 'Writing the steps…'}</p>}
             {others.length > 0 && <p className="text-[15px] leading-[22px] text-text">Also in the manual: {others.join(', ')}.</p>}
-            {intro.source.url && (
+            {intro?.source.url && (
               <a
                 href={`${intro.source.url}#page=${pdfPage}`}
                 target="_blank"
@@ -324,8 +380,59 @@ export function QuickSections({ intro, open, onOpen }: QuickSectionsProps) {
           </div>
         </Content>
       </AccordionPrimitive.Item>
+      <AccordionPrimitive.Item value="principle">
+        <AccordionPrimitive.Header className="flex flex-col">
+          <Trigger icon={<BulbIcon />} title="Principle" aside={<Aside>{intro?.summary ? 'Overview' : coming}</Aside>} />
+        </AccordionPrimitive.Header>
+        <Content>
+          {intro?.summary || failed ? (
+            <p className="pr-1 pb-[18px] pl-9 text-[15px] leading-[22px] text-text">{intro?.summary || waiting}</p>
+          ) : (
+            <div className="flex flex-col gap-3 pt-1 pr-1 pb-[18px] pl-9">{lines(['w-full', 'w-[92%]', 'w-[70%]'])}</div>
+          )}
+        </Content>
+      </AccordionPrimitive.Item>
+      <WaitingRow icon={<WarningIcon />} title="Precautions" aside={coming} />
     </AccordionPrimitive.Root>
   );
+}
+
+/** A section the protocol will have once it is read: its row, greyed and closed, its count still to come. */
+function WaitingRow({ icon, title, aside }: { icon: ReactNode; title: string; aside: ReactNode }) {
+  return (
+    <AccordionPrimitive.Item value={title} disabled>
+      <AccordionPrimitive.Header className="flex flex-col">
+        <Trigger icon={icon} title={title} aside={<Aside>{aside}</Aside>} className="opacity-50" />
+      </AccordionPrimitive.Header>
+    </AccordionPrimitive.Item>
+  );
+}
+
+/** A step's card still being written: the shape of one, shimmering. */
+function StepSkeleton() {
+  return (
+    <div aria-hidden="true" className={cn(CARD, 'grow gap-3 p-4')}>
+      <Shimmer className="aspect-square w-[44%] rounded-[14px]" />
+      <Shimmer className="h-4 w-[70%] rounded-full" />
+      <Shimmer className="h-3.5 w-full rounded-full" />
+      <Shimmer className="h-3.5 w-[60%] rounded-full" />
+    </div>
+  );
+}
+
+/** Four stable sections while a confirmed manual is read; a failed deep read keeps its usable introduction. */
+export function ProgressiveOverview({ preview, open, onOpen }: { preview: ProtocolPreview; open: Section | ''; onOpen: (value: Section | '') => void }) {
+  const intro = preview.intro;
+  return <>
+    {intro ? <Answer protocol={intro} /> : <h1 className="mb-6 px-1 text-[21px] leading-7 font-semibold text-ink">{preview.title || 'Your manual'}</h1>}
+    {intro ? <Glance protocol={intro} /> : (
+      <section aria-label="At a glance" className="mb-7 flex flex-col gap-2.5 px-1">
+        <h2 className="text-[13px] leading-[18px] font-semibold text-text">At a glance</h2>
+        <p className="text-[16px] leading-[22px] text-muted">{preview.state === 'error' ? 'The overview is not available yet.' : 'Reading the overview…'}</p>
+      </section>
+    )}
+    <QuickSections intro={intro} open={open} onOpen={onOpen} failed={preview.state === 'error'} />
+  </>;
 }
 
 type CardStep = { id?: string; title?: string; text: string; stage?: string; facts?: string[]; original?: string; expected?: string[] };
@@ -361,7 +468,8 @@ const CARD =
  * other. Each card says the step, its numbers in a line ("37 °C · 30 min · Covered") and what to do in Chapp's words; a
  * tap turns the card in view to the manual's own words. Cards beside it are faded. All cards are as tall as the tallest.
  */
-function StepCards({ steps, protocol, procedureId }: { steps: CardStep[]; protocol?: Protocol; procedureId?: string | null }) {
+/** `pending`: more cards are still being written; two of their shapes follow the cards there are. */
+function StepCards({ steps, protocol, procedureId, pending = false }: { steps: CardStep[]; protocol?: Protocol; procedureId?: string | null; pending?: boolean }) {
   const cards = cardsOf(steps);
   // The user's own photos of this kit's bottles (never the drawn samples): they stand on the bench in the pictures.
   const photos = useKits(s => (protocol ? s.kits[protocol.id] : undefined));
@@ -450,6 +558,12 @@ function StepCards({ steps, protocol, procedureId }: { steps: CardStep[]; protoc
             />
           </li>
         ))}
+        {pending &&
+          [0, 1].map(i => (
+            <li key={`pending-${i}`} className="flex w-[72%] shrink-0 scroll-ml-1.5 snap-start">
+              <StepSkeleton />
+            </li>
+          ))}
       </ol>
       <BenchSheet scenes={enlarged} at={open} onAt={setOpen} onClose={() => setOpen(null)} photos={photos} />
     </div>
@@ -542,16 +656,16 @@ function StepCard({ card, total, inView, onBring, onEnlarge, protocol, procedure
 const keepUnits = (text: string) =>
   text.replace(/(\d) (?=(?:[pnµum]?(?:L|g|M)\b|[pnµum]?g\/m?L|°C|nm|min|h\b|s\b|%|parts?\b|wells?\b|tubes?\b))/g, '$1\u00a0');
 
-const EnlargeIcon = () => (
+export const EnlargeIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
   </svg>
 );
 
-/** Where a step's picture will go. */
-function PictureIcon() {
+/** Where a picture will go: a step's, or a bottle's. */
+function PictureIcon({ size = 28 }: { size?: number }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="18" height="16" rx="3" />
       <circle cx="9" cy="10" r="1.6" />
       <path d="m21 16-5-5-9 9" />
@@ -587,12 +701,17 @@ function Content({ children }: { children: ReactNode }) {
   );
 }
 
-/** A bottle's photo, or the dark square the design shows before there is one. */
-function Thumb({ src, className }: { src?: string; className?: string }) {
+/**
+ * A bottle's photo, or the place for one: the dashed slot Kit.dc.html draws for a photo still to be taken, with the
+ * picture mark when there is room for it, so the list reads as pictures to come beside the ones already taken.
+ */
+function Thumb({ src, className, mark = true }: { src?: string; className?: string; mark?: boolean }) {
   return src ? (
     <img src={src} alt="" draggable={false} className={cn('block bg-[#1b1b1d] object-cover', className)} />
   ) : (
-    <span className={cn('block bg-[#1b1b1d]', className)} />
+    <span aria-hidden="true" className={cn('box-border flex items-center justify-center border-[1.5px] border-dashed border-[#c9c9c4] bg-white text-text', className)}>
+      {mark && <PictureIcon size={20} />}
+    </span>
   );
 }
 

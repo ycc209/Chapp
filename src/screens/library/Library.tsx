@@ -1,15 +1,21 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
+import { api } from '../../api/client.ts';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/Dialog.tsx';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
-import { librarySections, saveProtocol, unsaveProtocol, useKits, useMine, useRoom, type LibraryRow } from '../../state/library.ts';
+import { forgetProtocol, librarySections, saveProtocol, unsaveProtocol, useKits, useMine, useRoom, type LibraryRow } from '../../state/library.ts';
 import { useProtocol, useProtocolList } from '../../state/protocol.ts';
-import { runStarted, useRun } from '../../state/run.ts';
+import { useProtocolPreviews } from '../../state/protocolPreview.ts';
+import { useRun } from '../../state/run.ts';
+import { noteEvent } from '../../state/runEvents.ts';
 import { useSharedLibrary } from './store.ts';
+import { KitCover, useHasCover } from '../kit/KitCover.tsx';
 
 /**
  * /library: My-Library ("Library", this phone's protocols: Saved, Recent, and the other kits Chapp has read on this
- * computer; opening one makes it the run, asking first when another run is under way) and, with ?view=shared, Library
+ * computer; opening one shows its Overview as a preview, the run under way untouched, and Start or Plan there makes
+ * it the conversation's experiment, the run before it kept in its own) and, with ?view=shared, Library
  * ("Shared library", Soon in the sidebar: your setups to upload, and an empty shelf for others'). Both come from the
  * sidebar and go back to it. What is mine and each kit's photos: state/library.ts.
  */
@@ -31,22 +37,29 @@ const THUMBS = 4;
 function MyLibrary() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const { list, error } = useProtocolList();
+  const { list, error, remove } = useProtocolList();
   const mine = useMine(s => s.protocols);
   const full = useRoom(s => s.full);
   const runId = useRun(s => s.protocolId);
-  const started = useRun(runStarted);
-  // The protocol the user tapped while another run is under way: its card asks before the run is replaced.
-  const [asking, setAsking] = useState<string | null>(null);
+  // The protocol whose Delete the user slid out and tapped: a card in the middle asks before anything goes.
+  const [deleting, setDeleting] = useState<string | null>(null);
+  // The one card slid left to show Delete; sliding another, or tapping it, closes it.
+  const [revealed, setRevealed] = useState<string | null>(null);
   const { saved, recent, others } = librarySections(list ?? [], mine, query);
   const rows = [...saved, ...recent, ...others];
-  const runTitle = rows.find(r => r.id === runId)?.title ?? 'current';
+  const target = rows.find(r => r.id === deleting) ?? null;
 
-  const go = (id: string) => {
-    if (id !== useRun.getState().protocolId) useRun.getState().setProtocol(id);
-    navigate('/protocol');
+  // The run's own protocol opens as the run; any other as a preview (ChatGPT's library opens a viewer too), told to
+  // the conversation on screen, until Start or Plan there adopts it.
+  const open = (id: string) => {
+    const run = useRun.getState();
+    if (id === run.protocolId && !run.aside) return navigate('/protocol');
+    const title = rows.find(r => r.id === id)?.title ?? id;
+    const previewId = `library-${id}`;
+    useProtocolPreviews.getState().receive({ id: previewId, state: 'ready', protocolId: id, title });
+    noteEvent(`Looking at ${title}, from the library`, 'screen');
+    navigate(`/protocol?preview=${encodeURIComponent(previewId)}`, { state: { from: '/library' } });
   };
-  const open = (id: string) => (id !== runId && runId && started ? setAsking(id) : go(id));
   const toggle = (row: LibraryRow) => {
     if (row.savedAt === null) {
       if (!saveProtocol(row.id, { title: row.title })) toast('This phone has no room left to save it.');
@@ -55,6 +68,27 @@ function MyLibrary() {
     const was = unsaveProtocol(row.id);
     toast(`Removed ${row.title} from Saved`, { action: { label: 'Undo', onClick: () => saveProtocol(row.id, { title: row.title, at: was ?? Date.now() }) } });
   };
+  /**
+   * Deletes a protocol Chapp read from a manual: the server drops its document, manual and pictures, then the phone
+   * forgets it (Saved, Recent, kit photos) and a run of it is cleared. One that is no longer on the computer is only
+   * forgotten here. No undo: the card says so before.
+   */
+  const erase = async (row: LibraryRow) => {
+    setDeleting(null);
+    setRevealed(null);
+    if (row.summary) {
+      try {
+        await api.deleteProtocol(row.id);
+      } catch (error) {
+        toast(error instanceof Error ? error.message : 'It could not be deleted.');
+        return;
+      }
+    }
+    if (useRun.getState().protocolId === row.id) useRun.getState().reset();
+    forgetProtocol(row.id);
+    remove(row.id);
+    toast(`Deleted ${row.title}`);
+  };
   const card = (row: LibraryRow) => (
     <Card
       key={row.id}
@@ -62,7 +96,10 @@ function MyLibrary() {
       current={row.id === runId}
       onOpen={() => open(row.id)}
       onToggle={() => toggle(row)}
-      asking={asking === row.id ? { run: runTitle, onOpen: () => go(row.id), onKeep: () => setAsking(null) } : null}
+      deletable={row.summary === null || Boolean(row.summary.imported)}
+      revealed={revealed === row.id}
+      onReveal={open => setRevealed(r => (open ? row.id : r === row.id ? null : r))}
+      onDelete={() => setDeleting(row.id)}
     />
   );
 
@@ -104,32 +141,148 @@ function MyLibrary() {
           {query && rows.length === 0 && <p className={NOTE}>Nothing matches “{query.trim()}”.</p>}
         </>
       )}
+      {/* Delete, slid out and tapped: the one question, over the list. */}
+      <Dialog open={target !== null} onOpenChange={open => { if (!open) setDeleting(null); }}>
+        {target && (
+          <DialogContent
+            footer={
+              <div className="flex gap-2">
+                <DialogClose asChild>
+                  <button type="button" className="min-h-11 grow rounded-full bg-sunken text-[15px] leading-5 font-[650] text-ink outline-none active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-blue">
+                    Keep it
+                  </button>
+                </DialogClose>
+                <button type="button" onClick={() => void erase(target)} className="min-h-11 grow rounded-full bg-[#e5484d] text-[15px] leading-5 font-[650] text-white outline-none active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-offset-2">
+                  {target.summary ? 'Delete it' : 'Forget it'}
+                </button>
+              </div>
+            }
+          >
+            <DialogTitle>{target.summary ? `Delete ${target.title}?` : `Forget ${target.title}?`}</DialogTitle>
+            <DialogDescription>
+              {target.summary
+                ? `It goes from this computer with its manual, its pictures and your kit photos; there is no undo.${target.id === runId ? ' It is this run, which is cleared.' : ''}`
+                : 'It is not on this computer any more; its place here and your kit photos go.'}
+            </DialogDescription>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }
 
-type Asking = { run: string; onOpen: () => void; onKeep: () => void };
+/** How far a card slides left to show Delete (px), and how far past that a sweep counts as pressing it. */
+const SLIDE = 76;
+const SWEEP = SLIDE * 2.2;
+/** Springs: the card settles a touch past its mark and back; the button pops out a little larger, then to size. */
+const SPRING = 'duration-[420ms] ease-[cubic-bezier(0.22,1.25,0.36,1)]';
+const POP = 'duration-[420ms] ease-[cubic-bezier(0.34,1.56,0.64,1)]';
+/** Past the mark the card gives like a rubber band, a third of the way; pushed back past closed, a quarter. */
+const give = (x: number) => (x < -SLIDE ? -SLIDE + (x + SLIDE) / 3 : x > 0 ? x / 4 : x);
+const stop = (e: ReactMouseEvent) => {
+  e.preventDefault();
+  e.stopPropagation();
+};
 
 /**
- * One protocol as Library's card: the user's kit photos when they took any, "This run" on the run's own, and the
- * bookmark that saves it or takes it out of Saved. A protocol no longer on this computer can only be taken out.
+ * One protocol as Library's card: the kit's cover in place of the book when the user photographed its box or bag, the
+ * kit photos when they took any, "This run" on the run's own, and the bookmark that saves it or takes it out of Saved.
+ * One Chapp read from a manual (or one no longer on this computer) slides left to show Delete, which asks before
+ * anything goes; a built-in protocol does not slide: it stays.
  */
-function Card({ row, current, onOpen, onToggle, asking }: { row: LibraryRow; current: boolean; onOpen: () => void; onToggle: () => void; asking: Asking | null }) {
+function Card({ row, current, onOpen, onToggle, deletable, revealed, onReveal, onDelete }: { row: LibraryRow; current: boolean; onOpen: () => void; onToggle: () => void; deletable: boolean; revealed: boolean; onReveal: (open: boolean) => void; onDelete: () => void }) {
   const photos = useKits(s => s.kits[row.id]);
   const shots = Object.values(photos ?? {});
+  const hasCover = useHasCover(row.id);
   const saved = row.savedAt !== null;
   const gone = row.summary === null;
+  // The front slides with the finger once it goes more sideways than up or down (the list still scrolls otherwise)
+  // and settles open or closed when let go; a tap on it while open closes it, and the tap that ends a slide is no tap.
+  const [dx, setDx] = useState(0);
+  const [sliding, setSliding] = useState(false);
+  const drag = useRef<{ id: number; x: number; y: number; from: number; axis: 'x' | 'y' | null } | null>(null);
+  const slidAt = useRef(0);
+  useEffect(() => {
+    if (!sliding) setDx(revealed ? -SLIDE : 0);
+  }, [revealed, sliding]);
+  const down = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!deletable || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: revealed ? -SLIDE : 0, axis: null };
+  };
+  const move = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    const mx = e.clientX - d.x, my = e.clientY - d.y;
+    if (!d.axis) {
+      if (Math.abs(mx) < 6 && Math.abs(my) < 6) return;
+      d.axis = Math.abs(mx) > Math.abs(my) ? 'x' : 'y';
+      if (d.axis === 'x') {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setSliding(true);
+      }
+    }
+    if (d.axis === 'x') setDx(Math.max(-SWEEP - 24, give(d.from + mx)));
+  };
+  const up = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    drag.current = null;
+    if (d.axis !== 'x') return;
+    slidAt.current = Date.now();
+    setSliding(false);
+    const x = give(d.from + (e.clientX - d.x));
+    // A long sweep is the button itself: the card springs back while the question comes up.
+    if (x < -SWEEP) {
+      onReveal(false);
+      onDelete();
+      return;
+    }
+    onReveal(x < -SLIDE / 2);
+  };
+  // How far out the button is, 0 to 1: it grows and brightens with the slide.
+  const out = Math.min(1, Math.max(0, -dx / SLIDE));
+  const tap = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (Date.now() - slidAt.current < 400) return stop(e);
+    if (revealed) {
+      onReveal(false);
+      stop(e);
+    }
+  };
   return (
-    <div className={cn(SHADOW, 'flex flex-col')}>
+    <div className={cn(SHADOW, 'relative flex flex-col overflow-hidden bg-sunken')}>
+      {deletable && (
+        <button
+          type="button"
+          onClick={onDelete}
+          tabIndex={revealed ? 0 : -1}
+          aria-hidden={!revealed}
+          aria-label={gone ? `Forget ${row.title}` : `Delete ${row.title}`}
+          className={cn(
+            'absolute top-1/2 right-4 flex size-11 items-center justify-center rounded-[12px] bg-[#e5484d] text-white outline-none active:scale-90 focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-offset-2',
+            !sliding && cn('transition-[transform,opacity]', POP),
+          )}
+          style={{ transform: `translateY(-50%) scale(${0.4 + 0.6 * out})`, opacity: out }}
+        >
+          <TrashIcon />
+        </button>
+      )}
+      <div
+        className={cn('relative flex flex-col rounded-[20px] bg-white', !sliding && cn('transition-transform', SPRING))}
+        style={{ transform: `translateX(${dx}px)`, touchAction: deletable ? 'pan-y' : undefined }}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+        onClickCapture={tap}
+      >
       <div className="grid grid-cols-[minmax(0,1fr)_44px] items-center gap-1 py-1.5 pr-1.5 pl-3">
         <button
           type="button"
           onClick={onOpen}
           disabled={gone}
-          aria-expanded={asking ? true : undefined}
           className="grid min-w-0 grid-cols-[44px_minmax(0,1fr)] items-center gap-3 rounded-2xl py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-blue"
         >
-          <BookIcon />
+          {hasCover ? <KitCover protocolId={row.id} className="size-11 rounded-xl" /> : <BookIcon />}
           <span className="flex min-w-0 flex-col gap-[3px]">
             <span className="text-base leading-5 font-[650] text-ink">{row.title}</span>
             <span className="flex items-center gap-1.5 text-[13px] leading-[18px] text-text">
@@ -158,21 +311,7 @@ function Card({ row, current, onOpen, onToggle, asking }: { row: LibraryRow; cur
           </svg>
         </button>
       </div>
-      {asking && (
-        <div role="group" aria-label="Replace the run" className="mx-3 mb-3 flex flex-col gap-2.5 border-t border-line pt-3">
-          <p className="m-0 text-[15px] leading-5 text-ink">
-            Your <b className="font-semibold">{asking.run}</b> run is under way. Open {row.title} instead? That run’s ticks, timers and readings are cleared.
-          </p>
-          <div className="flex gap-2">
-            <button type="button" onClick={asking.onOpen} className="min-h-10 rounded-full bg-ink px-3.5 text-sm leading-[18px] font-[650] text-white outline-none focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-offset-2">
-              Open it
-            </button>
-            <button type="button" onClick={asking.onKeep} className="min-h-10 rounded-full bg-sunken px-3.5 text-sm leading-[18px] font-[650] text-ink outline-none focus-visible:ring-2 focus-visible:ring-blue">
-              Keep my run
-            </button>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -274,6 +413,14 @@ function Search({ label, placeholder, value, onChange }: { label: string; placeh
         className="min-w-0 grow border-0 bg-transparent text-base leading-5 text-ink outline-none [&::-webkit-search-cancel-button]:hidden"
       />
     </label>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+    </svg>
   );
 }
 

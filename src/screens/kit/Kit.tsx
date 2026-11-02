@@ -4,10 +4,11 @@ import type { Protocol } from '../../../shared/protocol.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { bottles } from '../protocol/content.ts';
-import { findBottles, whichKit } from './analysis.ts';
+import { findBottles, followBottles, whichKit } from './analysis.ts';
 import { Camera } from './Camera.tsx';
 import { gotIt, needsOf, recognized, type Pick, type Thing } from './matching.ts';
 import { Match } from './Match.tsx';
+import { Watch } from './Watch.tsx';
 import type { Shot } from './photo.ts';
 import { samplePhotos } from './sample.ts';
 import { useKit } from './store.ts';
@@ -18,9 +19,10 @@ type Review = 'camera' | 'recognized' | 'kit' | 'filled';
 const NO_SHOTS: Shot[] = [];
 
 /**
- * Your kit: photograph the bottles (Camera; each photo goes to SAM 3.1 as it is taken), then match them to the
- * protocol's bottles (Recognized → Kit → Kit-Filled: labels Muse Spark read, guesses the user confirms, the rest shown
- * by hand). The matched crops become the run's photos (useRun().photos), shown on the protocol and at the bench.
+ * Your kit: photograph the bottles (Camera; each photo goes to SAM 3.1 as it is taken, a sweep or a video for SAM to
+ * follow the bottles through), then match them to the protocol's bottles (Recognized → Kit → Kit-Filled: labels Muse
+ * Spark read, guesses the user confirms, the rest shown by hand). The matched crops become the run's photos
+ * (useRun().photos), shown on the protocol and at the bench.
  *
  * For design review a state opens from the address with drawn sample photos, never saved to the run, as the models
  * would leave them: ?state=recognized (reagents read, a guess and a bottle nobody could tell), kit (one more to check),
@@ -32,14 +34,16 @@ export function KitScreen() {
   const protocolId = useRun(s => s.protocolId) ?? 'pierce-bca';
   const { protocol, error } = useProtocol(protocolId);
   const shots = useKit(s => (s.sample ? NO_SHOTS : s.shots));
-  const [view, setView] = useState<'camera' | 'match'>(() =>
-    review === 'camera' ? 'camera' : review || (!useKit.getState().sample && useKit.getState().shots.length) ? 'match' : 'camera',
+  // Opened from Home's +: the first photo may be the kit box, and Chapp says which kit it is. Opened to retake one
+  // bottle (the protocol's "Take a photo"): the camera, whatever the round has.
+  const location = useLocation();
+  const opened = location.state as { from?: string; camera?: boolean } | null;
+  const [view, setView] = useState<'camera' | 'match' | { watch: File; identify: boolean }>(() =>
+    review === 'camera' || opened?.camera ? 'camera' : review || (!useKit.getState().sample && useKit.getState().shots.length) ? 'match' : 'camera',
   );
   const [ready, setReady] = useState(false);
-  // Opened from Home's +: the first photo may be the kit box, and Chapp says which kit it is.
-  const location = useLocation();
   const navigate = useNavigate();
-  const identify = useRef((location.state as { from?: string } | null)?.from === 'home' && !review);
+  const identify = useRef(opened?.from === 'home' && !review);
 
   // A review fills the session with samples; a real visit drops a review's samples first.
   useEffect(() => {
@@ -55,18 +59,47 @@ export function KitScreen() {
     if (!review) findBottles();
   }, [shots.length]);
 
+  if (typeof view === 'object') {
+    // A video from the library plays; opened from Home's +, its first frame says which kit it is.
+    // Told which kit it is, the protocol opens with the bottles read behind it (as from Home); else the match screen.
+    return (
+      <Watch
+        key={view.watch.name + view.watch.size}
+        video={view.watch}
+        identify={view.identify}
+        background={view.identify}
+        onEnd={told => (told === 'none' ? setView('match') : navigate('/protocol', { replace: true }))}
+      />
+    );
+  }
   if (view === 'camera') {
+    // Opened from Home's +, the first photo (or the first frame of a sweep or a video) says which kit it is.
+    const identifyBy = (shot: Shot | undefined) => {
+      if (!identify.current || !shot) return;
+      identify.current = false;
+      void whichKit(shot).then(to => to && navigate(to));
+    };
+    const fresh = () => {
+      const kit = useKit.getState();
+      if (kit.sample) kit.clear();
+    };
     return (
       <Camera
         shots={shots}
         onShots={s => {
-          const kit = useKit.getState();
-          if (kit.sample) kit.clear();
-          kit.addShots(s);
-          if (identify.current && s[0]) {
-            identify.current = false;
-            void whichKit(s[0]).then(to => to && navigate(to));
-          }
+          fresh();
+          useKit.getState().addShots(s);
+          identifyBy(s[0]);
+        }}
+        onFootage={footage => {
+          fresh();
+          identifyBy(footage.frames[0]);
+          void followBottles(footage);
+        }}
+        onVideo={video => {
+          fresh();
+          setView({ watch: video, identify: identify.current });
+          identify.current = false;
         }}
         onDone={() => setView('match')}
       />

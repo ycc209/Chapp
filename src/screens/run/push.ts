@@ -122,6 +122,9 @@ const remember = (id: string, endsAt: number | null) => {
   }
 };
 
+/** Every timer handed to the server, by key → its end (state/alarms.ts calls off the ones stopped). */
+export const sentTimers = sent;
+
 /** Is the server going to push this timer's end? Then the page need not show its own notification too. */
 export const pushWaiting = (id: string, endsAt: number) => sent()[id] === endsAt;
 

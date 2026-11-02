@@ -1,4 +1,4 @@
-import type { ApiError, FindProtocolEvent, FoundProtocol, ProtocolIntro } from '../../shared/ai.ts';
+import type { ApiError, FindProtocolEvent, FoundProtocol, ProtocolIntro, Sighting, TrackedBottles, TrackEvent, TrackLive } from '../../shared/ai.ts';
 import { readEvents } from '../../shared/sse.ts';
 
 /**
@@ -32,4 +32,100 @@ export async function findProtocolLive(
     else if (e.event === 'error') throw new Error(e.data.error);
   }
   throw new Error('The search ended without an answer');
+}
+
+/** Following a video, heard on the phone: everything TrackLive says, and how much of the video has gone up (0–1). */
+export type TrackHeard = Omit<TrackLive, 'signal'> & { onUpload?: (sent: number) => void };
+
+/**
+ * POST /api/kit/track as server-sent events: the video sent as it is (MP4 or MOV); `live` hears how much of it has gone
+ * up, when each of its frames starts, how far it is on its way to SAM, then each frame as SAM is done with
+ * it; the promise ends with the bottles followed, their sightings gathered from the frames. Throws like the other calls
+ * on an error, or when the stream ends without an answer. Sent with XMLHttpRequest: fetch cannot tell how much of a
+ * body has gone up, and a phone's video is megabytes.
+ */
+export function trackBottlesLive(video: Blob, type: 'video/mp4' | 'video/quicktime', signal?: AbortSignal, live?: TrackHeard): Promise<TrackedBottles> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/kit/track');
+    xhr.setRequestHeader('content-type', type);
+    xhr.setRequestHeader('accept', 'text/event-stream');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable && e.total > 0) live?.onUpload?.(e.loaded / e.total);
+    };
+    // What has come so far, as a stream readEvents reads as it comes (the same reader as a fetch's body).
+    const encoder = new TextEncoder();
+    let given = 0;
+    let body: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start: c => void (body = c) });
+    // Once the answer is read (readEvents lets go of the stream), what comes after it is not wanted.
+    const more = () => {
+      const text = xhr.responseText;
+      try {
+        if (text.length > given) body.enqueue(encoder.encode(text.slice(given)));
+      } catch {
+        // Let go of already.
+      }
+      given = text.length;
+    };
+    const fail = (error: Error) => {
+      try {
+        body.error(error);
+      } catch {
+        // Closed already.
+      }
+      reject(error);
+    };
+    let streaming = false;
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== XMLHttpRequest.HEADERS_RECEIVED) return;
+      streaming = xhr.status >= 200 && xhr.status < 300 && (xhr.getResponseHeader('content-type') ?? '').includes('text/event-stream');
+      if (streaming) void readTrack(stream, live).then(resolve, reject);
+    };
+    xhr.onprogress = () => streaming && more();
+    xhr.onload = () => {
+      if (streaming) {
+        more();
+        try {
+          body.close();
+        } catch {
+          // Let go of already.
+        }
+        return;
+      }
+      let answer: unknown = null;
+      try {
+        answer = JSON.parse(xhr.responseText);
+      } catch {
+        // Not JSON: said below.
+      }
+      // A server without streaming answers in one piece.
+      if (xhr.status >= 200 && xhr.status < 300 && answer) return resolve(answer as TrackedBottles);
+      reject(new Error((answer as ApiError | null)?.error || `${xhr.status} ${xhr.statusText}`.trim()));
+    };
+    xhr.onerror = () => fail(new Error('Could not reach the server to follow the video'));
+    xhr.ontimeout = () => fail(new Error('Following the video took too long'));
+    signal?.addEventListener('abort', () => {
+      xhr.abort();
+      fail(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+    });
+    xhr.send(video);
+  });
+}
+
+/** A video followed, as its events come (TrackEvent): each to `live`, the sightings gathered from the frames. */
+async function readTrack(body: ReadableStream<Uint8Array>, live?: TrackHeard): Promise<TrackedBottles> {
+  const seen: Sighting[] = [];
+  for await (const { event, data } of readEvents(body)) {
+    const e = { event, data: JSON.parse(data) } as TrackEvent;
+    if (e.event === 'video') live?.onVideo?.(e.data);
+    else if (e.event === 'stage') live?.onStage?.(e.data.stage);
+    else if (e.event === 'frame') {
+      for (const b of e.data.bottles) seen.push({ frame: e.data.frame, ...b });
+      live?.onFrame?.(e.data);
+    } else if (e.event === 'followed') return { ...e.data, seen };
+    else if (e.event === 'error') throw new Error(e.data.error);
+  }
+  throw new Error('SAM stopped before it was done with the video');
 }

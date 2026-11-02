@@ -56,6 +56,8 @@ export type ImportOptions = {
   log?: (line: string) => void;
   /** Milliseconds per model call. */
   timeoutMs?: number;
+  /** Cancel this whole manual read, including uploads and parallel extraction calls. */
+  signal?: AbortSignal;
   /** How hard Muse Spark thinks, per call (EFFORTS when not given). */
   efforts?: Partial<Record<CallName, string>>;
   /**
@@ -166,7 +168,7 @@ export const INVENTORY = {
   },
   equipment: { rows: { id: 'string', name: 'string', icon: ICONS, setting: 'string' } },
   mixes: { rows: { id: 'string', name: 'string', short: 'string', cite: 'string' } },
-  mixParts: { rows: { mix: 'string', component: 'string', parts: 'number' } },
+  mixParts: { rows: { mix: 'string', component: 'string', parts: 'number', amount: 'string' } },
   curves: { rows: { id: 'string', name: 'string', stock: 'string', diluent: 'string', range: 'string', cite: 'string' } },
   procedures: {
     rows: { id: 'string', name: 'string', format: ['microplate', 'tube', 'cells'], ratio: 'string', sample: 'string', mixPerSample: 'string', mix: 'string', curve: 'string', range: 'string' },
@@ -420,10 +422,10 @@ export const INTRO_TASK = `Say quickly what this kit is, for the first screen th
 
 export const INVENTORY_TASK = `Fill the inventory: everything the protocol's steps will point at.
 - The document: its title, publisher (the company), document id ("MAN0011430"; the catalog number when it has none), revision or version, date as YYYY-MM-DD ("" when none is printed), and its number of pages.
-- The kit: its name and vendor as printed, kitCite: where its contents are listed. variants: each catalog number with its scale ("500 tubes or 5,000 microplate assays"; "" if none). contents: one row per bottle per variant: catalog, component id, amount as printed ("2 x 500 mL", "10 mL", "1 vial").
+- The kit: its name and vendor as printed, kitCite: where its contents are listed. variants: each catalog number with its scale ("500 tubes or 5,000 microplate assays"; "" if none). contents: one row per bottle per variant: catalog, component id, amount as printed ("2 x 500 mL", "10 mL", "1 vial"). When the variants are colours, sizes or formats of one reagent (CellMask Orange, Green and Deep Red stains), that reagent is ONE component, named without the colour ("CellMask Plasma Membrane Stain (1000X)"), that every variant's contents point to: the user has one of them, and a mix made from it lists that one component once.
 - components: every bottle in the kit (suppliedBy "kit"), and each liquid the user supplies that a step or mix uses (suppliedBy "user"): the diluent for the standards, the medium or buffer a mix is made in. role "standard" for the standard's stock, "diluent" for what standards or mixes are diluted in, otherwise "reagent". concentration as printed ("2 mg/mL"), always for the standard's stock, "" when none is printed. storage: the °C as printed ("15-30", "-20", "2-8"; "" if none). labels: the names the bottle goes by in the manual.
 - equipment: the instruments and consumables the steps use, each with the nearest icon ("other" if none fits) and the setting the manual gives for it ("37 °C", "562 nm", "30 s"; "" if none).
-- mixes: what the user makes from parts ("Working Reagent", "differentiation medium"), with short: the manual's abbreviation ("WR") or a short one, and a cite. mixParts: each part's component and its share as printed (50 parts A to 1 part B: 50 and 1; 1 µL in 1 mL: 1 µL is 1 part, 1 mL is 1000).
+- mixes: what the user makes from parts ("Working Reagent", "differentiation medium"), with short: the manual's abbreviation ("WR") or a short one, and a cite. mixParts: each part's component, its share as a number (50 parts A to 1 part B: 50 and 1; 1 µL in 1 mL: 1 µL is 1 part, 1 mL is 1000), and amount: the quantity as the manual prints it ("44 µL", "1 µL", "1 mL", "50 parts"), "" when it gives only a ratio.
 - curves: each standard dilution table (stock and diluent component ids, its working range "20-2000 ug/mL", cite); none if the kit has no standard curve.
 - procedures: each way to run the kit (a microplate and a test-tube version are two). Variants that change only the incubation (its time or temperature, and with it the working range or the standard table) are one procedure: they become alternatives of its incubation step. A smaller-sample option is a tip on its loading step, not a procedure. Phases done one after another (getting the cells ready, induction, maintenance) are steps of one procedure, not procedures of their own. format "microplate", "tube" or "cells" (cell culture). For an assay read against a standard curve, its ratio as printed ("1:8"), the sample and the mix per well or tube ("25 uL", "200 uL"), the mix id, the curve id and the working range ("20-2000 ug/mL"); for cells leave those "".`;
 
@@ -437,7 +439,7 @@ export const STEPS_TASK = `List every step of every procedure, in order, as rows
 - notes: short lines shown next to a step. kind "expected", "tip", "caution" or "info" (${KINDS}); text: one sentence in Chapp's own words; cite keeps the manual's words.`;
 
 export const CURVES_TASK = `For each standard curve below, list every standard in order, however the manual makes them: the curve id, the vial's letter or number alone ("A", "B", "1" as printed; number them 1, 2, 3… when the manual does not), the diluent volume ("125 uL"), where its standard comes from ("stock", the id of an earlier vial, or "" for the blank), the volume taken ("375 uL"), the final concentration ("1500 ug/mL", "500 pg/mL", "2 nmol/well"), and blank true for the one with no standard.
-- A dilution table: one row per vial, as printed.
+- A dilution table: one row per vial, as printed. The blank is a row of its own too: the vial with no standard, often printed with "0" or "Blank" as its concentration, has from "" and blank true. Never leave a vial of the table out.
 - Standards made in the wells ("add 0, 2, 4, 6, 8, 10 uL of the standard and adjust to 50 uL with buffer"): one row per well amount; take is the uL of standard, diluent the uL added, concentration the amount per well as the manual states it ("2 nmol/well").
 - A working dilution the manual makes first ("dilute 10 uL of the 10 mM stock with 90 uL water to 1 mM"): a row of its own, in the unit the manual gives it, that the standards then come from.
 Every volume and concentration exactly as the manual prints it, with its unit; never convert.`;
@@ -644,7 +646,7 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
   const mixes = unique(
     inv.mixes.flatMap(m => {
       const id = ref(m.id);
-      const parts = inv.mixParts.filter(p => ref(p.mix) === id && p.parts > 0).map(p => ({ component: ref(p.component), parts: p.parts }));
+      const parts = inv.mixParts.filter(p => ref(p.mix) === id && p.parts > 0).map(p => ({ component: ref(p.component), parts: p.parts, ...(p.amount?.trim() ? { amount: p.amount.trim().slice(0, 40) } : {}) }));
       if (parts.length < 2) {
         dropped.push(`mix ${id}: fewer than two parts`);
         return [];
@@ -671,6 +673,16 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
         Object.assign(stockPart, { concentration: stockStrength });
         dropped.push(`component ${stockPart.id}: strength from the dilution table, as printed`);
       }
+      // With no strength anywhere else, a vial taken from the stock with no diluent holds the stock itself (BCA's vial
+      // A: 300 uL of stock, no diluent, 2,000 ug/mL).
+      if (stockPart && !stockPart.concentration) {
+        const neat = rows.find(p => /^(?:.*[-_\s])?stock$/i.test(p.from.trim()) && /^\s*(?:0(?:\.0+)?)?\s*$/.test(p.diluent) && (parseVolume(p.take)?.value ?? 0) > 0);
+        const strength = neat ? parseConcentration(neat.concentration) : null;
+        if (strength && strength.value > 0) {
+          Object.assign(stockPart, { concentration: strength });
+          dropped.push(`component ${stockPart.id}: strength from the undiluted vial of the dilution table`);
+        }
+      }
       // Standards made in the wells are topped up to what a well holds ("adjust to 50 uL"): a row that says no
       // diluent gets the rest of that volume; one that says no concentration gets what its take of the working
       // dilution holds (2 uL of 1 mM is 2 nmol). What a well holds is the blank's volume, or else what the procedure
@@ -687,14 +699,17 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
           // A zero needs no unit ("0" in a table): it takes its row's other volume's unit, or the range's. In the
           // blank, nothing is taken and there is no standard, so an empty take or concentration is that zero.
           const isBlank = p.blank || p.from.trim() === '';
-          const zero = (text: string) => /^\s*0(?:\.0+)?\s*$/.test(text) || (isBlank && text.trim() === '');
+          // The blank's concentration often comes as the table prints it, "0 = Blank" or "Blank": that zero too.
+          const zero = (text: string) => /^\s*0(?:\.0+)?\s*$/.test(text) || (isBlank && (text.trim() === '' || /^\s*0(?:\.0+)?(?![\d.])\s*(?:[=:(–-]\s*)?blank\)?\s*$/i.test(text) || /^\s*blank\s*$/i.test(text)));
           const printed = parseVolume(p.diluent);
           const t = parseVolume(p.take) ?? (zero(p.take) ? { value: 0, unit: printed?.unit ?? 'µL' } : null);
           // "adjust to 50 uL", "up to 50 uL with buffer": the final volume, so the diluent is what the take leaves. In
           // a well, an empty diluent is that too, the blank's included (nothing taken: the whole well of buffer).
           const d = printed ?? toppedUp(p.diluent, t) ?? (perWell && p.diluent.trim() === '' && t && wellVolume ? toppedUp(`to ${wellVolume.value} ${wellVolume.unit}`, t) : null);
           const volumeUnit = d?.unit ?? t?.unit ?? 'µL';
-          const diluent = d ?? (zero(p.diluent) ? { value: 0, unit: volumeUnit } : null);
+          // A vial taken straight from its source with the diluent left empty (a "0" in the table): no diluent.
+          const neat = !perWell && !isBlank && p.diluent.trim() === '' && t !== null && t.value > 0;
+          const diluent = d ?? (zero(p.diluent) || neat ? { value: 0, unit: volumeUnit } : null);
           const take = t;
           const source = byId.get(vialId(p.from) ?? p.from.trim());
           const working = source && !isBlank ? parseConcentration(source.concentration) : null;
@@ -743,6 +758,12 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
   const procedures = unique(
     procedureRows.flatMap(p => {
       const rows = stepRows.filter(s => s.procedure === p.id);
+      const mixFor = (s: { id: string; title: string; key: string }, own: string): { mix?: string } => {
+        const words = `${s.title} ${s.key}`.toLowerCase();
+        const id = mixes.find(m => [m.name, m.short].some(n => n && words.includes(n.toLowerCase())))?.id ?? (mixIds.has(ref(own)) ? ref(own) : mixes[0]?.id);
+        if (id) dropped.push(`step ${s.id}: makes a mix without naming it; linked to ${id}`);
+        return id ? { mix: id } : {};
+      };
       const built = rows.map(s => {
         const add = st.additions
           .filter(a => ref(a.stepId) === s.id)
@@ -790,9 +811,11 @@ export function assemble(parts: Parts, meta: Meta): { protocol: Protocol; proble
           stage: s.stage as Protocol['procedures'][number]['steps'][number]['stage'],
           title: micro(s.title || s.key || s.id),
           key: micro(s.key || s.title),
-          // What the step makes: a dilution table or a mix (the inventory's ids tell which).
+          // What the step makes: a dilution table or a mix (the inventory's ids tell which). A mixing step that does
+          // not say which mix gets the one its words name, else the procedure's own, else the first: the picture then
+          // shows the recipe rather than two bottles standing in for it.
           ...(curveIds.has(ref(s.makes)) ? { standardCurve: ref(s.makes) } : {}),
-          ...(mixIds.has(ref(s.makes)) ? { mix: ref(s.makes) } : {}),
+          ...(mixIds.has(ref(s.makes)) ? { mix: ref(s.makes) } : s.stage === 'mix' ? mixFor(s, p.mix) : {}),
           ...(add.length ? { add } : {}),
           ...(timer ? { timer } : {}),
           ...(gear.length ? { equipment: gear } : {}),
@@ -1007,6 +1030,9 @@ function recorder(at: Date): ImportOptions['record'] {
  * does not add up.
  */
 export async function importProtocol(pdf: Uint8Array, source: { url?: string; filename?: string } = {}, options: ImportOptions): Promise<ImportedProtocol> {
+  options.signal?.throwIfAborted();
+  const lifecycle = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, lifecycle.signal]) : lifecycle.signal;
   const { apiKey, baseUrl = 'https://api.meta.ai/v1', log = (line: string) => console.log(line), timeoutMs = 180_000 } = options;
   const efforts = { ...EFFORTS, ...options.efforts };
   if (!apiKey) throw new Error('Reading a manual needs MODEL_API_KEY in .env (see .env.example).');
@@ -1017,6 +1043,7 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
   const seconds = (from = started) => ((Date.now() - from) / 1000).toFixed(1);
   const textCalls = new Set(options.asText ?? TEXT_CALLS);
   const text = textCalls.size ? (options.textOf ?? manualText)(pdf) : null;
+  signal.throwIfAborted();
   const filename = source.filename?.replace(/[^\w.-]+/g, '_') || 'manual.pdf';
   const authorization = `Bearer ${apiKey}`;
   const record = options.record ?? recorder(options.now?.() ?? new Date());
@@ -1027,7 +1054,7 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
   // A scanned manual (no text to read) goes to every call as the PDF: uploaded once (Files API, deleted again once
   // read, and expiring in an hour regardless) and named by its id. One call alone takes it inline.
   const pdfCalls = (['intro', 'inventory', 'steps', 'curves', 'notes'] as const).filter(c => !(text && textCalls.has(c)));
-  const fileId = pdfCalls.length > 1 ? await uploadPdf(pdf, filename, { baseUrl, authorization, fetchFn, log }) : null;
+  const fileId = pdfCalls.length > 1 ? await uploadPdf(pdf, filename, { baseUrl, authorization, fetchFn, log, signal }) : null;
   const pdfFile = fileId ? { type: 'input_file', file_id: fileId } : { type: 'input_file', filename, file_data: `data:application/pdf;base64,${Buffer.from(pdf).toString('base64')}` };
   const manual = (call: CallName) => (text && textCalls.has(call) ? { type: 'input_text', text: `The manual, page by page:\n\n${text}` } : pdfFile);
   const inputOf = (call: CallName, task: string) => [{ role: 'system', content: RULES }, { role: 'user', content: [manual(call), { type: 'input_text', text: task }] }];
@@ -1038,7 +1065,8 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
    */
   async function withinCap() {
     if (!meter.cap()) return;
-    const count = (call: CallName, task: string) => countTokens(inputOf(call, task), { baseUrl, authorization, fetchFn });
+    signal.throwIfAborted();
+    const count = (call: CallName, task: string) => countTokens(inputOf(call, task), { baseUrl, authorization, fetchFn, signal });
     const [pdfTokens, textTokens] = await Promise.all([count('intro', INTRO_TASK), text ? count('inventory', INVENTORY_TASK) : Promise.resolve(null)]);
     const textCount = 5 - pdfCalls.length;
     const input = (pdfTokens ?? 0) * pdfCalls.length + (textTokens ?? 0) * textCount;
@@ -1058,6 +1086,7 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
       prompt_cache_retention: '24h',
     });
     for (let attempt = 0; ; attempt++) {
+      signal.throwIfAborted();
       const from = Date.now();
       let text: string;
       try {
@@ -1065,15 +1094,17 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
           method: 'POST',
           headers: { authorization, 'content-type': 'application/json' },
           body,
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
         });
         text = await res.text();
+        signal.throwIfAborted();
         if (!res.ok) {
           log(`[meta] import ${call} failed after ${seconds(from)} s: ${res.status}`);
           if (res.status >= 500 && attempt === 0) continue;
           throw new UpstreamError(`Meta import (${call}) failed (${res.status}): ${scrub(text, apiKey)}`);
         }
       } catch (error) {
+        signal.throwIfAborted();
         if (error instanceof UpstreamError) throw error;
         const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
         log(`[meta] import ${call} ${timedOut ? 'timed out' : 'could not connect'} after ${seconds(from)} s`);
@@ -1104,6 +1135,7 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
     // The intro runs beside the deep read and is heard as soon as it is back; without it the deep read still stands.
     const intro = ask('intro', INTRO, INTRO_TASK).then(
       wire => {
+        if (signal.aborted) return null;
         const said = introOf(wire, source.url);
         log(`[meta] import intro heard after ${seconds()} s${said ? '' : ' (too little to show)'}`);
         if (said) options.onIntro?.(said);
@@ -1136,6 +1168,8 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
     await withinCap();
     return await read();
   } finally {
+    // Stop sibling calls if one extraction failed; they must not keep spending after this import ended.
+    lifecycle.abort(new DOMException('Manual reading finished', 'AbortError'));
     if (fileId) void deleteFile(fileId, { baseUrl, authorization, fetchFn, log });
   }
 }
@@ -1143,10 +1177,11 @@ export async function importProtocol(pdf: Uint8Array, source: { url?: string; fi
 /** A whole read's output, for the estimate before it: the ATP manual's five calls wrote 13,193 tokens on 2026-10-30. */
 const READ_OUTPUT_TOKENS = 15_000;
 
-type Upstream = { baseUrl: string; authorization: string; fetchFn: typeof fetch; log?: (line: string) => void };
+type Upstream = { baseUrl: string; authorization: string; fetchFn: typeof fetch; log?: (line: string) => void; signal?: AbortSignal };
 
 /** The PDF uploaded for this read (POST /files, purpose user_data, expiring in an hour); null when the upload fails. */
-export async function uploadPdf(pdf: Uint8Array, filename: string, { baseUrl, authorization, fetchFn, log }: Upstream): Promise<string | null> {
+export async function uploadPdf(pdf: Uint8Array, filename: string, { baseUrl, authorization, fetchFn, log, signal }: Upstream): Promise<string | null> {
+  signal?.throwIfAborted();
   const started = Date.now();
   const form = new FormData();
   // The fields before the file, as the docs ask, so the upload is checked before its bytes arrive.
@@ -1155,12 +1190,13 @@ export async function uploadPdf(pdf: Uint8Array, filename: string, { baseUrl, au
   form.append('expires_after[seconds]', '3600');
   form.append('file', new Blob([new Uint8Array(pdf)], { type: 'application/pdf' }), filename);
   try {
-    const res = await fetchFn(`${baseUrl}/files`, { method: 'POST', headers: { authorization }, body: form, signal: AbortSignal.timeout(60_000) });
+    const res = await fetchFn(`${baseUrl}/files`, { method: 'POST', headers: { authorization }, body: form, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000) });
     const body = (await res.json().catch(() => ({}))) as Json;
     const id = res.ok && typeof body.id === 'string' ? body.id : null;
     log?.(`[meta] import upload ${id ? `${((Date.now() - started) / 1000).toFixed(1)} s` : `failed (${res.status}): the PDF goes inline`}`);
     return id;
   } catch {
+    signal?.throwIfAborted();
     log?.('[meta] import upload could not connect: the PDF goes inline');
     return null;
   }
@@ -1177,18 +1213,20 @@ async function deleteFile(id: string, { baseUrl, authorization, fetchFn, log }: 
 }
 
 /** The API's own count of a Responses input (POST /responses/input_tokens, nothing generated); null when it cannot. */
-export async function countTokens(input: Json[], { baseUrl, authorization, fetchFn }: Upstream): Promise<number | null> {
+export async function countTokens(input: Json[], { baseUrl, authorization, fetchFn, signal }: Upstream): Promise<number | null> {
+  signal?.throwIfAborted();
   try {
     const res = await fetchFn(`${baseUrl}/responses/input_tokens`, {
       method: 'POST',
       headers: { authorization, 'content-type': 'application/json' },
       body: JSON.stringify({ model: IMPORT_MODEL, input }),
-      signal: AbortSignal.timeout(20_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
     });
     const body = (await res.json().catch(() => ({}))) as Json;
     const n = body.input_tokens ?? body.total_tokens;
     return res.ok && typeof n === 'number' && Number.isFinite(n) ? n : null;
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 }

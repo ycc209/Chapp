@@ -9,8 +9,9 @@ import { z } from 'zod';
  * What travels follows the Share-QR and Scan-Import artboards: the protocol (by id, since both phones read it from this
  * server; the procedure is part of it: "The protocol, 7 steps"), the plan, and the results. Replying trims it
  * ("Without the results", "Just the protocol"), and a trimmed share is a new share, so what was left out never
- * reaches the server. The kit travels as its labels, with the user's kit photos (the kit screen's small crops) unless
- * they choose "Without the photos" (10/28: photos go by default; the artboard kept them on the phone).
+ * reaches the server. The kit travels as its labels, with the user's kit photos (the kit screen's small crops) and the
+ * kit's cover (their photo of its box or bag) unless they choose "Without the photos" (10/28: photos go by default; the
+ * artboard kept them on the phone).
  */
 
 export const SHARE_FORMAT = 'chapp.share/1';
@@ -45,6 +46,14 @@ export const SharedComponent = z
     /** The line beside it ("BSA · 2 mg/mL"). */
     detail: z.string().trim().max(80).optional(),
     photo: Photo.optional(),
+  })
+  .strict();
+
+/** The kit's cover as the sharer took it: the photo of its packaging, and where that is on it (fractions of the photo). */
+export const SharedCover = z
+  .object({
+    photo: Photo,
+    box: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().min(0).max(1), height: z.number().min(0).max(1) }).strict().optional(),
   })
   .strict();
 
@@ -94,6 +103,7 @@ const fields = {
   /** The protocol's procedure the plan is for ("microplate"). */
   procedure: Id,
   kit: z.array(SharedComponent).max(40),
+  cover: SharedCover.optional(),
   plan: SharedPlan.optional(),
   results: SharedResults.optional(),
 };
@@ -118,6 +128,7 @@ export const StoredShare = z
 
 export type ShareScope = z.infer<typeof ShareScope>;
 export type SharedComponent = z.infer<typeof SharedComponent>;
+export type SharedCover = z.infer<typeof SharedCover>;
 export type SharedPlan = z.infer<typeof SharedPlan>;
 export type SharedResults = z.infer<typeof SharedResults>;
 export type SharedSetup = z.infer<typeof SharedSetup>;

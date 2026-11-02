@@ -159,9 +159,37 @@ function findProtocol(query: string): FoundProtocol {
 }
 
 export function createMockProvider(): AIProvider {
+  let sequence = 0;
+  const pending = new Map<string, { reply: ConverseReply; calls: { callId: string; action: Action }[] }>();
   return {
     transcribe: async () => ({ transcript: MOCK_TRANSCRIPT }),
-    converse: async ({ text, context }) => converse(text, context),
+    converse: async ({ text, context, continuationToken, toolResults }, live) => {
+      if (continuationToken) {
+        const saved = pending.get(continuationToken);
+        if (!saved) throw new UpstreamError('Unknown mock tool continuation');
+        const results = toolResults ?? [];
+        if (results.length !== saved.calls.length || new Set(results.map(r => r.callId)).size !== saved.calls.length || saved.calls.some(c => !results.some(r => r.callId === c.callId))) throw new UpstreamError('Incomplete mock tool receipts');
+        const say = results.map(r => `${r.ok ? '' : 'Could not complete: '}${r.message}`).join('\n');
+        live?.onText?.(say);
+        return { ...saved.reply, say, actions: [] };
+      }
+      const answer = converse(text, context);
+      const search = answer.actions.find(a => a.type === 'findProtocol');
+      if (search?.type === 'findProtocol') {
+        const found = findProtocol(search.query);
+        live?.onText?.(found.answer);
+        return { say: found.answer, actions: [], sources: found.sources };
+      }
+      if (!answer.actions.length) {
+        live?.onText?.(answer.say);
+        return answer;
+      }
+      const token = `mock-${++sequence}`;
+      const calls = answer.actions.map((action, i) => ({ callId: `${token}-${i}`, action }));
+      pending.set(token, { reply: answer, calls });
+      while (pending.size > 100) pending.delete(pending.keys().next().value!);
+      return { say: '', actions: [], sources: answer.sources, pendingTools: calls, continuationToken: token };
+    },
     findProtocol: async query => findProtocol(query),
     readPlate: mockReadPlate,
     ...createMockKitVision(),

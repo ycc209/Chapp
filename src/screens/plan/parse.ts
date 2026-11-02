@@ -1,4 +1,4 @@
-import { count } from '../../voice/commands.ts';
+import { count } from '../../lib/count.ts';
 import type { Way } from './plan.ts';
 
 /**

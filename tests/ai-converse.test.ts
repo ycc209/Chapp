@@ -16,8 +16,8 @@ import { applyActions } from '../src/state/actions.ts';
 import { useRun } from '../src/state/run.ts';
 import { useSession } from '../src/state/session.ts';
 
-// Phase 2's conversation with Muse Spark: the run state it is told, the replies saved from the live model replayed,
-// find-protocol streamed, and transcripts fixed. A fake fetch stands in for the API: no network.
+// Conversation context and manufacturer lookup use the current tool protocol. Historical
+// checkReply fixtures below only protect the legacy replay reader. All provider calls use fake fetch.
 
 const KEY = 'test-key-never-shown';
 const local = existsSync(new URL('../data/protocols/pierce-bca.json', import.meta.url));
@@ -75,7 +75,8 @@ describe('what Chapp is told', () => {
     useRun.setState({ protocolId: null, aside: false, step: 0, done: {}, timers: {} });
     expect(converseContext('home', null)).toEqual({ screen: 'home' });
     useRun.setState({ protocolId: 'pierce-bca', aside: true, timers: { 'm-incubate': Date.now() + 60_000 } });
-    expect(converseContext('home', bca)).toEqual({ screen: 'home' });
+    // Not this conversation's kit; only its timer goes along, as one running elsewhere ("how long is left?").
+    expect(converseContext('home', bca)).toEqual({ screen: 'home', elsewhere: [{ experiment: 'pierce-bca', step: 'm-incubate', secondsLeft: 60 }] });
     // On the run's own screens it still goes along, and once the run is back it goes along on Home too.
     expect(converseContext('plan', bca).protocolId).toBe('pierce-bca');
     useRun.setState({ aside: false, timers: {} });
@@ -84,21 +85,37 @@ describe('what Chapp is told', () => {
   });
 
   it('sends the conversation so far, so "yes, find it" knows the kit', async () => {
-    const said = JSON.stringify({ say: 'Looking up its manual.', expression: 'thinking', actions: [{ type: 'findProtocol', to: '', value: 0, id: '', query: 'Pierce Bradford Protein Assay Kit' }], a2ui: '[]', manualPages: [] });
-    const { fn, calls } = fakeFetch(json({ id: 'resp_1', output: [{ type: 'message', content: [{ type: 'output_text', text: said }] }] }));
+    const guide = 'https://documents.thermofisher.com/TFS-Assets/LSG/manuals/MAN0011181_Coomassie_Bradford_UG.pdf';
+    const { fn, calls } = fakeFetch(
+      json({ id: 'resp_lookup', output: [{ type: 'function_call', call_id: 'find_bradford', name: 'find_protocol', arguments: JSON.stringify({ query: 'Pierce Bradford Protein Assay Kit' }) }] }),
+      json({ id: 'resp_manual', output: [{ type: 'message', content: [{ type: 'output_text', text: `Vendor: Thermo Fisher Scientific\nKit: Pierce Bradford Protein Assay Kit\nDocument: Bradford assay instructions\nURL: ${guide}`, annotations: [{ type: 'url_citation', url: guide, title: 'Manufacturer instructions' }] }] }] }),
+      json({ id: 'resp_1', output: [{ type: 'message', content: [{ type: 'output_text', text: `I found the manufacturer’s instructions for the Bradford kit: ${guide}` }] }] }),
+    );
     const reply = await provider(fn).converse({
       text: 'Yes, find it',
       context: { screen: 'home' },
       history: [{ role: 'user', text: 'I got a Pierce Bradford kit' }, { role: 'chapp', text: 'Want me to look it up?' }],
     });
-    expect(reply.actions).toEqual([{ type: 'findProtocol', query: 'Pierce Bradford Protein Assay Kit' }]);
+    expect(reply.say).toContain('Bradford kit');
+    expect(reply.actions).toEqual([]);
+    expect(reply.pendingTools).toBeUndefined();
+    expect(reply.sources).toContainEqual(expect.objectContaining({ url: guide }));
     const sent = JSON.parse(String(calls[0]!.init.body));
-    expect(sent.input.map((m: { role: string; content: string }) => [m.role, m.content])).toEqual([
+    // The record, then this turn's state as a developer message, then the new words.
+    expect(sent.input.filter((m: { role: string }) => m.role !== 'developer').map((m: { role: string; content: string }) => [m.role, m.content])).toEqual([
       ['user', 'I got a Pierce Bradford kit'],
       ['assistant', 'Want me to look it up?'],
       ['user', 'Yes, find it'],
     ]);
-    expect(sent.text.format.schema.properties.actions.items.required).toContain('query');
+    expect(sent.input.at(-2)).toMatchObject({ role: 'developer', content: expect.stringContaining('"screen":"home"') });
+    expect(sent.text).toBeUndefined();
+    // The continuation replays the whole turn (the history, the words, the lookup call) rather than chaining on Meta.
+    const continuation = JSON.parse(String(calls[2]!.init.body));
+    expect(continuation.previous_response_id).toBeUndefined();
+    // (The state message differs between the two: the lookup registered evidence, which it reports.)
+    const record = (input: { role?: string }[]) => input.filter(m => m.role !== 'developer').slice(0, 3);
+    expect(record(continuation.input)).toEqual(record(sent.input));
+    expect(continuation.input.at(-1)).toEqual(expect.objectContaining({ type: 'function_call_output', call_id: 'find_bradford' }));
   });
 
   it('opens the Overview on the kit Chapp chose to look up, under what the user said', () => {
@@ -113,7 +130,7 @@ describe('what Chapp is told', () => {
     expect(useSession.getState()).toMatchObject({ history: [], exchange: null });
   });
 
-  it('continues Meta’s copy of the conversation, until a turn answered on the phone or a few replies start it afresh', () => {
+  it('retains Meta’s conversation across long exchanges and resets only when local turns or a new conversation require it', () => {
     const s = () => useSession.getState();
     s().newConversation();
     s().answered('resp_1', { role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' });
@@ -124,11 +141,16 @@ describe('what Chapp is told', () => {
     s().addTurns({ role: 'user', text: 'next' }, { role: 'chapp', text: 'Step 3.' });
     expect(s().thread).toBeNull();
     expect(s().history).toHaveLength(6);
-    // Eight replies on one copy, then the next question starts afresh.
+    // The old eight-reply cut-off must not erase the model's reference context.
     for (let i = 1; i <= 7; i++) s().answered(`resp_${i}`, { role: 'user', text: String(i) });
     expect(s().thread).toEqual({ id: 'resp_7', replies: 7 });
     s().answered('resp_8', { role: 'user', text: '8' });
-    expect(s().thread).toBeNull();
+    expect(s().thread).toEqual({ id: 'resp_8', replies: 8 });
+    for (let i = 9; i <= 70; i++) s().answered(`resp_${i}`, { role: 'user', text: `remember ${i}` });
+    expect(s().thread).toEqual({ id: 'resp_70', replies: 70 });
+    expect(s().history).toHaveLength(64);
+    expect(s().summary).toContain('hi');
+    expect(s().history.at(-1)?.text).toBe('remember 70');
     s().answered(undefined, { role: 'user', text: 'mock' });
     expect(s().thread).toBeNull();
     s().newConversation();
@@ -243,7 +265,7 @@ describe('find-protocol, streamed', () => {
     expect(found.progress).toEqual(heard);
     expect(found).toMatchObject({ found: true, document: { url: PDF }, ...(local ? { protocolId: 'pierce-bca' } : {}) });
     const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body).toMatchObject({ stream: true, reasoning: { effort: 'low' }, tools: [{ type: 'web_search' }] });
+    expect(body).toMatchObject({ stream: true, reasoning: { effort: 'minimal' }, tools: [{ type: 'web_search' }] });
   });
 
   it('fails clearly when the stream fails or stops before the answer', async () => {

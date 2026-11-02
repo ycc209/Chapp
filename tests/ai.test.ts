@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { ConverseContext } from '../shared/ai.ts';
+import type { ConverseContext, ConverseReply } from '../shared/ai.ts';
 import { createMockProvider, MOCK_TRANSCRIPT } from '../server/ai/mock.ts';
 import { chooseProvider } from '../server/ai/provider.ts';
 import { createProvider } from '../server/ai/select.ts';
@@ -18,31 +18,34 @@ const ask = async (text: string, context = home) => {
   expect(ConverseReplySchema.parse(reply)).toEqual(reply);
   return reply;
 };
-const sentences = (s: string) => s.split(/(?<=[.!?])\s+|(?<=[。！？])/).filter(Boolean).length;
+const requested = (reply: ConverseReply) => {
+  expect(reply.actions).toEqual([]);
+  return reply.pendingTools?.map(t => t.action) ?? [];
+};
 
 describe('mock provider: converse', () => {
-  it('recognizes the BCA kit: opens the protocol and cites the Thermo Fisher manual', async () => {
+  it('prepares the mock kit navigation and cites the manual before execution', async () => {
     const reply = await ask(MOCK_TRANSCRIPT);
-    expect(reply.say).toMatch(/Thermo Fisher/);
-    expect(reply.expression).toBe('happy');
-    expect(reply.actions).toEqual([{ type: 'navigate', to: '/protocol' }]);
+    expect(reply.say).toBe('');
+    expect(reply.continuationToken).toBeTruthy();
+    expect(requested(reply)).toEqual([{ type: 'navigate', to: '/protocol' }]);
     expect(reply.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title }]);
   });
 
   it.each(['Pierce kit please', 'I have a protein assay to run', 'bca'])('hears the kit in "%s"', async text => {
-    expect((await ask(text)).actions).toContainEqual({ type: 'navigate', to: '/protocol' });
+    expect(requested(await ask(text))).toContainEqual({ type: 'navigate', to: '/protocol' });
   });
 
   it('moves to the next step and names it when it knows the protocol', async () => {
     const reply = await ask('next', run);
-    expect(reply.actions).toEqual([{ type: 'nextStep' }]);
-    if (local) expect(reply.say).toBe('Step 3: Add standards and samples.');
-    expect((await ask('Next one', home)).actions).toEqual([{ type: 'nextStep' }]);
-    expect((await ask('下一步', run)).actions).toEqual([{ type: 'nextStep' }]);
+    expect(requested(reply)).toEqual([{ type: 'nextStep' }]);
+    expect(reply.say).toBe(''); // It has not advanced until the browser acknowledges it.
+    expect(requested(await ask('Next one', home))).toEqual([{ type: 'nextStep' }]);
+    expect(requested(await ask('下一步', run))).toEqual([{ type: 'nextStep' }]);
   });
 
   it('goes back a step', async () => {
-    expect((await ask('go back', run)).actions).toEqual([{ type: 'previousStep' }]);
+    expect(requested(await ask('go back', run))).toEqual([{ type: 'previousStep' }]);
   });
 
   it.each([
@@ -53,7 +56,7 @@ describe('mock provider: converse', () => {
     ['三重複', 3],
   ])('sets replicates from "%s"', async (text, replicates) => {
     const reply = await ask(text, run);
-    expect(reply.actions).toEqual([{ type: 'setReplicates', replicates }]);
+    expect(requested(reply)).toEqual([{ type: 'setReplicates', replicates }]);
   });
 
   it.each([
@@ -61,22 +64,21 @@ describe('mock provider: converse', () => {
     ['I have twelve samples', 12],
     ['8 個樣本', 8],
   ])('sets samples from "%s"', async (text, samples) => {
-    expect((await ask(text, run)).actions).toEqual([{ type: 'setSamples', samples }]);
+    expect(requested(await ask(text, run))).toEqual([{ type: 'setSamples', samples }]);
   });
 
   it('takes samples and replicates together, with the run numbers the app shows', async () => {
     const reply = await ask('12 samples in triplicate', run);
-    expect(reply.actions).toEqual([{ type: 'setSamples', samples: 12 }, { type: 'setReplicates', replicates: 3 }]);
-    expect(reply.say).toMatch(/^Got it, 12 samples in triplicate\./);
-    // (9 standards + 12 samples) × 3 replicates = 63 wells × 200 µL = 12.6 mL: make 15 mL, as Plan says.
-    if (local) expect(reply.say).toContain("That's 63 wells and 15 mL of working reagent.");
+    expect(requested(reply)).toEqual([{ type: 'setSamples', samples: 12 }, { type: 'setReplicates', replicates: 3 }]);
+    expect(reply.say).toBe('');
+    expect(new Set(reply.pendingTools?.map(t => t.callId)).size).toBe(2);
   });
 
   it('refuses a plan that does not fit one plate instead of setting it', async () => {
     const reply = await ask('200 samples', run);
-    expect(reply.actions).toEqual([]);
+    expect(requested(reply)).toEqual([]);
     expect(reply.say).toMatch(/96-well plate/);
-    if (local) expect((await ask('40 samples in quadruplicate', run)).actions).toEqual([]);
+    if (local) expect(requested(await ask('40 samples in quadruplicate', run))).toEqual([]);
   });
 
   it('greets back and says what to try next, in the user’s language', async () => {
@@ -91,21 +93,23 @@ describe('mock provider: converse', () => {
   it('suggests what it can do for anything else', async () => {
     const reply = await ask('What is the meaning of life?');
     expect(reply.say).toMatch(/^I can help you run a kit/);
-    expect(reply.actions).toEqual([]);
+    expect(requested(reply)).toEqual([]);
   });
 
-  it('keeps every line short enough to be heard: one or two sentences', async () => {
-    for (const text of [MOCK_TRANSCRIPT, 'next', '12 samples in triplicate', 'hello', 'what?', '你好', '200 samples']) {
-      const { say } = await ask(text, run);
-      expect(sentences(say), say).toBeLessThanOrEqual(2);
-      expect(say.length, say).toBeLessThan(140);
-    }
+  it('reports a failed execution receipt without claiming the requested change succeeded', async () => {
+    const pending = await ask('next', run);
+    const reply = await mock.converse({ text: 'next', context: run, continuationToken: pending.continuationToken,
+      toolResults: [{ callId: pending.pendingTools![0]!.callId, ok: false, message: 'The step changed while the answer was loading.' }],
+    });
+    expect(reply.say).toBe('Could not complete: The step changed while the answer was loading.');
+    expect(reply.actions).toEqual([]);
+    expect(reply.pendingTools).toBeUndefined();
   });
 
   it.skipIf(!local)('answers a question at the bench from the manual, with its page and words (storyboard ⑤)', async () => {
     const reply = await ask('What if it turns cloudy when I add B?', run);
     expect(reply.say).toBe('It turns cloudy when B goes in, then clears to green as you mix. That is normal.');
-    expect(reply.actions).toEqual([]);
+    expect(requested(reply)).toEqual([]);
     expect(reply.sources).toEqual([
       {
         url: BCA.source.url,
@@ -140,15 +144,18 @@ describe('mock provider: converse', () => {
   });
 
   it('leaves the plan, the kit and everything else to their own answers', async () => {
-    expect((await ask('12 samples in triplicate', run)).actions).toHaveLength(2);
-    expect((await ask(MOCK_TRANSCRIPT, run)).actions).toContainEqual({ type: 'navigate', to: '/protocol' });
+    expect(requested(await ask('12 samples in triplicate', run))).toHaveLength(2);
+    expect(requested(await ask(MOCK_TRANSCRIPT, run))).toContainEqual({ type: 'navigate', to: '/protocol' });
     expect((await ask('Is sample 3 OK?', run)).sources).toEqual([]);
     // Without a protocol open there is no manual to answer from.
     expect((await ask('What if it turns cloudy when I add B?')).sources).toEqual([]);
   });
 
   it('answers the same request the same way', async () => {
-    expect(await ask('12 samples in triplicate', run)).toEqual(await ask('12 samples in triplicate', run));
+    const first = await ask('12 samples in triplicate', run);
+    const second = await ask('12 samples in triplicate', run);
+    expect(requested(first)).toEqual(requested(second));
+    expect(first.continuationToken).not.toBe(second.continuationToken);
   });
 });
 
@@ -219,7 +226,7 @@ describe('request validation', () => {
     [{ text: 'hi' }],
     [{ text: 'hi', context: { screen: 'home', step: -1 } }],
     [{ text: 'hi', context: { screen: 'home', samples: 2.5 } }],
-    [{ text: 'x'.repeat(2001), context: { screen: 'home' } }],
+    [{ text: 'x'.repeat(12001), context: { screen: 'home' } }],
   ])('rejects %j', body => {
     expect(ConverseRequestSchema.safeParse(body).success).toBe(false);
   });
@@ -236,5 +243,15 @@ describe('request validation', () => {
     expect(ConverseReplySchema.safeParse({ ...ok, actions: [{ type: 'setReplicates', replicates: 0 }] }).success).toBe(false);
     expect(ConverseReplySchema.safeParse({ ...ok, actions: [{ type: 'launchRocket' }] }).success).toBe(false);
     expect(ConverseReplySchema.safeParse({ ...ok, say: ' ' }).success).toBe(false);
+  });
+});
+
+
+describe('overview response contract', () => {
+  it('preserves progressive snapshots and rejects a ready preview with no saved protocol', () => {
+    const reply = { say: 'The preview is opening.', actions: [], sources: [], protocolPreview: { id: 'overview-1', state: 'reading', progress: ['Reading the manual'] } };
+    expect(ConverseReplySchema.parse(reply)).toEqual(reply);
+    expect(ConverseReplySchema.safeParse({ ...reply, protocolPreview: { id: 'overview-1', state: 'ready' } }).success).toBe(false);
+    expect(ConverseReplySchema.parse({ ...reply, protocolPreview: { id: 'overview-1', state: 'ready', protocolId: 'demo-kit' } }).protocolPreview?.protocolId).toBe('demo-kit');
   });
 });

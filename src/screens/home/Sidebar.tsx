@@ -3,8 +3,13 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '../../components/ui/Sheet.tsx';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
-import { useProtocol } from '../../state/protocol.ts';
+import { useChatLog } from '../../state/conversationLog.ts';
+import { useProtocolList } from '../../state/protocol.ts';
 import { runStarted, useRun } from '../../state/run.ts';
+import { openThread, useThreads } from '../../state/threads.ts';
+import { runningTimers } from '../../state/alarms.ts';
+import { countdownText, useNow } from '../../components/lab/index.ts';
+import { KitCover } from '../kit/KitCover.tsx';
 import { shortName } from '../protocol/content.ts';
 import { GLASS_BUTTON, GLASS_FIELD } from './bar.ts';
 import { GlobeIcon, HomeIcon, LibraryIcon, PencilIcon, PeopleIcon, SearchIcon, SettingsIcon } from './icons.tsx';
@@ -17,8 +22,8 @@ type SidebarProps = {
 };
 
 /**
- * Library and history (Sidebar.dc.html): the pages, then this phone's experiments, then settings, search and a new
- * conversation. The page itself slides right and stays visible as the thing to tap to close (Home moves it; this
+ * Library and history (Sidebar.dc.html): the pages, then this phone's conversations, one per experiment, then
+ * settings, search and a new conversation. The page itself slides right and stays visible as the thing to tap to close (Home moves it; this
  * draws its shadow and catches the tap).
  */
 export function Sidebar({ open, onOpenChange, onNewConversation }: SidebarProps) {
@@ -86,8 +91,8 @@ function Nav({ close, onNewConversation }: { close: () => void; onNewConversatio
         </Page>
       </div>
       <hr className="mx-3 mt-5 h-px border-0 bg-line" />
-      <p className="mx-3 mt-5 mb-2 text-[13px] leading-[18px] font-semibold text-text">Experiments</p>
-      <Experiments query={query} onPick={close} />
+      <p className="mx-3 mt-5 mb-2 text-[13px] leading-[18px] font-semibold text-text">History</p>
+      <History query={query} onPick={close} />
       <div className="grow" />
       <div className="flex items-center gap-2 px-1">
         <button
@@ -104,7 +109,7 @@ function Nav({ close, onNewConversation }: { close: () => void; onNewConversatio
             type="search"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            aria-label="Search experiments"
+            aria-label="Search history"
             placeholder="Search"
             className="min-w-0 grow bg-transparent text-[17px] leading-[22px] text-ink outline-none placeholder:text-muted [&::-webkit-search-cancel-button]:hidden"
           />
@@ -147,49 +152,92 @@ function Page({ to, icon, current, onPick, children }: PageProps) {
 }
 
 /**
- * The runs on this phone. There is one run at a time (state/run.ts), so this lists it, marked in progress once it
- * has started; past runs and past conversations come when the app keeps them.
+ * This phone's conversations, newest first (state/threads.ts): an experiment's under its kit and plan, after the
+ * kit's cover when the user photographed its packaging, with a dot while its run is under way; a plain one under its
+ * first question. Tapping one goes back to it, to the run's step when it has begun.
  */
-function Experiments({ query, onPick }: { query: string; onPick: () => void }) {
-  const protocolId = useRun(s => s.protocolId);
-  const samples = useRun(s => s.samples);
-  const replicates = useRun(s => s.replicates);
-  const step = useRun(s => s.step);
-  const started = useRun(runStarted);
-  const { protocol } = useProtocol(protocolId);
+function History({ query, onPick }: { query: string; onPick: () => void }) {
+  const navigate = useNavigate();
+  const threads = useThreads(s => s.threads);
+  const active = useThreads(s => s.active);
+  const runThread = useThreads(s => s.runThread);
+  const run = useRun();
+  const firstAsk = useChatLog(s => s.exchanges.find(e => !e.event && e.ask)?.ask);
+  const { list } = useProtocolList();
+  // Each experiment's soonest timer, ticking while one runs: an incubation is seen from any conversation.
+  const timers = runningTimers();
+  const now = useNow(timers.some(a => a.endsAt > Date.now()) ? 1000 : 30000);
+  const timerOf = (id: string, live: boolean) => timers.find(a => (live ? a.live : a.owner === id));
+  const title = (id: string) => {
+    const found = list?.find(p => p.id === id);
+    return found ? shortName(found) : id;
+  };
 
-  const runs = protocolId
-    ? [{ id: protocolId, name: `${protocol ? shortName(protocol) : protocolId} · ${samples} × ${replicates}` }]
-    : [];
-  const shown = runs.filter(r => r.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const rows = threads
+    .map(t => {
+      const live = t.id === active || t.id === runThread;
+      const r = t.id === runThread ? (run.protocolId ? run : null) : t.run;
+      const ask = t.id === active ? firstAsk : t.chat.exchanges.find(e => !e.event && e.ask)?.ask;
+      const timer = r?.protocolId ? timerOf(t.id, t.id === runThread) : undefined;
+      return {
+        id: t.id,
+        timer: timer ? (timer.endsAt > now ? countdownText(Math.ceil((timer.endsAt - now) / 1000)) : 'Time’s up') : null,
+        name: r?.protocolId ? `${title(r.protocolId)} · ${r.samples} × ${r.replicates}` : (ask ?? ''),
+        protocolId: r?.protocolId ?? null,
+        experiment: Boolean(r?.protocolId),
+        started: r ? runStarted(r) : false,
+        step: r?.step ?? 0,
+        said: Boolean(ask),
+        at: live ? Date.now() : t.updatedAt,
+        current: t.id === active,
+      };
+    })
+    .filter(row => row.experiment || row.said)
+    .sort((a, b) => b.at - a.at);
+  const shown = rows.filter(r => r.name.toLowerCase().includes(query.trim().toLowerCase()));
 
   if (!shown.length) {
     return (
       <p className="mx-3 flex min-h-12 items-center text-[15px] leading-5 font-medium text-muted">
-        {runs.length ? 'Nothing matches' : 'No experiments yet'}
+        {rows.length ? 'Nothing matches' : 'No conversations yet'}
       </p>
     );
   }
+  const open = (row: (typeof rows)[number]) => {
+    openThread(row.id);
+    onPick();
+    const now = useRun.getState();
+    navigate(row.experiment ? (runStarted(now) ? `/run/${now.step + 1}` : '/protocol') : '/chat');
+  };
   return (
-    <div className="flex flex-col gap-0.5">
-      {shown.map(run => (
-        <Link
-          key={run.id}
-          // The run's own screen once it has started (steps count from 1 there), its protocol before.
-          to={started ? `/run/${step + 1}` : '/protocol'}
-          onClick={() => {
-            // Back to this run: Chapp follows it again after a New conversation set it aside.
-            useRun.getState().setAside(false);
-            onPick();
-          }}
-          className="flex min-h-12 items-center gap-2.5 rounded-2xl px-3 text-ink outline-none transition-colors duration-100 hover:bg-sunken/60 focus-visible:ring-2 focus-visible:ring-blue active:bg-sunken"
-        >
-          <span className="min-w-0 truncate text-[16px] leading-[21px] font-semibold">{run.name}</span>
-          {started && (
-            <span role="img" aria-label="In progress" className="size-2 shrink-0 rounded-full bg-blue" />
+    <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none]">
+      {shown.map(row => (
+        <button
+          key={row.id}
+          type="button"
+          aria-current={row.current ? 'true' : undefined}
+          onClick={() => open(row)}
+          className={cn(
+            'flex min-h-12 shrink-0 items-center gap-2.5 rounded-2xl px-3 text-left text-ink outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-blue',
+            row.current ? 'bg-sunken' : 'hover:bg-sunken/60 active:bg-sunken',
           )}
-        </Link>
+        >
+          {row.experiment && <KitCover protocolId={row.protocolId} className="size-7 rounded-lg" />}
+          <span className={cn('min-w-0 grow truncate text-[16px] leading-[21px]', row.experiment ? 'font-semibold' : 'font-medium')}>{row.name}</span>
+          {row.started && <span role="img" aria-label="In progress" className="size-2 shrink-0 rounded-full bg-blue" />}
+          {row.timer ? (
+            <span aria-label={`Timer ${row.timer}`} className="shrink-0 text-[13px] leading-[18px] font-semibold text-blue tabular-nums">{row.timer}</span>
+          ) : (
+            <span className="shrink-0 text-[13px] leading-[18px] font-medium text-muted">{day(row.at)}</span>
+          )}
+        </button>
       ))}
     </div>
   );
+}
+
+/** "Today", else "Oct 30". */
+function day(at: number): string {
+  const d = new Date(at);
+  return d.toDateString() === new Date().toDateString() ? 'Today' : d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }

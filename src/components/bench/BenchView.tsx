@@ -1,12 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BenchScene, Item, Look } from '../../../shared/bench.ts';
-import { Arrow, BenchDefs, Beaker, Bottle, Centrifuge, Chart, Conical, Dish, Flask, Incubator, Microscope, PhotoBottle, Pipette, Plate, Rack, Reader, Reservoir, Thermometer, Timer, Tube, WashBottle } from './Items.tsx';
+import { Arrow, BenchDefs, Beaker, BigText, Bottle, Centrifuge, Chart, Conical, Dish, Flask, Incubator, Microscope, PhotoBottle, Pipette, Plate, Rack, Reader, Reservoir, Thermometer, Timer, Tube, WashBottle } from './Items.tsx';
 
 /**
  * A bench scene (shared/bench.ts) as a drawing that happens. `still`: the step done, its items appearing one after
  * another the first time it is shown (a step card). `play`: from the start, its timeline played: the pipette moves,
  * drops fall, wells fill column by column, a colour turns (the enlarged step). A tap on an item picks it. A kit bottle
- * the user has photographed (`photos`, by component id) stands on the bench as their own bottle.
+ * the user has photographed (`photos`, by component id) stands on the bench as their own bottle. `big`: the words on
+ * it (amounts, volumes, temperatures) big enough to read from arm's length, for the run.
  */
 
 type Drop = { key: number; x: number; y1: number; y2: number; colour: string; ms: number };
@@ -27,7 +28,7 @@ export function photoOf(it: Item, photos?: Record<string, string>): string | und
 
 const merge = (it: Item, set: Partial<Look>): Item => ({ ...it, ...set, ...(set.wells ? { wells: { ...it.wells, ...set.wells } } : {}) });
 
-export function BenchView({ scene, mode, picked, onPick, replay = 0, photos }: { scene: BenchScene; mode: 'still' | 'play'; picked?: string | null; onPick?: (id: string | null) => void; replay?: number; photos?: Record<string, string> }) {
+export function BenchView({ scene, mode, picked, onPick, replay = 0, photos, big }: { scene: BenchScene; mode: 'still' | 'play'; picked?: string | null; onPick?: (id: string | null) => void; replay?: number; photos?: Record<string, string>; big?: boolean }) {
   const id = useId().replace(/[^a-zA-Z0-9]/g, '');
   const start = useMemo(() => (mode === 'still' ? settled(scene) : Object.fromEntries(scene.items.map(it => [it.id, it]))), [scene, mode]);
   const [looks, setLooks] = useState(start);
@@ -87,7 +88,7 @@ export function BenchView({ scene, mode, picked, onPick, replay = 0, photos }: {
         @media (prefers-reduced-motion: reduce) { .bench-in, .bench-drop { animation: none; } }
       `}</style>
       <BenchDefs id={id}>
-        {drawn}
+        <BigText.Provider value={!!big}>{drawn}</BigText.Provider>
         {drops.map(d => (
           <g key={d.key} transform={`translate(${d.x} ${d.y1})`}>
             <g className="bench-drop" style={{ ['--ms' as string]: `${d.ms}ms`, ['--fall' as string]: `${d.y2 - d.y1}px` }}>

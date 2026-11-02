@@ -42,7 +42,7 @@ export function Answer({ children }: { children: ReactNode }) {
   // Held, the words show in the bar's own bubble.
   const hearing = voice !== 'idle' && voice !== 'holding' && (heard || interim);
   return (
-    <p aria-label="Chapp's answer" aria-live="polite" className={cn(SAY, 'mb-6 shrink-0 px-1')}>
+    <div aria-label="Chapp's answer" aria-live="polite" className={cn(SAY, 'mb-6 shrink-0 px-1')}>
       {hearing ? (
         <>
           {heard}
@@ -51,7 +51,7 @@ export function Answer({ children }: { children: ReactNode }) {
       ) : (
         children
       )}
-    </p>
+    </div>
   );
 }
 
@@ -91,10 +91,11 @@ export function TravelList({ travels, reagent = false, appear = false }: { trave
       </>,
     );
   }
-  if (travels.photos) {
+  if (travels.photos || travels.cover) {
+    const what = [travels.photos ? plural(travels.photos, 'bottle') : '', travels.cover ? 'the kit' : ''].filter(Boolean).join(' and ');
     lines.push(
       <>
-        Kit photos, <b className="font-bold">{plural(travels.photos, 'bottle')}</b>
+        Kit photos, <b className="font-bold">{what}</b>
       </>,
     );
   }

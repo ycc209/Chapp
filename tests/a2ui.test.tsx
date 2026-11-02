@@ -101,6 +101,17 @@ describe('checkA2ui', () => {
     expect(wrong.dropped).toEqual(expect.arrayContaining(['Compare a (have)', 'Compare b (need not a volume)']));
   });
 
+  it('keeps independent standard counts on each calculated card and rejects unsupported counts', () => {
+    const components = [
+      { id: 'root', component: 'Column', children: ['p', 'r', 's', 'bad'] },
+      ...['PlateCard', 'ReagentCard', 'StandardsCard'].map((component, i) => ({ id: ['p', 'r', 's'][i]!, component, samples: 12, replicates: 3, standardReplicates: 2 })),
+      { id: 'bad', component: 'PlateCard', standardReplicates: 5 },
+    ];
+    const out = checkA2ui(surface(components), rules('12 samples in 3 replicates, standards in 2 replicates; not 5'));
+    expect(kept(out).slice(1, 4)).toEqual(components.slice(1, 4));
+    expect(componentsOf(out.messages).get('bad')).toEqual({ id: 'bad', component: 'PlateCard' });
+  });
+
   it('reads A2UI written one message per line, in a code fence, or as one message with both keys', () => {
     const create = { version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: 'chapp' } };
     const update = { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard' }] } };
@@ -201,6 +212,27 @@ describe.skipIf(!bca)('the renderer', () => {
 
   it('draws nothing without a root', () => {
     expect(renderToStaticMarkup(<A2uiSurface protocol={bca!} messages={[]} />)).toBe('');
+  });
+
+  it('renders 54 wells for twelve triplicate samples and nine duplicate standards', () => {
+    for (const counts of [{ replicates: 3 }, { replicates: 3, standardReplicates: 2 }]) {
+      const html = renderToStaticMarkup(<A2uiSurface protocol={bca!} messages={surface([{ id: 'root', component: 'PlateCard', samples: 12, ...counts }]) as A2uiMessage[]} />);
+      expect(html).toContain('Plate · 54 wells');
+      expect(html).not.toContain('63 wells');
+    }
+    const single = renderToStaticMarkup(<A2uiSurface protocol={bca!} messages={surface([{ id: 'root', component: 'PlateCard', samples: 12, replicates: 3, standardReplicates: 1 }]) as A2uiMessage[]} />);
+    expect(single).toContain('Plate · 45 wells');
+  });
+
+  it('offers a plan when only the standard count differs and renders that count', () => {
+    const html = renderToStaticMarkup(<A2uiSurface protocol={bca!} messages={surface([
+      { id: 'root', component: 'Column', children: ['p', 's'] },
+      { id: 'p', component: 'PlateCard', samples: 12, replicates: 2, standardReplicates: 1 },
+      { id: 's', component: 'StandardsCard', standardReplicates: 1 },
+    ]) as A2uiMessage[]} live onAnswer={() => {}} />);
+    expect(html).toContain('Plate · 33 wells');
+    expect(html).toContain('Use this plan');
+    expect(html).toContain('>×1<');
   });
 
   it('lets the latest answer’s card be changed, and offers its plan for the run when it is not the run’s', () => {

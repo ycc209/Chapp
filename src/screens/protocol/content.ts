@@ -66,8 +66,8 @@ export function principle(p: Protocol): { aside: string; paragraphs: string[] } 
   return { aside: r ? `${r.value} ${r.unit}` : '', paragraphs: [...rest.map(upperFirst), ...how] };
 }
 
-/** "In the kit": the kit's bottles, how to store them, and what else the run needs. */
-export function kitContents(p: Protocol, procedureId?: string | null) {
+/** "In the kit": what the kit's box or bag holds, and how to store it. */
+export function kitContents(p: Protocol) {
   const kit = p.components.filter(c => c.suppliedBy === 'kit');
   const items = kit.map(c => {
     const { name, aside } = splitName(c.name);
@@ -76,15 +76,15 @@ export function kitContents(p: Protocol, procedureId?: string | null) {
   });
   const storage = new Set(kit.map(c => (c.storage ? formatTemperature(c.storage) : '')));
   const store = storage.size === 1 && !storage.has('') ? `Store them at ${[...storage][0]}.` : '';
-  return { items, store, need: (photographed: boolean) => alsoNeed(p, procedureId, photographed) };
+  return { items, store };
 }
 
 /**
- * "You also need a diluent (same buffer as your samples), a 96-well plate, a plate shaker, a 37 °C incubator and a
- * plate reader." The user's own bottles drop out once they are photographed (they are in the list above then), and
- * the pipette goes without saying at a bench, as in the design.
+ * "Not in the kit": what the run needs that the box or bag does not hold, apart from what it does. The user's own
+ * bottles first ("Diluent", "same buffer as your samples"), then the equipment the procedure uses ("96-well plate",
+ * "37 °C incubator"); the pipette goes without saying at a bench, as in the design.
  */
-export function alsoNeed(p: Protocol, procedureId: string | null | undefined, photographed: boolean): string {
+export function notInKit(p: Protocol, procedureId?: string | null): { bottles: { id: string; name: string; aside: string | null }[]; gear: string[] } {
   const proc = procedureFor(p, procedureId);
   const ids = [...new Set([...(proc.prep ?? []), ...proc.steps].flatMap(s => s.equipment ?? []))];
   const gear = ids
@@ -92,13 +92,11 @@ export function alsoNeed(p: Protocol, procedureId: string | null | undefined, ph
     .filter(e => e !== undefined && e.icon !== 'pipette')
     .map(e => {
       const setting = e!.setting && /°C$/.test(e!.setting) ? `${e!.setting} ` : '';
-      return withArticle(setting + lowerFirst(e!.name));
+      // "96-well" stays on one line (a non-breaking hyphen), as in the design.
+      return upperFirst(setting + (setting ? lowerFirst(e!.name) : e!.name)).replace(/(\d)-/g, '$1\u2011');
     });
-  const own = photographed ? [] : p.components.filter(c => c.suppliedBy === 'user').map(c => withArticle(lowerFirst(c.name)));
-  // "96-well" stays on one line (a non-breaking hyphen), as in the design.
-  const all = [...own, ...gear].map(x => x.replace(/(\d)-/g, '$1\u2011'));
-  if (!all.length) return '';
-  return `You also need ${all.length === 1 ? all[0] : `${all.slice(0, -1).join(', ')} and ${all[all.length - 1]}`}.`;
+  const bottles = p.components.filter(c => c.suppliedBy === 'user').map(c => ({ id: c.id, ...splitName(c.name) }));
+  return { bottles, gear };
 }
 
 /** The second line under a photographed bottle: "Kit · store at 15–30 °C", "Kit · BSA, 2 mg/mL", "Yours · same buffer…". */
@@ -194,9 +192,4 @@ function lowerFirst(s: string) {
 
 function upperFirst(s: string) {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
-}
-
-function withArticle(phrase: string) {
-  // "an incubator", but "a 96-well plate", "a 37 °C incubator".
-  return `${/^[aeiou]/i.test(phrase) ? 'an' : 'a'} ${phrase}`;
 }

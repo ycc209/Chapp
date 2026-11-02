@@ -177,7 +177,8 @@ describe('what the conversation says it changed', () => {
     const { useRun } = await import('../src/state/run.ts');
     useRun.setState({ protocolId: 'pierce-bca', procedure: 'microplate', step: 2 });
     expect(doneLine({ type: 'setSamples', samples: 12 }, bca)).toBe('Samples: 12');
-    expect(doneLine({ type: 'setReplicates', replicates: 3 }, bca)).toBe('Replicates: ×3, standards too');
+    expect(doneLine({ type: 'setReplicates', replicates: 3 }, bca)).toBe('Samples: ×3; standards unchanged');
+    expect(doneLine({ type: 'setReplicates', replicates: 3, standardReplicates: 1 }, bca)).toBe('Samples: ×3; standards ×1');
     expect(doneLine({ type: 'startTimer', id: 'm-incubate', seconds: 1800 }, bca)).toBe('Timer started · 30 min');
     expect(doneLine({ type: 'markDone', id: 'A' }, bca)).toBe('A is done');
     expect(doneLine({ type: 'nextStep' }, bca)).toBe(bca ? 'Step 3 of 6 · Load the plate' : 'Next step');

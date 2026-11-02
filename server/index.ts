@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { createHandler } from './app.ts';
 import { createProvider } from './ai/select.ts';
+import { chooseProvider } from './ai/provider.ts';
+import { createRouter } from './ai/router.ts';
 import { createLiveVoice } from './live.ts';
 import { meter } from './ai/usage.ts';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +18,11 @@ if (meter.cap()) console.log(`Meta models: up to $${meter.cap().toFixed(2)} a da
 
 let ai: ReturnType<typeof createProvider>;
 try {
-  ai = createProvider(process.env);
+  // With Meta's models, the plainest bench commands are matched by embedding on this machine (server/ai/router.ts):
+  // its model loads now, so the first "下一步" does not wait for it.
+  const router = chooseProvider(process.env) === 'meta' ? createRouter() : null;
+  void router?.warm();
+  ai = createProvider(process.env, router ? { route: router.route } : {});
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);

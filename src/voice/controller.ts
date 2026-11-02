@@ -1,6 +1,7 @@
+import { discardSpeculation } from '../state/conversation.ts';
 import { useSession, type Voice } from '../state/session.ts';
 import { BrowserEngine } from './browser.ts';
-import { AFTER_SPEAKING_MS, chooseEngine, PROBLEM_TEXT, type Engine, type EngineKind, type Mode, type Problem } from './engine.ts';
+import { AFTER_SPEAKING_MS, chooseEngine, PROBLEM_TEXT, STABLE_MS, type Engine, type EngineKind, type Mode, type Problem } from './engine.ts';
 import { fixLabWords } from './labWords.ts';
 import { LiveEngine } from './live.ts';
 import { ServerEngine } from './server.ts';
@@ -28,6 +29,10 @@ let serverFromNowOn = false;
 let unwatchSpeaking: (() => void) | null = null;
 let resumeTimer = 0;
 const handlers: UtteranceHandler[] = [];
+/** Who hears words that have settled before the turn ends (src/state/conversation.ts starts on them). */
+const preparers: UtteranceHandler[] = [];
+let prepareTimer = 0;
+let candidate = '';
 
 const session = () => useSession.getState();
 
@@ -104,11 +109,24 @@ export function attachHandler(handler: UtteranceHandler) {
   };
 }
 
+/** Registers what to do with words that have settled before the turn ends; the latest one gets them. */
+export function attachPreparer(prepare: UtteranceHandler) {
+  preparers.push(prepare);
+  return () => {
+    const at = preparers.indexOf(prepare);
+    if (at >= 0) preparers.splice(at, 1);
+  };
+}
+
 function run(next: EngineKind) {
   const mine = ++generation;
   const live = () => mine === generation;
   const events = {
-    heard: (settled: string, interim: string) => live() && session().setHeard(settled, interim),
+    heard: (settled: string, interim: string) => {
+      if (!live()) return;
+      session().setHeard(settled, interim);
+      prepare(settled, interim);
+    },
     turn: (text: string) => live() && deliver(text),
     warn: (problem: Problem) => live() && showProblem(problem),
     end: (problem?: Problem) => live() && ended(problem),
@@ -118,7 +136,22 @@ function run(next: EngineKind) {
   engine.start();
 }
 
+/**
+ * Words unchanged for STABLE_MS go ahead to the conversation, which starts on them and keeps that start if the turn
+ * ends with the same words (the lab-name fixes applied, as deliver() applies them). Not while held: a hold is sent whole.
+ */
+function prepare(settled: string, interim: string) {
+  if (mode === 'hold') return;
+  const text = fixLabWords([settled, interim].filter(Boolean).join(' ')).trim();
+  if (text === candidate) return;
+  candidate = text;
+  clearTimeout(prepareTimer);
+  if (text) prepareTimer = window.setTimeout(() => preparers.at(-1)?.(text), STABLE_MS);
+}
+
 function deliver(heard: string) {
+  clearTimeout(prepareTimer);
+  candidate = '';
   const handler = handlers.at(-1);
   // Lab names put right first ("pierced BCA" is Pierce BCA), whichever recognizer heard them.
   const text = fixLabWords(heard);
@@ -166,6 +199,10 @@ function close() {
   unwatchSpeaking?.();
   unwatchSpeaking = null;
   clearTimeout(resumeTimer);
+  clearTimeout(prepareTimer);
+  candidate = '';
+  // Words that were never handed over: a start made on them is dropped (one handed over has been claimed already).
+  discardSpeculation();
 }
 
 // --- The line under Chapp's name when something went wrong ---------------------------------------------------------

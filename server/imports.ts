@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import type { AIProvider, FindProtocolLive, FoundProtocol, ImportedProtocol } from '../shared/ai.ts';
+import type { Protocol } from '../shared/protocol.ts';
 import { formatEvent } from '../shared/sse.ts';
 import { isPdf, MAX_PDF } from './ai/import.ts';
 import { localProtocolId, manualFile, manualSources, protocolBySha, saveImported } from './ai/protocols.ts';
@@ -59,12 +60,14 @@ export async function readManual(
   pdf: Uint8Array,
   source: { url?: string; filename?: string },
   opts: Pick<ImportOptions, 'protocols' | 'manuals'> = {},
-  live?: Pick<FindProtocolLive, 'onProgress' | 'onIntro'>,
+  live?: Pick<FindProtocolLive, 'onProgress' | 'onIntro' | 'signal'>,
 ): Promise<ImportedProtocol> {
+  live?.signal?.throwIfAborted();
   const known = protocolBySha(sha256(pdf), opts.protocols);
   if (known) return { protocol: known, problems: known.imported?.problems ?? [], sources: manualSources(known) };
   if (!provider.importProtocol) throw new UpstreamError('This server cannot read manuals');
   const imported = await provider.importProtocol(pdf, source, live);
+  live?.signal?.throwIfAborted();
   if (!imported.protocol.imported) return imported;
   const protocol = saveImported(imported.protocol, pdf, { dir: opts.protocols, manuals: opts.manuals });
   return { ...imported, protocol };
@@ -151,7 +154,7 @@ function isPrivateHost(host: string): boolean {
   return !h.includes('.');
 }
 
-export type DownloadOptions = { fetch?: typeof fetch; maxBytes?: number; timeoutMs?: number };
+export type DownloadOptions = { fetch?: typeof fetch; maxBytes?: number; timeoutMs?: number; signal?: AbortSignal };
 
 /**
  * A manual from the web: http(s) only, never this machine or its network (redirects included), a PDF by its type and
@@ -160,7 +163,8 @@ export type DownloadOptions = { fetch?: typeof fetch; maxBytes?: number; timeout
 export async function downloadPdf(url: string, options: DownloadOptions = {}): Promise<Uint8Array> {
   const { maxBytes = MAX_PDF, timeoutMs = 30_000 } = options;
   const fetchFn = options.fetch ?? globalThis.fetch;
-  const signal = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+  signal.throwIfAborted();
   let at = url;
   try {
     for (let hop = 0; hop <= 3; hop++) {
@@ -170,6 +174,7 @@ export async function downloadPdf(url: string, options: DownloadOptions = {}): P
       const res = await fetchFn(u.href, { redirect: 'manual', signal, headers: { accept: 'application/pdf' } });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         at = new URL(res.headers.get('location')!, u).href;
+        await res.body?.cancel();
         continue;
       }
       if (!res.ok) throw new UpstreamError(`The manual could not be downloaded (${res.status})`);
@@ -193,10 +198,56 @@ export async function downloadPdf(url: string, options: DownloadOptions = {}): P
     }
     throw new UpstreamError('The manual link redirects too often');
   } catch (error) {
+    options.signal?.throwIfAborted();
     if (error instanceof UpstreamError) throw error;
     const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
     throw new UpstreamError(timedOut ? 'Downloading the manual took too long' : 'The manual could not be downloaded');
   }
+}
+
+/** A link's file name, decoded and in lower case: "MAN0011430_Pierce_BCA_Protein_Asy_UG.pdf" → "man0011430_pierce_bca_protein_asy_ug.pdf". */
+function fileName(url: string): string {
+  const path = URL.parse(url)?.pathname ?? '';
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // Not percent-encoded as it should be: the raw path.
+  }
+  return (decoded.split('/').pop() ?? '').toLowerCase();
+}
+
+/**
+ * The other links among `sources` to the same PDF file as `url`, by its file name: a vendor often serves one manual
+ * from several hosts, and an old one may refuse a program (Thermo's tools.thermofisher.com answers 403) where the
+ * current one serves it (documents.thermofisher.com, under its own spelling of the name).
+ */
+export function sameFileLinks(url: string, sources: { url: string }[]): string[] {
+  const name = fileName(url);
+  if (!/\.pdf$/.test(name)) return [];
+  const seen = new Set([url.toLowerCase()]);
+  const out: string[] = [];
+  for (const { url: other } of sources) {
+    if (!/^https?:\/\//.test(other) || fileName(other) !== name || seen.has(other.toLowerCase())) continue;
+    seen.add(other.toLowerCase());
+    out.push(other);
+  }
+  return out;
+}
+
+/** downloadPdf on each link in turn, the first that gives the PDF; the first link's error when none does. */
+export async function downloadFirst(urls: string[], options: DownloadOptions = {}, tried: (url: string) => void = () => {}): Promise<{ pdf: Uint8Array; url: string }> {
+  let first: unknown;
+  for (const url of urls) {
+    tried(url);
+    try {
+      return { pdf: await downloadPdf(url, options), url };
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      first ??= error;
+    }
+  }
+  throw first ?? new UpstreamError('The manual could not be downloaded');
 }
 
 /** The progress line said while Chapp reads a manual it found (Overview.dc.html's "Turning it into steps" follows). */
@@ -204,37 +255,89 @@ export const READING_LINE = 'Reading the manual';
 
 export type FindAndImportOptions = Pick<ImportOptions, 'protocols' | 'manuals' | 'log'> & { download?: DownloadOptions };
 
+/** A manual being read: `tried` the links its download went through, `downloaded` once one of them gave the PDF. */
+type Reading = { url: string; started: number; stop: AbortController; protocol: Promise<Protocol>; tried: string[]; downloaded: () => boolean };
+
 /**
  * provider.findProtocol, then, when it found the vendor's manual for a kit with no protocol on this machine, that manual
- * read into one: downloaded, imported and saved, so the answer's protocolId opens it. Its progress goes on as one more
- * line ("Reading the manual"), to `live.onProgress` while streaming and in `progress`. When the manual cannot be
- * fetched or read, the search's own answer stands, without a protocolId.
+ * read into one: downloaded, imported and saved, so the answer's protocolId opens it. The reading starts as soon as the
+ * search names the manual (live.onDocument), while it still writes what it read of it; that draft intro goes to
+ * `live.onIntro` until the manual's own is read, never after it. Its progress goes on as one more line ("Reading the
+ * manual"), to `live.onProgress` while streaming and in `progress`. When the manual cannot be fetched or read, the
+ * search's own answer stands, without a protocolId.
  */
 export async function findAndImport(provider: AIProvider, query: string, live?: FindProtocolLive, opts: FindAndImportOptions = {}): Promise<FoundProtocol> {
   const { log = (line: string) => console.log(line) } = opts;
-  const found = await provider.findProtocol(query, live);
+  const lines: string[] = [];
+  // `read`: the manual's own intro is on screen, and the search's draft no longer goes over it.
+  const state: { reading?: Reading; read: boolean } = { read: false };
+  // `others`: the same file at other links the search came across, tried in turn when `url` gives no PDF.
+  const read = (url: string, others: string[] = []): Reading => {
+    const stop = new AbortController();
+    live?.onProgress?.(READING_LINE);
+    const started = Date.now();
+    const tried: string[] = [];
+    let downloaded = false;
+    const protocol = (async () => {
+      const { pdf, url: from } = await downloadFirst([url, ...others], { ...opts.download, signal: stop.signal }, link => tried.push(link));
+      downloaded = true;
+      if (from !== url) log(`[find-protocol] ${url} gave no PDF; read the same file from ${from}`);
+      const said = (line: string) => {
+        if (line === READING_LINE || stop.signal.aborted) return;
+        lines.push(line);
+        live?.onProgress?.(line);
+      };
+      const { protocol } = await readManual(provider, pdf, { url: from }, opts, {
+        onProgress: said,
+        onIntro: intro => {
+          if (stop.signal.aborted) return;
+          state.read = true;
+          live?.onIntro?.(intro);
+        },
+        signal: stop.signal,
+      });
+      log(`[find-protocol] read the manual in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+      return protocol;
+    })();
+    // Awaited once the search is done; one stopped meanwhile is not.
+    protocol.catch(() => {});
+    return { url, started, stop, protocol, tried, downloaded: () => downloaded };
+  };
+  const named = (early: FoundProtocol) => {
+    const url = early.document?.url;
+    if (state.reading || !url || !early.found || !provider.importProtocol || live?.signal?.aborted || localProtocolId(early, opts.protocols)) return;
+    state.reading = read(url, sameFileLinks(url, early.sources));
+  };
+  const { intro: drafted, ...found } = await provider.findProtocol(query, { ...live, onDocument: named });
+
   const url = found.document?.url;
-  if (!found.found || found.protocolId || !url || !provider.importProtocol || live?.signal?.aborted) return found;
+  const unread = !found.found || found.protocolId || !url || !provider.importProtocol || live?.signal?.aborted;
   // Found by another name since the search ran (an earlier import of the same manual).
-  const local = localProtocolId(found, opts.protocols);
+  const local = unread ? undefined : localProtocolId(found, opts.protocols);
+  // The search settled on another document than the one it named first: that one is read instead.
+  if (state.reading && (unread || local || state.reading.url !== url)) {
+    state.reading.stop.abort();
+    state.reading = undefined;
+  }
+  if (unread) return found;
   if (local) return { ...found, protocolId: local };
 
-  const progress = [...found.progress, READING_LINE];
-  live?.onProgress?.(READING_LINE);
-  const said = (line: string) => {
-    if (line === READING_LINE) return;
-    progress.push(line);
-    live?.onProgress?.(line);
-  };
-  const started = Date.now();
-  try {
-    const pdf = await downloadPdf(url, opts.download);
-    const { protocol } = await readManual(provider, pdf, { url }, opts, { onProgress: said, onIntro: live?.onIntro });
-    log(`[find-protocol] read the manual in ${((Date.now() - started) / 1000).toFixed(1)} s`);
-    return { ...found, progress, protocolId: protocol.id };
-  } catch (error) {
-    if (!(error instanceof UpstreamError)) throw error;
-    log(`[find-protocol] could not read the manual after ${((Date.now() - started) / 1000).toFixed(1)} s: ${error.message}`);
-    return found;
+  let reading = state.reading ?? read(url, sameFileLinks(url, found.sources));
+  if (drafted && !state.read) live?.onIntro?.(drafted);
+  for (;;) {
+    try {
+      const protocol = await reading.protocol;
+      return { ...found, progress: [...found.progress, READING_LINE, ...lines], protocolId: protocol.id };
+    } catch (error) {
+      if (!(error instanceof UpstreamError)) throw error;
+      // An early read knew only the links found by then: the whole answer may hold the same file at one more.
+      const more = reading.downloaded() || live?.signal?.aborted ? [] : sameFileLinks(url, found.sources).filter(link => !reading.tried.includes(link));
+      if (more.length) {
+        reading = read(more[0]!, more.slice(1));
+        continue;
+      }
+      log(`[find-protocol] could not read the manual after ${((Date.now() - reading.started) / 1000).toFixed(1)} s: ${error.message}`);
+      return found;
+    }
   }
 }

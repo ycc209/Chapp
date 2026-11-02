@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import type { Box, ReadLabels } from '../shared/ai.ts';
+import { describe, expect, it, vi } from 'vitest';
+import type { Box, FoundProtocol, ProtocolIntro, ReadLabels } from '../shared/ai.ts';
+import { api } from '../src/api/client.ts';
+import { useKit } from '../src/screens/kit/store.ts';
 import { boxAt, labelCrop, padded, SAMPLE, sampleLayout, squareOn } from '../shared/kit.ts';
-import { groupLabels, planFound, type Seen } from '../src/screens/kit/found.ts';
-import { cantLook, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
+import { existsSync } from 'node:fs';
+import { loadProtocol } from '../server/ai/protocols.ts';
+import { labelsInstructions } from '../server/ai/vision.ts';
+import { contentsTarget, contentsTargets, groupLabels, labelTargets, planFound, sameBottles, type Seen } from '../src/screens/kit/found.ts';
+import { cantLook, following, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectOf, takenOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
+import { followable, frameClock, frameTimes, isVideo, VIDEO_FRAMES, videoType } from '../src/screens/kit/photo.ts';
+import { bestKitRead, labelCalls, tellKit } from '../src/screens/kit/analysis.ts';
+import { useSession } from '../src/state/session.ts';
+import { useRun } from '../src/state/run.ts';
+
+const local = existsSync(new URL('../data/protocols/pierce-bca.json', import.meta.url));
 
 // From what the models found to what the kit screen shows (Recognized, Kit, Kit-Filled): groups, matches, the things
 // Chapp asks about, the rows, and the boxes and crops behind them. Pure; no browser.
@@ -121,14 +132,197 @@ describe('the questions and rows', () => {
   });
 
   it("words Chapp's lines like the designs", () => {
-    expect(recognized(12, 3, 2, 2)).toBe('SAM 3.1 found 12 bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2.');
-    expect(recognized(1, 1, 1, 0)).toBe('SAM 3.1 found 1 bottle in 1 photo. Muse Spark read 1 label.');
-    expect(recognized(3, 1, 0, 3)).toBe('SAM 3.1 found 3 bottles in 1 photo. I’m not sure about 3.');
+    expect(recognized(12, 3, 2, 2)).toBe('SAM 3.1 found the bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2.');
+    expect(recognized(1, 1, 1, 0)).toBe('SAM 3.1 found the bottle in 1 photo. Muse Spark read 1 label.');
+    expect(recognized(3, 1, 0, 3)).toBe('SAM 3.1 found the bottles in 1 photo. I’m not sure about 3.');
     expect(looking(3)).toBe('SAM 3.1 is finding the bottles in your 3 photos…');
     expect(looking(1)).toBe('SAM 3.1 is finding the bottles in your photo…');
-    expect(reading(5)).toBe('SAM 3.1 found 5 bottles. Muse Spark is reading their labels…');
+    expect(reading(5)).toBe('SAM 3.1 found the bottles. Muse Spark is reading their labels…');
     expect(cantLook(4)).toBe('I can’t look at the photos right now. Show me the 4 bottles.');
     expect(noneFound(1, 4)).toBe('SAM 3.1 couldn’t find the bottles in this photo. Show me the 4 bottles.');
+  });
+
+  it('says "your sweep" when every photo is a frame of one sweep of the camera', () => {
+    expect(takenOf([{ sweep: true }, { sweep: true }])).toBe('sweep');
+    expect(takenOf([{ sweep: true }, {}])).toBe(2);
+    expect(takenOf([])).toBe(0);
+    expect(looking('sweep')).toBe('SAM 3.1 is finding the bottles in your sweep…');
+    expect(recognized(5, 'sweep', 4, 1)).toBe('SAM 3.1 found the bottles in your sweep. Muse Spark read 4 labels. I’m not sure about 1.');
+    expect(noneFound('sweep', 5)).toBe('SAM 3.1 couldn’t find the bottles in your sweep. Show me the 5 bottles.');
+  });
+
+  it('says "your video" when every photo is a frame picked from a video the user chose', () => {
+    expect(takenOf([{ video: true }, { video: true }])).toBe('video');
+    expect(takenOf([{ video: true }, { sweep: true }])).toBe(2);
+    expect(looking('video')).toBe('SAM 3.1 is finding the bottles in your video…');
+    expect(recognized(3, 'video', 3, 0)).toBe('SAM 3.1 found the bottles in your video. Muse Spark read 3 labels.');
+    expect(noneFound('video', 4)).toBe('SAM 3.1 couldn’t find the bottles in your video. Show me the 4 bottles.');
+    expect(following('sweep')).toBe('SAM 3.1 is following the bottles through your sweep…');
+    expect(following('video')).toBe('SAM 3.1 is following the bottles through your video…');
+  });
+});
+
+describe('which kit a video shows', () => {
+  const kit = { vendor: 'Thermo Scientific', catalog: '23236', name: 'Coomassie Plus (Bradford) Assay Kit' };
+  const box = { found: true, kit, protocolId: null, query: 'Thermo Scientific Coomassie Plus (Bradford) Assay Kit 23236', packaging: 'box' };
+  const bottle = { found: true, kit: { ...kit, name: 'Coomassie Plus Protein Assay Reagent', catalog: '' }, protocolId: null, query: 'Thermo Scientific Coomassie Plus Protein Assay Reagent' };
+  const known = { found: true, kit: { vendor: 'Thermo Scientific', catalog: '23225', name: 'Pierce BCA Protein Assay Kit' }, protocolId: 'pierce-bca' };
+
+  it('is the best reading of its frames: a kit Chapp has, else one read on its box, else on a bottle', () => {
+    expect(bestKitRead([null, bottle, box])).toBe(box);
+    expect(bestKitRead([bottle, box, known])).toBe(known);
+    expect(bestKitRead([bottle])).toBe(bottle);
+    expect(bestKitRead([null, { found: false }, { found: true, kit, protocolId: null }])).toBeNull();
+  });
+
+  it('opens the search for the manual of a kit Chapp does not have, and changes nothing when no frame says', () => {
+    useRun.setState({ protocolId: null });
+    useSession.setState({ exchange: null });
+    expect(tellKit([null, { found: false }])).toBe('none');
+    expect(useSession.getState().exchange).toBeNull();
+    expect(useRun.getState().protocolId).toBeNull();
+    useRun.setState({ protocolId: 'pierce-bca', step: 3 });
+    expect(tellKit([bottle, box])).toBe('search');
+    // The query is what makes the Overview search (an exchange without one is only something said).
+    expect(useSession.getState().exchange).toEqual({ ask: `Find the manual for the ${box.query}`, say: '', query: box.query });
+    // A new run: the last kit's protocol would have the labels read against the wrong kit while the manual is found.
+    expect(useRun.getState().protocolId).toBeNull();
+    expect(useRun.getState().step).toBe(0);
+  });
+
+  it('makes a kit Chapp has the run’s, and drops a search asked before so the Overview does not run it again', () => {
+    useSession.setState({ exchange: { ask: 'Find the manual for the 3T3-L1 kit', say: '', query: '3T3-L1 kit' } });
+    expect(tellKit([known])).toBe('known');
+    expect(useRun.getState().protocolId).toBe('pierce-bca');
+    expect(useSession.getState().exchange).toBeNull();
+    // Something said that searches nothing stays.
+    useSession.setState({ exchange: { ask: 'Hi', say: 'Hello' } });
+    tellKit([known]);
+    expect(useSession.getState().exchange).toEqual({ ask: 'Hi', say: 'Hello' });
+  });
+
+  it('reads the labels against what the manual says the kit holds as soon as it says, and makes its protocol the run’s once read', async () => {
+    const query = 'Cayman 3T3-L1 Differentiation Kit 10009839';
+    let done: (found: FoundProtocol) => void = () => {};
+    let told: ((intro: ProtocolIntro) => void) | undefined;
+    const search = vi.spyOn(api, 'findProtocolLive').mockImplementation((_q, _heard, _signal, onIntro) => {
+      told = onIntro;
+      return new Promise(resolve => (done = resolve));
+    });
+    useKit.getState().clear();
+    useRun.setState({ protocolId: null });
+    expect(tellKit([{ found: true, kit: { vendor: 'Cayman', catalog: '10009839', name: '3T3-L1 Differentiation Kit' }, protocolId: null, query, packaging: 'pouch' }])).toBe('search');
+    expect(useKit.getState().contents).toBeNull();
+
+    told!({ contents: [{ name: 'Insulin', amount: '' }, { name: 'DMSO I', amount: '' }] } as ProtocolIntro);
+    expect(useKit.getState().contents?.map(c => c.name)).toEqual(['Insulin', 'DMSO I']);
+    done({ found: true, protocolId: '3t3-l1-adipocyte-differentiation', progress: [], answer: '', sources: [] });
+    await vi.waitFor(() => expect(useRun.getState().protocolId).toBe('3t3-l1-adipocyte-differentiation'));
+    search.mockRestore();
+  });
+});
+
+describe('a new kit’s contents', () => {
+  const target = (id: string, name: string, labels: string[] = []) => ({ id, name, role: 'reagent', kit: true, labels });
+
+  it('are what its manual lists, a volume only when the amount is one', () => {
+    const contents = contentsTargets([
+      { name: 'Insulin', amount: '1 mL' },
+      { name: ' ', amount: '' },
+      { name: '1000X Differentiation Cocktail', amount: '10 × 1 mL' },
+    ]);
+    expect(contents).toEqual([
+      { id: 'contents:0', name: 'Insulin', role: 'kit component', kit: true, labels: ['Insulin'], volumes: ['1 mL'] },
+      { id: 'contents:1', name: '1000X Differentiation Cocktail', role: 'kit component', kit: true, labels: ['1000X Differentiation Cocktail'] },
+    ]);
+    expect(contentsTarget(contents).needs.map(n => [n.id, n.name, n.kit])).toEqual([['contents:0', 'Insulin', true], ['contents:1', '1000X Differentiation Cocktail', true]]);
+  });
+
+  it('become the protocol’s bottles named alike, each once, and nothing for a bottle only half like them', () => {
+    const contents = contentsTargets([
+      { name: 'Insulin', amount: '' },
+      { name: 'Differentiation Cocktail (1000X)', amount: '' },
+      { name: 'DMSO I', amount: '' },
+      { name: 'Buffer A', amount: '' },
+    ]);
+    const bottles = [
+      target('insulin', 'Insulin', ['Insulin']),
+      target('cocktail', '1000X Differentiation Cocktail', ['Differentiation Cocktail']),
+      target('dmso-i', 'DMSO I', ['DMSO I', 'DMSO (anhydrous)']),
+      target('buffer-b', 'Buffer B'),
+      target('dmem', 'DMEM'),
+    ];
+    expect(sameBottles(contents, bottles)).toEqual({ 'contents:0': 'insulin', 'contents:1': 'cocktail', 'contents:2': 'dmso-i', 'contents:3': null });
+    // Two contents like one bottle: the more alike has it.
+    expect(sameBottles(contentsTargets([{ name: 'Insulin solution', amount: '' }, { name: 'Insulin', amount: '' }]), bottles)).toEqual({ 'contents:0': null, 'contents:1': 'insulin' });
+  });
+});
+
+describe('reading labels', () => {
+  it.runIf(local)('tells the model and the matching what volumes each bottle comes in', () => {
+    const bca = loadProtocol('pierce-bca')!;
+    const byId = Object.fromEntries(labelTargets(bca).map(t => [t.id, t.volumes]));
+    expect(byId['reagent-a']).toEqual(['500 mL', '100 mL']);
+    expect(byId['reagent-b']).toEqual(['25 mL', '2.5 mL']);
+    expect(byId.diluent).toBeUndefined();
+    expect(labelsInstructions(labelTargets(bca))).toContain('comes as 25 mL or 2.5 mL');
+  });
+
+  it('reads a bottle’s views together, the calls about as full as each other', () => {
+    expect(labelCalls([['a1', 'a2', 'a3'], ['b1'], ['c1', 'c2']], 4)).toEqual([
+      { crops: ['a1', 'a2', 'a3'], views: [3] },
+      { crops: ['b1', 'c1', 'c2'], views: [1, 2] },
+    ]);
+    // Photos alone: twelve to a call, as before.
+    expect(labelCalls(Array.from({ length: 14 }, (_, i) => [i])).map(c => c.crops.length)).toEqual([7, 7]);
+  });
+});
+
+describe('frames from a video', () => {
+  it('are spread over it, about one every 2 s, at most 8, neither end a frame', () => {
+    expect(frameTimes(12)).toEqual([1, 3, 5, 7, 9, 11]);
+    expect(frameTimes(1)).toEqual([0.5]);
+    const long = frameTimes(120);
+    expect(long).toHaveLength(VIDEO_FRAMES);
+    expect(long[0]).toBe(7.5);
+    expect(long.at(-1)).toBe(112.5);
+    // A video whose length the browser cannot tell: its first frame.
+    expect(frameTimes(Number.NaN)).toEqual([0]);
+    expect(frameTimes(Infinity)).toEqual([0]);
+  });
+
+  it('are numbered as SAM numbers them, by when each starts as the video says, else spread evenly over it', () => {
+    // A recording whose frames come unevenly: the frame on screen is the last one started, a frame is sought at its middle.
+    const uneven = frameClock(1, [0, 0.03, 0.1, 0.5, 0.52]);
+    expect([0, 0.029, 0.03, 0.2, 0.499, 0.5, 0.9, 5].map(t => uneven.frameAt(t))).toEqual([0, 1, 1, 2, 3, 3, 4, 4]);
+    expect(uneven.timeOf(2)).toBeCloseTo(0.3);
+    expect(uneven.frameAt(uneven.timeOf(3))).toBe(3);
+    // The last frame runs to about one frame's length past its start, within the video's length.
+    expect(uneven.timeOf(4)).toBeGreaterThan(0.52);
+    expect(uneven.timeOf(4)).toBeLessThan(0.7);
+    // Without its times: SAM's count of frames over the video's length; before SAM has counted them, 30 a second.
+    const counted = frameClock(8, null, 240);
+    expect([counted.frameAt(0), counted.frameAt(4), counted.frameAt(7.99), counted.frameAt(9)]).toEqual([0, 120, 239, 239]);
+    expect(counted.timeOf(120)).toBeCloseTo(4.0167, 3);
+    const guessed = frameClock(10);
+    expect([guessed.frameAt(1), guessed.frameAt(20)]).toEqual([30, 299]);
+    expect(frameClock(Number.NaN).frameAt(3)).toBe(0);
+  });
+
+  it('come from a video by its type, or a phone’s .mov without one', () => {
+    expect(isVideo(new File([], 'kit.mov', { type: 'video/quicktime' }))).toBe(true);
+    expect(isVideo(new File([], 'IMG_0042.MOV'))).toBe(true);
+    expect(isVideo(new File([], 'kit.jpg', { type: 'image/jpeg' }))).toBe(false);
+  });
+
+  it('go to SAM to follow when the video is an MP4 or a MOV of 20 s or less', () => {
+    const mov = new File([new Uint8Array(1000)], 'IMG_0042.MOV');
+    expect(videoType(mov)).toBe('video/quicktime');
+    expect(videoType(new Blob([], { type: 'video/mp4;codecs=avc1' }))).toBe('video/mp4');
+    expect(followable(mov, 12)).toBe(true);
+    expect(followable(mov, 45)).toBe(false);
+    expect(followable(mov, Number.NaN)).toBe(false);
+    expect(followable(new File([], 'kit.webm', { type: 'video/webm' }), 5)).toBe(true);
   });
 });
 

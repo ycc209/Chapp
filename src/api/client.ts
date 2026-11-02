@@ -1,7 +1,8 @@
 import type { ApiError, ConverseReply, ConverseRequest, FoundProtocol, Health, PlateReading, ReadPlateRequest, Transcript } from '../../shared/ai.ts';
-import type { ReadLabels, ReadLabelsRequest, RecognizedKit, RecognizeKitRequest, SegmentBottlesRequest, SegmentedBottles } from '../../shared/ai.ts';
-import { findProtocolLive } from './events.ts';
+import type { ReadLabels, ReadLabelsRequest, RecognizedKit, RecognizeKitRequest, SegmentBottlesRequest, SegmentedBottles, FindPackagingRequest, KitPackaging, WholeBottle, WholeBottleRequest, BottleCap, BottleCapRequest } from '../../shared/ai.ts';
+import { findProtocolLive, trackBottlesLive } from './events.ts';
 import { importProtocolLive } from './imports.ts';
+import { converseLive } from './converse.ts';
 
 /**
  * The app's calls to the server (routes in shared/ai.ts). Relative URLs: Vite forwards /api in development and the
@@ -26,6 +27,9 @@ const postJson = (body: unknown, signal?: AbortSignal): RequestInit => ({
 export const api = {
   health: (signal?: AbortSignal) => call<Health>('/api/health', { signal }),
   converse: (request: ConverseRequest, signal?: AbortSignal) => call<ConverseReply>('/api/converse', postJson(request, signal)),
+  converseLive,
+  /** Removes a protocol Chapp read from a manual from this computer, with its manual and pictures (Library). */
+  deleteProtocol: (id: string) => call<{ deleted: string }>(`/api/protocols/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   findProtocol: (query: string, signal?: AbortSignal) => call<FoundProtocol>('/api/find-protocol', postJson({ query }, signal)),
   /** The same search, its progress lines handed to onProgress as Chapp says them (src/api/events.ts). */
   findProtocolLive,
@@ -43,7 +47,18 @@ export const api = {
   /** Kit photos (server/kit.ts): Muse Spark reads the kit's box; SAM 3.1 finds the bottles; Muse Spark reads their labels. */
   recognizeKit: (request: RecognizeKitRequest, signal?: AbortSignal) => call<RecognizedKit>('/api/kit/recognize', postJson(request, signal)),
   segmentBottles: (request: SegmentBottlesRequest, signal?: AbortSignal) => call<SegmentedBottles>('/api/kit/segment', postJson(request, signal)),
+  /** SAM 3.1 finds the kit's packaging (a box, a bag) on a photo of it, for its cover (screens/kit/cover.ts). */
+  findPackaging: (request: FindPackagingRequest, signal?: AbortSignal) => call<KitPackaging>('/api/kit/packaging', postJson(request, signal)),
+  /**
+   * A sweep or a video (MP4 or MOV, sent as it is) → the bottles SAM 3.1 followed through it, each once; `live` hears
+   * each frame as SAM is done with it (src/api/events.ts).
+   */
+  trackBottles: trackBottlesLive,
   readLabels: (request: ReadLabelsRequest, signal?: AbortSignal) => call<ReadLabels>('/api/kit/labels', postJson(request, signal)),
+  /** A bottle's crop → which way its cap points (Muse Spark), to stand it upright on the bench. */
+  bottleCap: (request: BottleCapRequest, signal?: AbortSignal) => call<BottleCap>('/api/kit/cap', postJson(request, signal)),
+  /** A bottle's upright crop → Muse Image's picture of it whole, in the same frame (bench/whole.ts lays the photo over it). */
+  wholeBottle: (request: WholeBottleRequest, signal?: AbortSignal) => call<WholeBottle>('/api/kit/whole', postJson(request, signal)),
 };
 
 /** POST /api/push/timer: the browser's push subscription (PushSubscription.toJSON()) and what to say when it ends. */

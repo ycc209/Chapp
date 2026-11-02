@@ -1,3 +1,4 @@
+import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
@@ -15,12 +16,22 @@ import type { Exchange } from './voice.ts';
  * the bench model (model.ts): the protocol's amounts sized to the plan.
  */
 
-/** Chapp's line at the top of a step (17 px, ink); `nums` lines up figures that count (Run-Standards, Run-Load). */
-export function Answer({ children, nums, className }: { children: ReactNode; nums?: boolean; className?: string }) {
-  return (
-    <p aria-label="Chapp's answer" className={cn('m-0 mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink', nums && 'tabular-nums', className)}>
+/**
+ * Chapp's line at the top of a step (17 px, ink); `nums` lines up figures that count (Run-Standards, Run-Load). `aside`
+ * sits to its right: the step's picture (Picture.tsx).
+ */
+export function Answer({ children, nums, aside, className }: { children: ReactNode; nums?: boolean; aside?: ReactNode; className?: string }) {
+  const line = (
+    <p aria-label="Chapp's answer" className={cn('m-0 px-1 text-[17px] leading-6 font-medium text-ink', aside ? 'min-w-0 flex-1' : 'mb-6 shrink-0', nums && 'tabular-nums', !aside && className)}>
       {children}
     </p>
+  );
+  if (!aside) return line;
+  return (
+    <div className={cn('mb-6 flex shrink-0 items-start gap-3', className)}>
+      {line}
+      {aside}
+    </div>
   );
 }
 
@@ -38,8 +49,7 @@ export function YouSaid({ text }: { text: string }) {
 
 /** A question asked at the bench and Chapp's answer from the manual, with where it says so. */
 export function Asked({ exchange, gloves }: { exchange: Exchange; gloves?: boolean }) {
-  const answer = exchange.phase === 'reply' ? exchange.say : exchange.phase === 'error' ? ERROR_LINE : '';
-  const source = exchange.phase === 'reply' ? exchange.sources[0] : undefined;
+  const answer = exchange.phase === 'error' ? exchange.error || ERROR_LINE : exchange.say || '';
   return (
     <div className="mb-6 flex shrink-0 flex-col">
       {gloves ? (
@@ -48,14 +58,15 @@ export function Asked({ exchange, gloves }: { exchange: Exchange; gloves?: boole
         </DotLabel>
       ) : (
         <>
-          <DotLabel className="mb-1.5 px-1">{exchange.phase === 'reply' && exchange.command ? 'You said' : 'You asked'}</DotLabel>
+          <DotLabel className="mb-1.5 px-1">{exchange.phase === 'reply' && exchange.done?.length ? 'You said' : 'You asked'}</DotLabel>
           <p className="m-0 mb-3 px-1 text-[20px] leading-[26px] font-bold text-ink">{exchange.ask}</p>
         </>
       )}
       {/* Always mounted, so screen readers announce the answer when it arrives. */}
-      <p aria-live="polite" aria-label="Chapp's answer" className="m-0 px-1 text-[17px] leading-6 font-medium text-ink">
-        {exchange.phase === 'thinking' ? <span className="text-muted">…</span> : answer}
-      </p>
+      <div aria-live="polite" aria-label="Chapp's answer" className="m-0 px-1 text-[17px] leading-6 font-medium text-ink">
+        {answer && <ReplyText text={answer} />}
+        {exchange.phase === 'thinking' && (exchange.progress || !answer) && <span className={answer ? 'mt-2 block text-[13px] leading-[18px] text-muted' : 'text-muted'}>{exchange.progress || '…'}</span>}
+      </div>
       {exchange.phase === 'reply' && exchange.done && (
         <ul aria-label="What Chapp changed" className="m-0 mt-3 flex list-none flex-col gap-1.5 p-0 px-1">
           {exchange.done.map((line, i) => (
@@ -66,17 +77,7 @@ export function Asked({ exchange, gloves }: { exchange: Exchange; gloves?: boole
         </ul>
       )}
       {exchange.phase === 'reply' && exchange.confirm && <Confirm actions={exchange.confirm} className="mt-3" />}
-      {source && (
-        <a
-          href={source.url}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 self-start px-1 text-[13px] leading-[18px] font-semibold text-text underline decoration-line underline-offset-2"
-        >
-          {source.title ?? 'Source'}
-          {source.page ? `, page ${source.page}` : ''}
-        </a>
-      )}
+      {exchange.phase === 'reply' && <ReplySources sources={exchange.sources} className="px-1" />}
     </div>
   );
 }
@@ -94,20 +95,20 @@ export function StandardsStep({ v }: { v: View }) {
   return (
     <>
       {ready ? (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           Your <B>{standardsOf(series.vials).length} standards</B> are already made. Next, {next}.
         </Answer>
       ) : line.kind === 'all' ? (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           All <B>{line.total} standards</B> are ready. Next, {next}.
         </Answer>
       ) : line.kind === 'last' ? (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           Last one, <B>{line.vial.id}</B>: <B>{line.say[0]}</B>
           {line.vial.blank ? <>, {line.say[1]}. That’s the blank.</> : <> and <B>{line.say[1]}</B>.</>}
         </Answer>
       ) : (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           <B>
             {line.done} of {line.total}
           </B>{' '}
@@ -128,7 +129,8 @@ export function StandardsStep({ v }: { v: View }) {
 
 /**
  * The bottles a step pours from, with the user's own photos of them (STORYBOARD ⑤: step cards with the bottle
- * photos), as Standards-2 draws them. Shown once the kit has been photographed.
+ * photos), as Standards-2 draws them. Shown once the kit has been photographed. The mix step has no need of them: its
+ * picture plays with the user's bottles and the run's amounts on it.
  */
 export function Bottles({ v, stage, className }: { v: View; stage: 'standards' | 'mix'; className?: string }) {
   const { p, bench } = v;
@@ -165,24 +167,38 @@ export function keepsFor(b: Bench, p: View['p']) {
   return note ? `it ${note.text[0]!.toLowerCase()}${note.text.slice(1).replace(/\.$/, '')}` : '';
 }
 
-/** Run-Mix: how much to make, the parts in order, and why that much. */
+/** Run-Mix: the step played with the user's own bottles, the amounts big on it; with the words on, how much to make, the parts in order, and why that much. */
 export function MixStep({ v }: { v: View }) {
   const r = v.bench.reagent;
   const [open, setOpen] = useState(false);
   const keeps = keepsFor(v.bench, v.p);
+  return (
+    <>
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Answer>
+            Make <B>{amountText(r.make)}</B> now{keeps ? `; ${keeps}` : ''}.
+          </Answer>
+          <ReagentParts plan={r} size="run" then={['Swirl until it is clear green']} note="Add B last. Cloudy, then green." className="mb-7 shrink-0" />
+          <Why v={v} open={open} onOpen={setOpen} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** Why that much working reagent: the wells times the volume, and what is left for what stays in the tips and the tube. */
+function Why({ v, open, onOpen }: { v: View; open: boolean; onOpen: (open: boolean) => void }) {
+  const r = v.bench.reagent;
   // Parts rounded for the pipette (A to 0.1 mL), shown against their exact share.
   const minor = r.parts.filter(x => amountText(x.volume) !== amountText(x.exact));
   return (
-    <>
-      <Answer>
-        Make <B>{amountText(r.make)}</B> now{keeps ? `; ${keeps}` : ''}.
-      </Answer>
-      <ReagentParts plan={r} size="run" then={['Swirl until it is clear green']} note="Add B last. Cloudy, then green." className="mb-7 shrink-0" />
       <div className="flex shrink-0 flex-col border-b border-line">
         <button
           type="button"
           aria-expanded={open}
-          onClick={() => setOpen(o => !o)}
+          onClick={() => onOpen(!open)}
           className="flex min-h-14 items-center gap-3 border-0 border-t border-line bg-transparent px-1 text-left font-[inherit] text-ink outline-none focus-visible:outline-2 focus-visible:outline-blue"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#55555c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -212,7 +228,7 @@ export function MixStep({ v }: { v: View }) {
         {open && (
           <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
             <p className="m-0 text-[16px] leading-[22px] text-ink tabular-nums">
-              {r.wells} wells × {amountText(r.perWell)} = {amountText(r.need)}. {amountText(r.make)} leaves {amountText(r.make - r.need)} for the tips and the trough.
+              {r.wells} wells × {amountText(r.perWell)} = {amountText(r.need)}. {amountText(r.make)} leaves {amountText(r.make - r.need)} for what stays in the tips and the tube.
             </p>
             {minor.length > 0 && (
               <p className="m-0 text-[15px] leading-[22px] text-text tabular-nums">
@@ -222,8 +238,6 @@ export function MixStep({ v }: { v: View }) {
           </div>
         )}
       </div>
-      <Bottles v={v} stage="mix" className="mt-7" />
-    </>
   );
 }
 
@@ -237,7 +251,7 @@ export function LoadStep({ v }: { v: View }) {
   return (
     <>
       {t ? (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           <B>
             Tube {k + 1} of {plate.tubes.length}
           </B>
@@ -246,7 +260,7 @@ export function LoadStep({ v }: { v: View }) {
           {load} µL in each.
         </Answer>
       ) : (
-        <Answer nums>
+        <Answer nums aside={v.picture?.small}>
           All <B>{plate.wells} wells</B> are loaded. Next, <B>{amountText(add.volume)}</B> of {reagent.name.toLowerCase()} into every well.
         </Answer>
       )}
@@ -263,7 +277,7 @@ export function LoadStep({ v }: { v: View }) {
 
 // ─── 4 Add the reagent ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** Run-Add: the reagent into every well, the shake, the cover. */
+/** Run-Add: the reagent into every well, its volume big on the picture; with the words on, the shake and the cover too. */
 export function AddStep({ v }: { v: View }) {
   const { add, plate, reagent, incubation } = v.bench;
   const items: ReactNode[] = [
@@ -275,8 +289,13 @@ export function AddStep({ v }: { v: View }) {
   if (incubation?.covered) items.push('Cover the plate');
   return (
     <>
-      <Answer>Same order as you loaded, so every well gets the same time. Nothing to say per well.</Answer>
-      <NumberedList aria-label="What to do" items={items} className="mb-7 shrink-0" />
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Answer>Same order as you loaded, so every well gets the same time. Nothing to say per well.</Answer>
+          <NumberedList aria-label="What to do" items={items} className="mb-7 shrink-0" />
+        </>
+      )}
     </>
   );
 }
@@ -296,6 +315,8 @@ export function IncubateStep({ v }: { v: View }) {
   if (t.phase === 'choose') {
     return (
       <>
+        {v.picture?.big}
+        {v.words && (
         <Answer>
           {temp && (
             <>
@@ -320,6 +341,7 @@ export function IncubateStep({ v }: { v: View }) {
             ' Say “start” when the plate is in.'
           )}
         </Answer>
+        )}
         <div className="mb-7 flex shrink-0 flex-col gap-3">
           {choices.length > 1 && <MarkChips aria-label="How long to incubate" options={choices} value={t.total} onChange={v.choose} />}
           <DoneAt seconds={t.total} marked={v.flash} />
@@ -355,7 +377,7 @@ export function IncubateStep({ v }: { v: View }) {
 
 // ─── 6 Read ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Run-Read: cool, read, and hand Chapp the readings (the + at the bottom left: the export, or the sample one). */
+/** Run-Read: cool, read (the wavelength big on the reader; the words by choice), and hand Chapp the readings (the + at the bottom left: the export, or the sample one). */
 export function ReadStep({ v }: { v: View }) {
   const read = `${v.bench.readout.value} ${v.bench.readout.unit}`;
   if (v.check) {
@@ -368,14 +390,19 @@ export function ReadStep({ v }: { v: View }) {
   }
   return (
     <>
-      <Answer>
-        Cool the plate to room temperature, then read every well at <B>{read}</B>.
-      </Answer>
-      <NumberedList
-        aria-label="What to do"
-        items={['Cool to room temperature', <>Read at <B>{read}</B></>, 'Give me the readings']}
-        className="mb-7 shrink-0"
-      />
+      {v.picture?.big}
+      {v.words && (
+        <>
+          <Answer>
+            Cool the plate to room temperature, then read every well at <B>{read}</B>.
+          </Answer>
+          <NumberedList
+            aria-label="What to do"
+            items={['Cool to room temperature', <>Read at <B>{read}</B></>, 'Give me the readings']}
+            className="mb-7 shrink-0"
+          />
+        </>
+      )}
       {v.reading ? (
         <p role="status" className="m-0 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
           Reading <B>{v.reading}</B>…
@@ -435,6 +462,43 @@ export function ReadingsIn({ v, className }: { v: View; className?: string }) {
         See the results
       </Link>
     </div>
+  );
+}
+
+// ─── Moving through the steps ────────────────────────────────────────────────────────────────────────────────────
+
+const NAV_PILL = 'flex min-h-10 cursor-pointer items-center rounded-[20px] border-0 px-[18px] font-[inherit] text-[15px] leading-5 font-semibold outline-none focus-visible:ring-2 focus-visible:ring-blue';
+const NAV_WHITE = 'shrink-0 bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
+
+/**
+ * Under a step, the buttons for what the voice does with "back" and "next": Back to the step before, Skip to the next
+ * one with this one left unticked (All steps still shows it to do), and Next, this one ticked off; on the last step,
+ * `last` (Finish) where the step has nothing of its own to end with. Not with gloves on: then the voice moves on.
+ */
+export function StepNav({ onBack, onSkip, next, last }: { onBack?: () => void; onSkip?: () => void; next?: { title: string; go: () => void }; last?: { label: string; go: () => void } }) {
+  if (!onBack && !next && !last) return null;
+  return (
+    <nav aria-label="Move through the steps" className="mt-auto flex shrink-0 items-center gap-2 px-1 pt-2">
+      {onBack && (
+        <button type="button" onClick={onBack} className={cn(NAV_PILL, NAV_WHITE)}>
+          Back
+        </button>
+      )}
+      {next && onSkip && (
+        <button type="button" onClick={onSkip} className={cn(NAV_PILL, NAV_WHITE)}>
+          Skip
+        </button>
+      )}
+      {next ? (
+        <button type="button" onClick={next.go} className={cn(NAV_PILL, 'min-w-0 bg-ink text-white')}>
+          <span className="truncate">Next · {next.title}</span>
+        </button>
+      ) : last ? (
+        <button type="button" onClick={last.go} className={cn(NAV_PILL, 'shrink-0 bg-ink text-white')}>
+          {last.label}
+        </button>
+      ) : null}
+    </nav>
   );
 }
 

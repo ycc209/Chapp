@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SHEET_DURATION, SHEET_EASE } from '../../components/ui/Sheet.tsx';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { cn } from '../../lib/cn.ts';
+import { useChatLog } from '../../state/conversationLog.ts';
 import { useSession } from '../../state/session.ts';
 import { HomeCenter } from './HomeCenter.tsx';
 import { PlusMenu } from './PlusMenu.tsx';
@@ -25,7 +26,15 @@ export function Home() {
   const [sidebar, setSidebar] = useState(opening === 'sidebar');
   const [typing, setTyping] = useState(opening === 'typing');
   const plusRef = useRef<HTMLButtonElement>(null);
+  const navigate = useNavigate();
   const { turn, send, newConversation } = useConverse('home');
+  const exchanges = useChatLog(s => s.exchanges.length);
+  // The first exchange shows here, in this screen's own type; from the next one on, a conversation looks like one:
+  // the turn goes out from here, and the conversation screen shows it arriving among the rest.
+  const ask = (text: string) => {
+    send(text);
+    if (exchanges > 0 || turn) navigate('/chat', { state: { from: '/' } });
+  };
 
   useEffect(() => {
     if (!opening) return;
@@ -56,14 +65,14 @@ export function Home() {
             plusOpen={plus}
             plusRef={plusRef}
             onPlus={() => setPlus(open => !open)}
-            onSend={send}
+            onSend={ask}
             onClose={() => {
               setTyping(false);
               setPlus(false);
             }}
           />
         ) : (
-          <BottomBar onPlus={() => setPlus(open => !open)} onKeyboard={() => setTyping(true)} onUtterance={send} />
+          <BottomBar tallGlow busy={turn?.phase === 'thinking'} onPlus={() => setPlus(open => !open)} onKeyboard={() => setTyping(true)} onUtterance={ask} />
         )}
       </div>
       <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />

@@ -1,4 +1,5 @@
-import { MAX_TURN_MS, NO_SPEECH_MS, type Engine, type EngineEvents, type Mode, type Problem } from './engine.ts';
+import { COMMIT_MS, MAX_TURN_MS, NO_SPEECH_MS, type Engine, type EngineEvents, type Mode, type Problem } from './engine.ts';
+import { afterCommitted, normalizeHeard } from './heard.ts';
 import { Microphone } from './mic.ts';
 import { toPcm16 } from './wav.ts';
 
@@ -13,9 +14,10 @@ export type LiveEvent = { type?: string; transcript?: string; final?: boolean };
 /**
  * Hears live through the server (WebSocket /api/voice/live → Muse Voice Transcribe's realtime endpoint): the
  * microphone streams as the user speaks, the words show as they are heard, and the model decides when a turn is over
- * (speechComplete), not a loudness threshold. tap: the first finished turn · hold: every turn until it is let go,
- * joined · talk: each finished turn, until the conversation ends. If the connection cannot be made it ends with
- * 'network', and the controller records turns instead (server.ts).
+ * (speechComplete), not a loudness threshold; words that stop changing for COMMIT_MS with no such end are taken as
+ * the turn, since a bare command reads as unfinished to the model (engine.ts). tap: the first finished turn · hold:
+ * every turn until it is let go, joined · talk: each finished turn, until the conversation ends. If the connection
+ * cannot be made it ends with 'network', and the controller records turns instead (server.ts).
  */
 export class LiveEngine implements Engine {
   private mode: Mode;
@@ -32,6 +34,9 @@ export class LiveEngine implements Engine {
   private heldMs = 0;
   private quietTimer = 0;
   private closingTimer = 0;
+  private commitTimer = 0;
+  /** talk: words already sent as a turn before the transcriber closed it, normalized, so its final transcript does not go twice. */
+  private committed = '';
 
   constructor(mode: Mode, events: EngineEvents) {
     this.mode = mode;
@@ -58,12 +63,15 @@ export class LiveEngine implements Engine {
     // A turn already finished while it was held: that was the pause that ends a tap.
     if (this.said.length && !this.hearing) return this.deliver();
     if (!this.heardAny) this.quietTimer = window.setTimeout(() => this.stop('no-speech'), NO_SPEECH_MS);
+    this.armCommit();
   }
 
   /** Chapp is about to speak: the microphone and the stream go, and come back fresh afterwards. */
   pause() {
     if (this.state !== 'listening') return;
     this.state = 'paused';
+    clearTimeout(this.commitTimer);
+    this.committed = '';
     this.mic.release();
     this.hangUp();
     this.said = [];
@@ -81,6 +89,7 @@ export class LiveEngine implements Engine {
     this.state = 'done';
     clearTimeout(this.quietTimer);
     clearTimeout(this.closingTimer);
+    clearTimeout(this.commitTimer);
     this.mic.close();
     this.hangUp();
   }
@@ -137,15 +146,19 @@ export class LiveEngine implements Engine {
     if (event.type === 'speechStart') {
       this.heardAny = true;
       clearTimeout(this.quietTimer);
+      clearTimeout(this.commitTimer);
     } else if (event.type === 'transcript' && !event.final) {
-      this.hearing = (event.transcript ?? '').trim();
+      this.hearing = this.rest((event.transcript ?? '').trim());
       if (this.hearing) {
         this.heardAny = true;
         clearTimeout(this.quietTimer);
       }
       this.show();
+      this.armCommit();
     } else if (event.type === 'speechComplete') {
-      const text = (event.transcript ?? '').trim();
+      clearTimeout(this.commitTimer);
+      const text = this.rest((event.transcript ?? '').trim());
+      this.committed = '';
       this.hearing = '';
       if (text) this.said.push(text);
       if (this.state === 'closing') return this.show();
@@ -189,9 +202,35 @@ export class LiveEngine implements Engine {
     this.closingTimer = window.setTimeout(() => this.deliver(), CLOSING_MS);
   }
 
+  /** What `text` says beyond the words already sent as a turn (talk mode, after a commit). */
+  private rest(text: string): string {
+    return this.committed ? afterCommitted(text, this.committed) ?? '' : text;
+  }
+
+  /** The words have stopped changing: if the transcriber does not close the turn soon, they are taken as it. */
+  private armCommit() {
+    clearTimeout(this.commitTimer);
+    if (this.mode === 'hold' || this.state !== 'listening' || !this.hearing) return;
+    this.commitTimer = window.setTimeout(() => this.commit(), COMMIT_MS);
+  }
+
+  private commit() {
+    if (this.state !== 'listening' || this.mode === 'hold') return;
+    if (this.mode === 'tap') return this.deliver();
+    const text = [...this.said, this.hearing].filter(Boolean).join(' ').trim();
+    this.said = [];
+    this.hearing = '';
+    if (!text) return;
+    // The transcriber's own end of this turn, when it comes, repeats these words: only what follows them is new.
+    this.committed += normalizeHeard(text);
+    this.show();
+    this.events.turn(text);
+  }
+
   /** A tap's or a hold's words go, and the engine stops. */
   private deliver() {
     if (this.state === 'done') return;
+    clearTimeout(this.commitTimer);
     const text = [...this.said, this.hearing].filter(Boolean).join(' ').trim();
     this.said = [];
     this.hearing = '';

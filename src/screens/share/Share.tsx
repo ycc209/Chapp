@@ -5,6 +5,7 @@ import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { SampleDataTag } from '../../components/lab/index.ts';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
+import { useCovers } from '../../state/library.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { userName } from '../../state/profile.ts';
 import { useRun } from '../../state/run.ts';
@@ -62,11 +63,12 @@ export function ShareScreen() {
   const readingsFrom = useRun(s => s.readingsFrom);
   const photos = useRun(s => s.photos);
   const edits = useRun(s => s.edits);
+  const cover = useCovers(s => (protocolId ? s.covers[protocolId] : undefined));
   const { protocol, error } = useProtocol(protocolId);
   const withResults = hasResults({ readings });
   const shown: ShareScope = scope === 'noresults' && !withResults ? 'all' : scope;
   const [sendPhotos, setSendPhotos] = useState(true);
-  const hasPhotos = protocol ? protocol.components.some(c => photos[c.id]) : false;
+  const hasPhotos = protocol ? Boolean(cover) || protocol.components.some(c => photos[c.id]) : false;
   const photoState = !hasPhotos ? 'none' : sendPhotos ? 'sent' : 'kept';
 
   const setup = useMemo(
@@ -79,10 +81,10 @@ export function ShareScreen() {
         run,
         protocol,
         { r2: standardR2(protocol, run), sampleData: readingsFrom === 'sample' },
-        { photos: sendPhotos, from: userName },
+        { photos: sendPhotos, from: userName, cover },
       );
     },
-    [protocol, shown, protocolId, procedure, samples, replicates, standardReplicates, standards, readings, readingsFrom, photos, sendPhotos, edits],
+    [protocol, shown, protocolId, procedure, samples, replicates, standardReplicates, standards, readings, readingsFrom, photos, sendPhotos, edits, cover],
   );
   const { link, previous, failed, retry } = useShareLink(setup);
 

@@ -319,9 +319,9 @@ if (imported.length) {
   out(`${imported.length} runs were not sent by the benchmark but read from the raw replies the lead kept (scripts/bench/import-smoke.ts): ${[...new Set(imported.map(r => `${r.model} ${r.label}`))].join(', ')}. They ran as the app runs them, with the intro beside the inventory and then three calls at once, not one call at a time, so their per-call times carry a little concurrency. They were scored here with today\'s import.ts, which reads "Rev. D" as "D", so two text-steps-low-v2 runs score 48 here where the lead\'s compare said 47.`);
   out();
 }
-out('### Unit enums (micro sign or ASCII)');
+out('### Low scores of Muse Wonder 1.0 and Muse Spark 1.2');
 out();
-out('Until 2026-10-28 ~12:00 UTC the schemas\' unit enums used the micro sign ("µL", "µg/mL"). Muse Spark 1.3 at minimal and low often answered "mL" or "mg/mL" instead, in 8 of its 13 runs at those levels. That is every Spark 1.3 score of 25–29/49. One wrong range unit costs about 17 checks, because import-check matches the dilution tables by their range. The low scores of Muse Wonder 1.0 and Muse Spark 1.2 come from something else: the steps call returned empty `additions` and `alternatives` lists, and the curves call gave vial ids that were the curve\'s id, with concentration 0, so those rows were dropped. server/ai/import.ts now sends ASCII ("uL", "ug/mL") and reads it back as µ. Every run records which it used (`schemaUnits` in results.json). All Meta runs sent by the benchmark, and all Codex runs, used the micro sign. Codex never slipped on units with it. The *v2* rows and Claude runs, if any, use ASCII.');
+out('In those runs the steps call returned empty `additions` and `alternatives` lists, and the curves call gave vial ids that were the curve\'s id, with concentration 0, so those rows were dropped.');
 out();
 out('### Schema adaptations');
 out();

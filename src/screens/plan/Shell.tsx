@@ -1,5 +1,9 @@
+import type { Source } from '../../../shared/ai.ts';
+import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
+import type { Protocol } from '../../../shared/protocol.ts';
+import { beginRun } from '../../state/start.ts';
 import { useBottomWhileTyping } from '../../app/keyboard.ts';
 import { useScreen } from '../../app/screen.ts';
 import type { Expression } from '../../../shared/ai.ts';
@@ -81,32 +85,35 @@ export function Shell({ subtitle, next, onUtterance, scroller, className, childr
 }
 
 /** The black Start pill. */
-export function StartPill({ to, onClick }: { to: string; onClick: () => void }) {
+/** Start: the run begins where src/state/start.ts says (the prep, step 1, or past standards already made). */
+export function StartPill({ protocol }: { protocol: Protocol | null }) {
+  const navigate = useNavigate();
   return (
-    <Link to={to} onClick={onClick} className={cn(PILL, 'gap-[7px] bg-ink pr-[18px] pl-[15px] text-white')}>
+    <button type="button" disabled={!protocol} onClick={() => protocol && navigate(beginRun(protocol))} className={cn(PILL, 'gap-[7px] bg-ink pr-[18px] pl-[15px] text-white disabled:opacity-50')}>
       <PlayIcon />
       Start
-    </Link>
+    </button>
   );
 }
 
 /** What the user said, on the right in light blue (as on Protocol), and Chapp's answer under it. */
-export function Exchange({ text, answer, thinking }: { text: string; answer: string; thinking?: boolean }) {
+export function Exchange({ text, answer, thinking, sources }: { text: string; answer: string; thinking?: boolean; sources?: Source[] }) {
   return (
     <div className="flex shrink-0 flex-col">
       <div className="mb-5 flex justify-end">
         <p className="max-w-[calc(82%+32px)] rounded-[22px] bg-[#d6e8fc] px-4 py-2.5 text-[17px] leading-[22px] font-medium text-ink">{text}</p>
       </div>
       {/* Always mounted, so screen readers announce each answer as it arrives. */}
-      <p aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
-        {thinking ? <span className="text-muted">…</span> : answer}
-      </p>
+      <div aria-live="polite" aria-label="Chapp's answer" className="px-1 text-[17px] leading-6 font-medium text-ink">
+        {answer ? <ReplyText text={answer} /> : thinking ? <span className="text-muted">…</span> : null}
+      </div>
+      <ReplySources sources={sources} className="px-1" />
     </div>
   );
 }
 
 /** The answer to show for a turn with Chapp. */
-export const turnAnswer = (turn: Turn) => (turn.phase === 'reply' ? turn.say : turn.phase === 'error' ? ERROR_LINE : '');
+export const turnAnswer = (turn: Turn) => (turn.phase === 'error' ? turn.error || ERROR_LINE : turn.say || '');
 
 /**
  * Chapp's face for this screen while it is on (excited to start, thinking while it asks), back to neutral after, unless

@@ -7,7 +7,7 @@ import { useRun } from '../../state/run.ts';
 import { isPlannable } from '../../../shared/calc.ts';
 import { procedureFor, shortName } from '../protocol/content.ts';
 import { Exchange, PILL, Shell, StartPill, WHITE_PILL, turnAnswer, useFace, useFollow } from './Shell.tsx';
-import { planFor, plural, repWord, startStep, type PlanView } from './plan.ts';
+import { planFor, plural, repWord, type PlanView } from './plan.ts';
 import { usePlanTalk } from './usePlanTalk.ts';
 
 /**
@@ -29,8 +29,6 @@ export function RunChoose() {
 
   // A cell protocol has no standards or plate, and amounts Chapp cannot convert cannot be planned: no plan to show.
   const v = protocol && isPlannable(protocol, procedureFor(protocol, procedure)) ? planFor(protocol, procedure, { samples, replicates, standardReplicates, standards }) : null;
-  const step = startStep(standards);
-
   return (
     <Shell
       className="animate-in duration-300 ease-out slide-in-from-right"
@@ -42,7 +40,7 @@ export function RunChoose() {
           <Link to="/plan" className={cn(PILL, WHITE_PILL, 'px-[18px]')}>
             Plan
           </Link>
-          <StartPill to={`/run/${step + 1}`} onClick={() => useRun.getState().goTo(step)} />
+          <StartPill protocol={protocol} />
         </>
       }
     >
@@ -60,7 +58,7 @@ export function RunChoose() {
           {heard ? (
             <Exchange text={heard.text} answer={heard.say} />
           ) : (
-            turn && <Exchange text={turn.text} answer={turnAnswer(turn)} thinking={turn.phase === 'thinking'} />
+            turn && <Exchange text={turn.text} answer={turnAnswer(turn)} thinking={turn.phase === 'thinking'} sources={turn.phase === 'reply' ? turn.sources : undefined} />
           )}
         </div>
       )}
@@ -69,7 +67,7 @@ export function RunChoose() {
 }
 
 /** "12 samples, in duplicate" · "Kit's 9 standards, in duplicate" · "42 wells · 10 mL working reagent". */
-function thisPlan(v: PlanView) {
+export function thisPlan(v: PlanView) {
   const { samples: n, replicates: nr, standardReplicates: sr, standards: way } = v.plan;
   return [
     <>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import type { Action } from '../../../shared/ai.ts';
+import type { Sized } from '../../../shared/benchScenes.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
 import { decodeText, fitToPlan, parsePlateText } from '../../../shared/plate.ts';
 import { api } from '../../api/client.ts';
@@ -46,13 +47,18 @@ import {
   type TimerPhase,
 } from './model.ts';
 import { PhotoView, type PhotoStatus } from './Photo.tsx';
+import { useStepPictures } from './Picture.tsx';
 import { checkSpoken } from './PlateCheck.tsx';
-import { cancelPushTimer, enablePush, pushTimer, pushWaiting, usePush } from './push.ts';
+import { enablePush, usePush } from './push.ts';
 import { EXPORT_TYPES, ReadMenu } from './ReadMenu.tsx';
-import { AddStep, AllSteps, Asked, IncubateStep, LoadStep, MixStep, ReadStep, StandardsStep, YouSaid, nextPhrase } from './Steps.tsx';
+import { AddStep, AllSteps, Asked, IncubateStep, LoadStep, MixStep, ReadStep, StandardsStep, StepNav, YouSaid, nextPhrase } from './Steps.tsx';
 import { TimeUp } from './TimeUp.tsx';
 import type { View } from './view.ts';
 import { useRunVoice, type Handled, type RunHandlers } from './voice.ts';
+import { useDock } from '../../state/dock.ts';
+import { MinimizeRun } from './Minimize.tsx';
+import { goToRunStep, skipRunStep } from './navigation.ts';
+import { useTapNav } from './TapNav.tsx';
 
 /** The artboards' timer: 24:37 left of 30 min (Run-Timer, Gloves-Timer), for review by address. */
 const REVIEW_LEFT = 1477;
@@ -64,7 +70,10 @@ const TIMER_STATES = ['choose', 'timer', 'running', 'stopped', 'confirm', 'done'
  *
  * Gloves on (Gloves-*, "Run, mic on") is a mode of the same screen, ?gloves=1: the gloves button at the top right, and
  * the step turns into its big-type layout while Chapp keeps listening; a tap on Listening (or the button again) ends
- * it and brings the buttons back. Either way the voice does everything: "next", "back", "C is OK", "start the timer", "stop", "two hours",
+ * it and brings the buttons back. Under each step, gloves off, Back, Skip and Next move through the steps (StepNav); so
+ * does a tap on the page, gloves or not: its right side Next, its left Back, twice Skip (TapNav). The button beside the
+ * gloves makes the run small, floating over Home until it is opened again (src/app/RunDock.tsx).
+ * Either way the voice does everything: "next", "back", "C is OK", "start the timer", "stop", "two hours",
  * "photo", "use the sample export"; anything else is a question for Chapp, answered from the manual.
  *
  * Progress lives in useRun() (ticked vials and tubes, finished steps, the timer's end, the readings), so a reload in
@@ -74,6 +83,8 @@ const TIMER_STATES = ['choose', 'timer', 'running', 'stopped', 'confirm', 'done'
  */
 export function RunScreen() {
   const { step: param } = useParams();
+  // On its own screen the run is whole, no longer floating.
+  useEffect(() => useDock.getState().restore(), []);
   const protocolId = useRun(s => s.protocolId) ?? 'pierce-bca';
   const procedure = useRun(s => s.procedure);
   const samples = useRun(s => s.samples);
@@ -120,7 +131,6 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   const run = useRun();
   const lengths = useBench(s => s.lengths);
   const pausedAt = useBench(s => s.paused);
-  const announced = useBench(s => s.announced);
   const voice = useSession(s => s.voice);
 
   const total = bench.steps.length;
@@ -157,7 +167,6 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const check = useBench(s => s.check);
   const push = usePush(s => s.state);
-  const [timeUp, setTimeUp] = useState(false);
   const [typing, setTyping] = useState(false);
   const [plus, setPlus] = useState(false);
   const plusRef = useRef<HTMLButtonElement>(null);
@@ -232,9 +241,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     for (const [k, on] of Object.entries(patch)) if (!!r.done[k] !== on) r.setDone(k, on);
   };
   const goStep = (i: number) => {
-    const to = Math.max(0, Math.min(total - 1, i));
-    if (to === at + 1) useRun.getState().setDone(bench.steps[at]!.id);
-    navigate(`/run/${to + 1}${keep}`);
+    goToRunStep(bench.steps, i, navigate, keep);
   };
   const setGloves = (on: boolean) =>
     setParams(
@@ -449,6 +456,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
 
   /** "Next", "done", "mixed": the next vial or tube while there are some, else the next step. */
   const advance = (said: string): Handled => {
+    const { step: at, done } = useRun.getState();
     if (at === idx.standards && !bench.ready) {
       const line = standardsLine(vials, done);
       if (line.kind !== 'all') {
@@ -484,7 +492,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
         navigate('/results');
         return { say: '' };
       }
-      return { say: 'Show me the reader’s screen, or say “use the sample export”.' };
+      return { say: 'No readings are loaded yet. Show the reader’s screen or use the sample export.', ok: false };
     }
     goStep(at + 1);
     return { say: intro(at + 1) };
@@ -492,6 +500,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
 
   /** "Back": the tube or vial before, while there is one on this step, else the step before. */
   const back = (said: string): Handled => {
+    const { step: at, done } = useRun.getState();
     if (at === idx.load) {
       const cur = currentTube(plate, done);
       if (cur > 0) {
@@ -511,7 +520,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
         return { say: standardsText(standardsLine(vials, { ...done, ...patch }), nextAfter(at)) };
       }
     }
-    if (at === 0) return { say: 'This is the first step.' };
+    if (at === 0) return { say: 'This is the first step.', ok: false };
     goStep(at - 1);
     return { say: intro(at - 1) };
   };
@@ -598,7 +607,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
             checkView.confirm();
             return { say: '' };
           }
-          if (!confirm) return { say: '' };
+          if (!confirm) return { say: 'There is no pending question to answer.', ok: false };
           setHeard(said);
           if (c.yes) {
             stopTimer();
@@ -653,7 +662,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
           return at === idx.read ? { say: 'No readings yet. Show me the reader’s screen, or say “use the sample export”.' } : null;
       }
     },
-    context: () => converseContext('run', p, { step: at, ...(bench.steps[at] ? { stepTitle: bench.steps[at].title } : {}) }),
+    context: () => converseContext('run', p, { step: useRun.getState().step, ...(bench.steps[useRun.getState().step] ? { stepTitle: bench.steps[useRun.getState().step].title } : {}), ...(confirm ? { pending: 'Stop the incubation timer?' } : checkView ? { pending: 'Do the plate readings match the reader?' } : {}) }),
     protocol: () => p,
   };
   const { exchange, send, clear } = useRunVoice(handlers);
@@ -714,44 +723,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   // ─── Time's up ─────────────────────────────────────────────────────────────────────────────────────────────────
   const timeUpTitle = `Incubation done · ${lengthText(timer.total)}${tempText ? ` at ${tempText}` : ''}`;
   const timeUpBody = `Cool the plate to room temperature, then read at ${bench.readout.value} ${bench.readout.unit}.`;
-  const glovesNow = useRef(gloves);
-  glovesNow.current = gloves;
-  const ringText = useRef({ title: timeUpTitle, body: timeUpBody });
-  ringText.current = { title: timeUpTitle, body: timeUpBody };
-  useEffect(() => {
-    if (!inc || liveEnds === undefined || announced[inc.id] === liveEnds) return;
-    const ring = () => {
-      useBench.getState().announce(inc.id, liveEnds);
-      const { title, body } = ringText.current;
-      // The server pushes Time's up to the lock screen (push.ts); where it does not, the page notifies from the
-      // background itself, if notifications are allowed.
-      try {
-        if (!pushWaiting(inc.id, liveEnds) && document.visibilityState === 'hidden' && 'Notification' in window && Notification.permission === 'granted')
-          new Notification(title, { body, icon: '/chapp/chapp.webp', tag: 'chapp-timer' });
-      } catch {
-        // Some phones only notify from a service worker.
-      }
-      navigator.vibrate?.([300, 120, 300]);
-      if (!glovesNow.current) setTimeUp(true);
-      void speak(spoken(`Time’s up. ${body}`)).catch(() => {});
-    };
-    const wait = liveEnds - Date.now();
-    if (wait <= 0) {
-      ring();
-      return;
-    }
-    const t = window.setTimeout(ring, Math.min(wait, 2 ** 31 - 1));
-    return () => clearTimeout(t);
-  }, [inc, liveEnds, announced]);
-
-  // Time's up on the lock screen: the running timer goes to the server, which pushes it at the end even with Chapp
-  // closed (push.ts). Stopped, or ended by a tap on the time, it is called off.
-  useEffect(() => {
-    if (!inc || timerReview) return;
-    if (liveEnds !== undefined && liveEnds - Date.now() > 3000) {
-      if (push === 'ready') void pushTimer({ id: inc.id, endsAt: liveEnds, title: timeUpTitle, body: timeUpBody, url: `/run/${(idx.read >= 0 ? idx.read : at) + 1}` });
-    } else void cancelPushTimer(inc.id);
-  }, [inc?.id, liveEnds, push]);
+  // Time's up rings from state/alarms.ts for every experiment, on any screen; this screen only draws it for review.
 
   // While the plate incubates, Chapp dozes (Run-Timer's sleepy face), whenever it has no other face to show.
   const expression = useSession(s => s.expression);
@@ -772,6 +744,19 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   );
 
   // ─── Drawing it ────────────────────────────────────────────────────────────────────────────────────────────────
+  // The pictures say the run's numbers: the parts of the working reagent as sized, the plan's wells (less any that went
+  // wrong), the incubation as chosen.
+  const sized = useMemo<Sized>(
+    () => ({
+      mix: { parts: Object.fromEntries(bench.reagent.parts.map(x => [x.component, amountText(x.volume)])), make: amountText(bench.reagent.make) },
+      wells: bench.plate.cells.filter(c => !bench.plate.bad.includes(c.well)).sort((a, b) => a.col - b.col || a.row - b.row).map(c => c.well),
+      incubation: lengthText(timer.total),
+      big: true,
+    }),
+    [bench, timer.total],
+  );
+  const words = useBench(s => s.words);
+  const pictures = useStepPictures(p, run.procedure, bench.steps.map(s => s.id), run.photos, sized, { on: words, set: useBench.getState().setWords });
   const view: View = {
     p,
     bench,
@@ -781,6 +766,8 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     timer,
     readings,
     photos: run.photos,
+    picture: list ? null : pictures.pictureOf(at),
+    words,
     flash,
     tickVial,
     tapTube,
@@ -836,17 +823,23 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     <ReadStep v={view} />
   );
 
+  const taps = useTapNav({
+    onNext: at < total - 1 ? () => goStep(at + 1) : undefined,
+    onBack: at > 0 ? () => goStep(at - 1) : undefined,
+    onSkip: at < total - 1 ? () => skipRunStep(bench.steps, at, navigate, keep) : undefined,
+  });
   const said = view.heard;
   const photoReview = at === idx.read && (review === 'photo' || review === 'taken') ? review : null;
   const photoOpen = photo !== null || photoReview !== null;
-  const timeUpOpen = timeUp || timerReview === 'timeup';
+  const timeUpOpen = timerReview === 'timeup';
 
   return (
     <div className="relative h-full overflow-hidden bg-bg">
       <div
         ref={scroller}
+        onClick={list ? undefined : taps.onClick}
         className={cn(
-          'flex h-full flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] [scrollbar-width:none]',
+          'flex h-full touch-manipulation flex-col overflow-y-auto px-5 pt-[calc(196px+var(--screen-top))] [scrollbar-width:none]',
           gloves ? 'pb-[calc(126px+var(--screen-bottom))]' : 'pb-[calc(92px+var(--screen-bottom))]',
         )}
       >
@@ -862,6 +855,13 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
           )
         ) : null}
         {body}
+        {!list && !gloves && (
+          <StepNav
+            onBack={at > 0 ? () => goStep(at - 1) : undefined}
+            onSkip={() => skipRunStep(bench.steps, at, navigate, keep)}
+            next={at < total - 1 ? { title: bench.steps[at + 1]!.title, go: () => goStep(at + 1) } : undefined}
+          />
+        )}
       </div>
 
       {gloves ? (
@@ -905,6 +905,8 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
         pill={list ? undefined : <StepPill index={at} total={total} title={title} to={gloves ? undefined : '/run/all'} className="-mt-4" />}
       />
       {!list && <GlovesToggle on={gloves} onChange={glovesOn} />}
+      {!list && <MinimizeRun titles={bench.steps.map(s => s.title)} className="right-[68px]" />}
+      {!list && taps.overlay}
 
       <input
         ref={fileInput}
@@ -946,12 +948,12 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
           {gloves && <GlovesBar dark listening={voice === 'talking'} onTap={glovesTap} />}
         </PhotoView>
       )}
+      {pictures.sheet}
       {timeUpOpen && (
         <TimeUp
           title={timeUpTitle}
           body={timeUpBody}
           onOpen={() => {
-            setTimeUp(false);
             leaveReview();
             if (idx.read >= 0 && at !== idx.read) goStep(idx.read);
           }}

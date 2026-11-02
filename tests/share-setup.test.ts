@@ -59,6 +59,24 @@ describe('what a share carries', () => {
     expect(buildShare('protocol', { ...storyRun(), photos: { bsa: 'blob:https://x/1' } }, bca).kit.some(c => c.photo)).toBe(false);
   });
 
+  it('sends the kit’s cover with the photos, and keeps it with them', () => {
+    const cover = { src: 'data:image/jpeg;base64,BBBB', box: { x: 0.07, y: 0.13, width: 0.72, height: 0.6 }, round: 'shot-1' };
+    const s = buildShare('protocol', storyRun(), bca, {}, { cover });
+    expect(SharedSetup.safeParse(s).success).toBe(true);
+    expect(s.cover).toEqual({ photo: cover.src, box: cover.box });
+    expect(travels(s, bca)).toMatchObject({ photos: 1, cover: true });
+    const kept = buildShare('protocol', storyRun(), bca, {}, { cover, photos: false });
+    expect(kept.cover).toBeUndefined();
+    expect(travels(kept, bca).cover).toBeUndefined();
+    // A cover that is not a small image data URL stays behind too; a box outside the photo is turned away.
+    expect(buildShare('protocol', storyRun(), bca, {}, { cover: { ...cover, src: 'blob:https://x/2' } }).cover).toBeUndefined();
+    expect(SharedSetup.safeParse({ ...s, cover: { photo: cover.src, box: { ...cover.box, width: 2 } } }).success).toBe(false);
+    // A cover whose packaging SAM did not find goes without where it is.
+    const unplaced = buildShare('protocol', storyRun(), bca, {}, { cover: { src: cover.src, round: 'shot-2' } });
+    expect(unplaced.cover).toEqual({ photo: cover.src });
+    expect(SharedSetup.safeParse(unplaced).success).toBe(true);
+  });
+
   it('hears whether to send the photos', () => {
     expect(parsePhotos('Without the photos')).toBe(false);
     expect(parsePhotos("don't send my pictures")).toBe(false);

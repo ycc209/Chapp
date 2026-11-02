@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AIProvider, ConverseRequest } from '../shared/ai.ts';
-import { createHandler, MAX_AUDIO, MAX_JSON } from '../server/app.ts';
+import { createHandler, MAX_AUDIO } from '../server/app.ts';
 import { createMockProvider, MOCK_TRANSCRIPT } from '../server/ai/mock.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 
@@ -62,11 +62,19 @@ describe('routes with the mock provider', () => {
     expect(await res.json()).toEqual({ ok: true, provider: 'mock', metaModelApi: false });
   });
 
-  it('POST /api/converse answers with a ConverseReply', async () => {
+  it('POST /api/converse returns pending tools and accepts execution receipts before the final answer', async () => {
     const res = await postJson(mock, '/api/converse', { text: MOCK_TRANSCRIPT, context: { screen: 'home', protocolId: null } });
     expect(res.status).toBe(200);
     const reply = await res.json();
-    expect(reply.actions).toEqual([{ type: 'navigate', to: '/protocol' }]);
+    expect(reply.actions).toEqual([]);
+    expect(reply.say).toBe('');
+    expect(reply.pendingTools).toEqual([expect.objectContaining({ action: { type: 'navigate', to: '/protocol' } })]);
+    const completed = await postJson(mock, '/api/converse', {
+      text: MOCK_TRANSCRIPT, context: { screen: 'protocol', protocolId: 'pierce-bca' }, continuationToken: reply.continuationToken,
+      toolResults: [{ callId: reply.pendingTools[0].callId, ok: true, message: 'Opened the protocol.' }],
+    });
+    expect(completed.status).toBe(200);
+    expect(await completed.json()).toMatchObject({ say: 'Opened the protocol.', actions: [] });
   });
 
   it('POST /api/find-protocol answers with a FoundProtocol', async () => {
@@ -144,7 +152,7 @@ describe('bad input gets a 4xx with a message', () => {
     const res = await postWav(mock, big);
     expect(res.status).toBe(413);
     expect((await res.json()).error).toMatch(/too large/);
-    const long = await postJson(mock, '/api/converse', { text: 'x', context: { screen: 'x'.repeat(MAX_JSON) } });
+    const long = await postJson(mock, '/api/converse', { text: 'x', context: { screen: 'x'.repeat(1024 * 1024) } });
     expect(long.status).toBe(413);
   });
 });

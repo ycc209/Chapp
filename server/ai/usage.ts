@@ -22,8 +22,11 @@ const TOKENS: Record<string, { input: number; cached: number; output: number }> 
   'muse-spark-1.1': { input: 1.25, cached: 0.15, output: 4.25 },
   'muse-wonder-1.0': { input: 4, cached: 0.2, output: 20 },
 };
-/** Per web search the model runs, per image SAM segments, per hour of speech, per image Muse Image draws. */
-export const PER = { search: 2.5 / 1000, samImage: 2.5 / 1000, speechHour: 0.18, image: 0.01 };
+/**
+ * Per web search the model runs, per image SAM segments, per video frame SAM follows (at least 50 a video), per hour of
+ * speech, per image Muse Image draws.
+ */
+export const PER = { search: 2.5 / 1000, samImage: 2.5 / 1000, samFrame: 0.2 / 1000, speechHour: 0.18, image: 0.01 };
 
 export type Usage = { input: number; cached: number; output: number; reasoning: number };
 
@@ -77,6 +80,8 @@ export type Meter = {
   keepIn(file: string): void;
   /** Throws when today's spending, plus `estimate` for the call about to be made, would pass the cap. */
   check(estimate?: number): void;
+  /** Reserve an estimate while concurrent requests are in flight; release exactly once when settled. */
+  reserve(estimate: number): () => void;
 };
 
 /** The day's spending and its cap. */
@@ -87,6 +92,7 @@ export function createMeter(options: { cap?: number; file?: string; now?: () => 
   let file: string | undefined;
   let day = today();
   let dollars = 0;
+  let reserved = 0;
   const roll = () => {
     if (today() !== day) {
       day = today();
@@ -126,12 +132,23 @@ export function createMeter(options: { cap?: number; file?: string; now?: () => 
     },
     check(estimate = 0) {
       roll();
-      if (!cap || dollars + estimate <= cap) return;
+      if (!cap || dollars + reserved + estimate <= cap) return;
       throw new UpstreamError(
         dollars >= cap
           ? `Chapp has used today's allowance for Meta's models ($${cap.toFixed(2)}). It starts again tomorrow.`
           : `That would take Chapp past today's allowance for Meta's models ($${cap.toFixed(2)}): about $${estimate.toFixed(2)} more, with $${(cap - dollars).toFixed(2)} left.`,
       );
+    },
+    reserve(estimate) {
+      const amount = Number.isFinite(estimate) && estimate > 0 ? estimate : 0;
+      meter.check(amount);
+      reserved += amount;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        reserved = Math.max(0, reserved - amount);
+      };
     },
   };
   if (options.cap) meter.setCap(options.cap);

@@ -55,6 +55,28 @@ describe('assembling the wire rows into a protocol', () => {
     expect(problems(p)).toEqual([]);
   });
 
+  it('keeps a blank written as the table prints it, "0 = Blank" or "Blank"', () => {
+    // As Muse Spark read the BCA tables on 2026-11-01: the blank's concentration copied with its label.
+    for (const printed of ['0 = Blank', 'Blank']) {
+      const bca = parts();
+      bca.curves.points = bca.curves.points.map(x => (x.blank ? { ...x, concentration: printed } : x));
+      const { protocol, problems: dropped } = assemble(bca, meta);
+      expect(protocol.standardCurves[0]!.points.at(-1)).toMatchObject({ id: 'C', blank: true, concentration: { value: 0 } });
+      expect(dropped.filter(x => /not a whole row/.test(x))).toEqual([]);
+    }
+  });
+
+  it('keeps a vial taken straight from the stock with its diluent left empty, and reads the stock from it', () => {
+    // As Muse Spark read BCA's vial A on 2026-11-01: 300 uL of stock, the "0" diluent left empty, no strength on the bottle.
+    const bca = parts();
+    bca.curves.points = bca.curves.points.map(x => (x.id === 'a' ? { ...x, diluent: '' } : x));
+    bca.inventory.components = bca.inventory.components.map(x => (x.id === 'std' ? { ...x, concentration: '' } : x));
+    const { protocol, problems: dropped } = assemble(bca, meta);
+    expect(protocol.standardCurves[0]!.points[0]).toMatchObject({ id: 'A', diluent: { value: 0 }, take: { value: 100 }, concentration: { value: 1000 } });
+    expect(protocol.components.find(x => x.id === 'std')!.concentration).toEqual({ value: 1000, unit: 'µg/mL' });
+    expect(dropped.filter(x => /not a whole row/.test(x))).toEqual([]);
+  });
+
   it('makes standards in the wells up to what the procedure puts in each well, when no row says the volume', () => {
     // As Muse Spark read the ATP manual on 2026-10-30: "adjust volume to 50 µL/well" left out of every row, the
     // blank's too; the procedure loads 50 µL of standards and samples.

@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import type { SharedPlan, StoredShare } from '../../../shared/share.ts';
+import { SharedPlan as SharedPlanSchema, type SharedPlan, type StoredShare } from '../../../shared/share.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
+import { ReplySources, ReplyText } from '../../components/chapp/ReplyText.tsx';
 import { SampleDataTag } from '../../components/lab/index.ts';
+import { runSetup } from '../../components/lab/model.ts';
 import { cn } from '../../lib/cn.ts';
 import { useProtocol } from '../../state/protocol.ts';
-import { kitPhotos } from '../../state/library.ts';
+import { kitCover, kitPhotos, rememberCover } from '../../state/library.ts';
 import { useRun } from '../../state/run.ts';
-import { matchCommand } from '../../voice/commands.ts';
-import { speak } from '../../voice/speak.ts';
+import { useSession } from '../../state/session.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
-import { acknowledge, useConverse } from '../home/useConverse.ts';
+import { useConverse } from '../home/useConverse.ts';
+import { coverFocus } from '../kit/cover.ts';
 import { getShare, isMissing } from './api.ts';
 import { Answer, PAGE, PILL_DARK, PILL_LIGHT, SAMPLE_TAG, SAY, ScreenBar, TravelList, useFace } from './parts.tsx';
 import { Scanner } from './Scanner.tsx';
@@ -44,8 +46,12 @@ function Received({ id }: { id: string }) {
   const [kitOpen, setKitOpen] = useState(params.get('kit') === 'open');
   // The plan as it will be imported: the shared one, changed by what the user says here.
   const [plan, setPlan] = useState<StoredShare['plan']>(undefined);
-  const [said, setSaid] = useState<string | null>(null);
-  const { turn, send } = useConverse('import');
+  // A single model turn may edit several fields before React renders again.
+  const planRef = useRef(plan);
+  const changePlan = (next: StoredShare['plan']) => {
+    planRef.current = next;
+    setPlan(next);
+  };
   const [talked, setTalked] = useState(false);
 
   useEffect(() => {
@@ -53,7 +59,7 @@ function Received({ id }: { id: string }) {
     setLoad({ phase: 'loading' });
     getShare(id, abort.signal).then(
       share => {
-        setPlan(share.plan);
+        changePlan(share.plan);
         setLoad({ phase: 'ready', share });
       },
       error => {
@@ -76,36 +82,67 @@ function Received({ id }: { id: string }) {
   const lines = pending && protocol ? travels(pending, protocol) : null;
 
   const use = () => {
-    if (!pending) return;
-    useRun.setState(importPatch(pending, useRun.getState(), kitPhotos(pending.protocolId)));
+    if (!share || !protocol) return false;
+    const next = planRef.current;
+    const changed = !!share.plan && !!next && !samePlan(next, share.plan);
+    const adopted = { ...share, plan: next, results: changed ? undefined : share.results };
+    useRun.setState(importPatch(adopted, useRun.getState(), kitPhotos(adopted.protocolId)));
+    // Their photo of the kit's packaging becomes its cover here too, unless this phone has its own.
+    const cover = adopted.cover;
+    if (cover && !kitCover(adopted.protocolId)) rememberCover(adopted.protocolId, { src: cover.photo, round: adopted.id, ...(cover.box ? { box: cover.box } : {}) });
+    useSession.getState().setExchange(null);
     navigate('/protocol');
+    return true;
   };
 
+  const { turn, send } = useConverse('share-import', {
+    protocol: () => protocol,
+    context: () => ({
+      screen: 'share-import',
+      protocolId: share?.protocolId ?? null,
+      procedure: share?.procedure,
+      ...(planRef.current ?? {}),
+      pending: 'Shared setup preview, not the active run. Count changes edit this draft only. Pending question: Use this setup? Adopt only on explicit acceptance; discussion leaves the active run unchanged.',
+    }),
+    executePage: action => {
+      if (action.type === 'navigate') return null;
+      if (action.type === 'answer') {
+        if (!action.yes) {
+          navigate('/');
+          return { ok: true, message: 'Closed the shared setup without importing it or changing the active run.' };
+        }
+        return use()
+          ? { ok: true, message: 'Imported the shared setup with its previewed plan and opened the protocol.' }
+          : { ok: false, message: 'The shared setup is still loading; nothing was imported.' };
+      }
+      if (action.type !== 'setSamples' && action.type !== 'setReplicates') {
+        return { ok: false, message: 'This is a shared-run preview. It can change its sample count and replicates, or adopt the setup; it cannot change the active experiment.' };
+      }
+      const before = planRef.current;
+      if (!before || !share || !protocol) return { ok: false, message: 'There is no shared plan available to edit. The active experiment was not changed.' };
+      const next = action.type === 'setSamples'
+        ? { ...before, samples: action.samples }
+        : { ...before, replicates: action.replicates, standardReplicates: action.standardReplicates ?? before.standardReplicates ?? before.replicates };
+      try {
+        SharedPlanSchema.parse(next);
+        runSetup(protocol, { procedure: share.procedure, ...next, standardReplicates: next.standardReplicates ?? next.replicates, standards: next.standards ?? 'kit' });
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : 'That preview plan does not fit this protocol.' };
+      }
+      changePlan(next);
+      const changed = share.plan && share.results && !samePlan(next, share.plan);
+      return {
+        ok: true,
+        message: `Shared preview now has ${next.samples} samples with ${next.replicates} replicates. The active run is unchanged.${changed ? ' The original results no longer match this plan and will not be imported.' : ''}`,
+      };
+    },
+  });
+
   const heard = (text: string) => {
-    const words = text.toLowerCase().replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-    if (pending && /^(?:ok |okay |yes )?(?:use (?:it|this|this setup|the setup)(?: as is)?|import(?: it)?|yes|sounds good|looks good)(?: please)?$/.test(words)) return use();
-    if (/^(?:not now|later|no thanks|cancel)$/.test(words)) return navigate('/');
-    const command = plan && matchCommand(text);
-    if (plan && command && command.every(a => a.type === 'setSamples' || a.type === 'setReplicates')) {
-      let next = plan;
-      // "In triplicate" sets the standards' replicates too, as on Plan (state/actions.ts).
-      for (const a of command) next = a.type === 'setSamples' ? { ...next, samples: a.samples } : a.type === 'setReplicates' ? { ...next, replicates: a.replicates, standardReplicates: a.replicates } : next;
-      setPlan(next);
-      setTalked(false);
-      const changed = share?.plan && share.results && !samePlan(next, share.plan);
-      const ack = changed
-        ? `${acknowledge(command)} The results were for ${share.plan!.samples} samples ${replicatesWords(share.plan!.replicates)}, so they stay out.`
-        : acknowledge(command);
-      setSaid(ack);
-      void speak(ack).catch(() => {});
-      return;
-    }
-    setSaid(null);
     setTalked(true);
     void send(text);
   };
 
-  const reply = talked && turn ? (turn.phase === 'reply' ? turn.say : turn.phase === 'error' ? ERROR_LINE : null) : null;
   const name = protocol ? shortName(protocol) : '';
 
   let answer: ReactNode;
@@ -114,7 +151,11 @@ function Received({ id }: { id: string }) {
   else if (load.phase === 'failed') answer = load.message;
   else if (protocolError) answer = protocolError;
   else if (!protocol || !pending) answer = 'Opening what was shared…';
-  else answer = reply ?? <Shared share={share!} name={name} />;
+  else if (talked && turn) answer = <>
+    <ReplyText text={turn.phase === 'error' ? turn.error || ERROR_LINE : turn.say || (turn.phase === 'thinking' ? turn.progress || '…' : '')} />
+    {turn.phase === 'reply' && <ReplySources sources={turn.sources} />}
+  </>;
+  else answer = <Shared share={share!} name={name} />;
 
   return (
     <div className="relative h-full overflow-hidden bg-bg">
@@ -160,6 +201,16 @@ function Received({ id }: { id: string }) {
               </button>
               {kitOpen && (
                 <div className="flex flex-col gap-3 pr-1 pb-[18px] pl-9">
+                  {/* Their photo of the kit's box or bag, its cover, when it came along. */}
+                  {pending.cover && (
+                    <img
+                      src={pending.cover.photo}
+                      alt="Their photo of the kit"
+                      draggable={false}
+                      className="block aspect-[4/3] w-full rounded-[14px] bg-[#1b1b1d] object-cover"
+                      style={{ objectPosition: coverFocus(pending.cover.box) }}
+                    />
+                  )}
                   <ul className="m-0 flex list-none flex-col gap-2 p-0 text-base leading-[22px] font-semibold text-ink">
                     {pending.kit.map(c => (
                       <li key={c.id} className={cn('flex items-center gap-3', c.detail && 'justify-between')}>
@@ -187,7 +238,6 @@ function Received({ id }: { id: string }) {
           <div className="flex flex-col gap-2 pl-1">
             {load.phase === 'ready' && protocol && (
               <p className={SAY}>
-                {said ? `${said} ` : ''}
                 {plan ? 'Use it as is, or tell me what is different. How many samples do you have?' : 'Use it as is, or tell me how many samples you have.'}
               </p>
             )}
@@ -234,7 +284,7 @@ const samePlan = (a: SharedPlan, b: SharedPlan) =>
  */
 function Shared({ share, name }: { share: StoredShare; name: string }) {
   const who = share.from ? <b className="font-bold">{share.from}</b> : 'A labmate';
-  const photos = share.kit.some(c => c.photo);
+  const photos = share.kit.some(c => c.photo) || Boolean(share.cover);
   const plan = share.plan && (
     <>
       a plan for <b className="font-bold">{plural(share.plan.samples, 'sample')}</b> {replicatesWords(share.plan.replicates)}

@@ -11,7 +11,7 @@ import { RunChoose } from './RunChoose.tsx';
 import { Sections, Ways, type Section } from './Sections.tsx';
 import { Exchange, Shell, StartPill, turnAnswer, useFace, useFollow } from './Shell.tsx';
 import { StandardsPage } from './StandardsPage.tsx';
-import { allRepWord, changedKeys, fitPlan, planFor, planKeys, plural, repWord, sentenceOrder, startStep, type PlanKey, type PlanNumbers, type PlanView, type Way } from './plan.ts';
+import { allRepWord, changedKeys, fitPlan, planFor, planKeys, plural, repWord, sentenceOrder, type PlanKey, type PlanNumbers, type PlanView, type Way } from './plan.ts';
 import { isPicked, runPlan, usePlanTalk, type Heard } from './usePlanTalk.ts';
 import { usePlanView } from './view.ts';
 
@@ -77,14 +77,13 @@ function PlanBody({ review }: { review: Review | null }) {
 
   const standards = useRun(s => s.standards);
   const subtitle = protocol ? `${shortName(protocol)} · Plan` : 'Plan';
-  const step = startStep(standards);
 
   return (
     <Shell
       subtitle={subtitle}
       scroller={scroller}
       onUtterance={hear}
-      next={assay ? <StartPill to={`/run/${step + 1}`} onClick={() => useRun.getState().goTo(step)} /> : null}
+      next={assay ? <StartPill protocol={protocol} /> : null}
     >
       {error && (
         <p role="alert" className="mb-6 shrink-0 px-1 text-[17px] leading-6 font-medium text-ink">
@@ -111,7 +110,7 @@ function PlanBody({ review }: { review: Review | null }) {
       {protocol && seeded && assay && <PlanContent protocol={protocol} procedure={procedure} heard={heard} open0={seed?.open ?? ''} changed0={seed?.changed ?? []} />}
       {turn && (
         <div className="mt-8 flex shrink-0 flex-col gap-5">
-          <Exchange text={turn.text} answer={turnAnswer(turn)} thinking={turn.phase === 'thinking'} />
+          <Exchange text={turn.text} answer={turnAnswer(turn)} thinking={turn.phase === 'thinking'} sources={turn.phase === 'reply' ? turn.sources : undefined} />
         </div>
       )}
     </Shell>

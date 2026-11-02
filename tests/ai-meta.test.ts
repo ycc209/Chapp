@@ -1,9 +1,15 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import type { ConverseContext } from '../shared/ai.ts';
-import { createMetaProvider, isVendorUrl, parseFound, replyFormat, splitDetails, systemPrompt } from '../server/ai/meta.ts';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ConverseContext, FoundProtocol } from '../shared/ai.ts';
+import { createMetaProvider, documentWatcher, isVendorUrl, parseFound, splitDetails } from '../server/ai/meta.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { BCA } from '../server/ai/protocols.ts';
+import { readSource } from '../server/ai/sourceReader.ts';
+
+vi.mock('../server/ai/sourceReader.ts', () => ({ readSource: vi.fn() }));
+beforeEach(() => {
+  vi.mocked(readSource).mockReset().mockRejectedValue(new Error('No original-document fixture was supplied; network reads are disabled in this test.'));
+});
 
 // The Meta provider against a fake fetch: request shapes, parsing, retries, timeouts and errors. No network.
 
@@ -28,123 +34,217 @@ function fakeFetch(...answers: (unknown | { status: number; body: unknown } | Er
 const provider = (fetch: typeof globalThis.fetch, timeouts = {}) => createMetaProvider({ apiKey: KEY, fetch, log: () => {}, timeouts });
 /** A Responses API reply whose message is `content`, as Muse Spark answers converse. */
 const said = (content: unknown, id = 'resp_1') => ({ id, status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: typeof content === 'string' ? content : JSON.stringify(content) }] }] });
-const wire = (over: object = {}) => ({ say: 'Hello!', expression: 'happy', actions: [], a2ui: '[]', manualPages: [], ...over });
+const toolReply = (calls: { name: string; arguments?: object; callId: string }[], id = 'resp_tools') => ({ id, status: 'completed', output: calls.map(c => ({ type: 'function_call', name: c.name, arguments: JSON.stringify(c.arguments ?? {}), call_id: c.callId, status: 'completed' })) });
 
 describe('meta converse', () => {
-  it('asks Muse Spark for strict JSON and turns the flat wire format into a ConverseReply', async () => {
-    const { fn, calls } = fakeFetch(said(wire({
-      say: 'I found the manual.',
-      actions: [
-        { type: 'navigate', to: '/protocol', value: 0, id: '' },
-        { type: 'setSamples', to: '', value: 12, id: '' },
-        { type: 'setReplicates', to: '', value: 3, id: '' },
-        { type: 'nextStep', to: '', value: 0, id: '' },
-      ],
-    })));
-    const reply = await provider(fn).converse({ text: 'Open it: 12 samples in triplicate, then the next step.', context: home });
-    expect(reply).toEqual({
-      say: 'I found the manual.',
-      expression: 'happy',
-      actions: [
-        { type: 'navigate', to: '/protocol' },
-        { type: 'setSamples', samples: 12 },
-        { type: 'setReplicates', replicates: 3 },
-        { type: 'nextStep' },
-      ],
-      sources: [],
-      responseId: 'resp_1',
-    });
+  it('answers naturally without forcing JSON, truncating explanations, or interpreting the user with a command grammar', async () => {
+    const explanation = 'A high R² describes how the fitted line follows the calibration points; it does not by itself establish that an unknown sample is accurate. '.repeat(7);
+    const { fn, calls } = fakeFetch(said(explanation));
+    const reply = await provider(fn).converse({ text: 'The curve looks beautiful, but my unknowns disagree. Help me reason through why.', context: home });
+    expect(reply.say).toBe(explanation.trim());
+    expect(reply.say.length).toBeGreaterThan(600);
+    expect(reply.actions).toEqual([]);
+    expect(reply.pendingTools).toBeUndefined();
+    expect(reply.responseId).toBe('resp_1');
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('https://api.meta.ai/v1/responses');
     expect((calls[0].init.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
-    const body = JSON.parse(calls[0].init.body as string);
+    const body = JSON.parse(String(calls[0].init.body));
     expect(body.model).toBe('muse-spark-1.3');
-    expect(body.text.format).toEqual({ type: 'json_schema', ...replyFormat.json_schema });
-    expect(body.instructions).toMatch(/You are Chapp/);
-    expect(body.input).toEqual([{ role: 'user', content: 'Open it: 12 samples in triplicate, then the next step.' }]);
+    expect(body.text?.format?.type).not.toBe('json_schema');
+    // The front assistant hears it first: the lowest effort, the bench and the library, and the handoffs.
+    expect(body.reasoning).toEqual({ effort: 'minimal' });
+    expect(body.tools.some((t: { type: string }) => t.type === 'web_search')).toBe(false);
+    expect(body.tools.map((t: { name?: string }) => t.name)).toEqual(expect.arrayContaining(['read_run', 'preview_protocol', 'perform_action', 'transfer_to_science', 'transfer_to_manual', 'transfer_to_numbers']));
+    expect(body.prompt_cache_key).toBe('chapp-front');
+    expect(body.instructions).toContain('Chapp');
+    expect(body.instructions).not.toContain('one or two short sentences');
     expect(body.previous_response_id).toBeUndefined();
-    // Every turn shares one cache key and keeps its cached start for a day.
-    expect([body.prompt_cache_key, body.prompt_cache_retention]).toEqual(['chapp-converse', '24h']);
   });
 
-  it('carries on Meta’s copy of the conversation: only the new words go, and the reply’s id comes back', async () => {
-    const { fn, calls } = fakeFetch(said(wire({ say: 'Yes.' }), 'resp_2'));
-    const reply = await provider(fn).converse({ text: 'and then?', context: home, history: [{ role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' }], previousResponseId: 'resp_1' });
+  it('continues the conversation from the words the phone sends, statelessly, with the instructions every time', async () => {
+    const { fn, calls } = fakeFetch(said('The second explanation was sample interference.', 'resp_2'));
+    const reply = await provider(fn).converse({ text: 'Can you expand the second explanation?', context: home, history: [{ role: 'user', text: 'Why could it fail?' }, { role: 'chapp', text: 'Calibration range, sample interference, or handling.' }], previousResponseId: 'resp_1' });
     expect(reply.responseId).toBe('resp_2');
-    const body = JSON.parse(calls[0].init.body as string);
-    expect(body.previous_response_id).toBe('resp_1');
-    expect(body.input).toEqual([{ role: 'user', content: 'and then?' }]);
-  });
-
-  it('sends the recent turns instead when Meta no longer has the conversation', async () => {
-    const { fn, calls } = fakeFetch({ status: 404, body: { error: { message: 'Previous response not found' } } }, said(wire({ say: 'Yes.' })));
-    const reply = await provider(fn).converse({ text: 'and then?', context: home, history: [{ role: 'user', text: 'hi' }, { role: 'chapp', text: 'Hello!' }], previousResponseId: 'resp_gone' });
-    expect(reply.say).toBe('Yes.');
-    expect(calls).toHaveLength(2);
-    const body = JSON.parse(calls[1].init.body as string);
+    const body = JSON.parse(String(calls[0].init.body));
     expect(body.previous_response_id).toBeUndefined();
-    expect(body.input.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(body.include).toEqual(['web_search_call.results', 'reasoning.encrypted_content']);
+    expect(body.input.filter((m: { role?: string }) => m.role !== 'developer')).toEqual([
+      { role: 'user', content: 'Why could it fail?' },
+      { role: 'assistant', content: 'Calibration range, sample interference, or handling.' },
+      { role: 'user', content: 'Can you expand the second explanation?' },
+    ]);
+    // This turn's state goes after the record and before the new words, so the record stays a cached prefix.
+    expect(body.input.at(-2)).toMatchObject({ role: 'developer', content: expect.stringContaining('"screen":"home"') });
+    expect(body.instructions).toContain('Chapp');
+    expect(body.instructions).not.toContain('Current state');
   });
 
-  it.skipIf(!local)('cites the manual: the pages named for the protocol on screen', async () => {
-    const { fn } = fakeFetch(said(wire({ say: 'Add 25 µL per well.', manualPages: [3, 3, 99] })));
-    const onScreen = await provider(fn).converse({ text: 'how much sample?', context: { screen: 'run', protocolId: 'pierce-bca', step: 2 } });
-    expect(onScreen.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title, page: 3 }]);
+  it('falls back to the phone\'s text history when the server has no record of the response id it was sent', async () => {
+    const { fn, calls } = fakeFetch(said('You called sample B Moon.'));
+    const reply = await provider(fn).converse({ text: 'What did I call the second sample?', context: home, history: [{ role: 'user', text: 'A is Star and B is Moon.' }, { role: 'chapp', text: 'I will use those names.' }], previousResponseId: 'resp_gone' });
+    expect(reply.say).toBe('You called sample B Moon.');
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.previous_response_id).toBeUndefined();
+    expect(body.input.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'developer', 'user']);
+    expect(JSON.stringify(body.input)).toContain('A is Star and B is Moon.');
   });
 
-  it('draws nothing when no kit is open: there is nothing to work the numbers out from', async () => {
-    const a2ui = JSON.stringify([{ version: 'v0.9', createSurface: { surfaceId: 'answer', catalogId: 'chapp' } }, { version: 'v0.9', updateComponents: { surfaceId: 'answer', components: [{ id: 'root', component: 'ReagentCard' }] } }]);
-    const { fn } = fakeFetch(said(wire({ a2ui })));
-    expect((await provider(fn).converse({ text: 'x', context: home })).a2ui).toBeUndefined();
+  it.each([false, true])('replays this turn whole, its reasoning only when encrypted, and the next turn from its own record without it (%s)', async encrypted => {
+    const response = toolReply([{ name: 'read_run', callId: 'read_state' }]);
+    const reasoning = { type: 'reasoning', id: encrypted ? 'reasoning_portable' : 'reasoning_bare', ...(encrypted ? { encrypted_content: 'opaque-encrypted-context' } : {}) };
+    const { fn, calls } = fakeFetch(
+      { ...response, output: [reasoning, ...response.output] },
+      said('Your plan still has twelve samples and two replicates.', 'resp_recovered'),
+      said('Still twelve.', 'resp_next'),
+    );
+    const history = [{ role: 'user' as const, text: 'Keep my current plan unchanged.' }, { role: 'chapp' as const, text: 'I will only read it.' }];
+    const p = provider(fn);
+    const context: ConverseContext = { screen: 'plan', samples: 12, replicates: 2 };
+    const reply = await p.converse({ text: 'What are the current counts?', context, history });
+    expect(reply.responseId).toBe('resp_recovered');
+    expect(calls).toHaveLength(2);
+    const bodies = calls.map(c => JSON.parse(String(c.init.body)));
+    for (const body of bodies) {
+      expect(body.previous_response_id).toBeUndefined();
+      expect(body.include).toEqual(['web_search_call.results', 'reasoning.encrypted_content']);
+    }
+    const continuation = bodies[1];
+    expect(continuation.input.filter((item: { role?: string }) => item.role !== 'developer').slice(0, 3)).toEqual([
+      { role: 'user', content: history[0].text },
+      { role: 'assistant', content: history[1].text },
+      { role: 'user', content: 'What are the current counts?' },
+    ]);
+    expect(continuation.input.filter((item: { type: string }) => item.type === 'reasoning')).toEqual(encrypted ? [{ ...reasoning, summary: [] }] : []);
+    expect(JSON.stringify(continuation.input)).not.toContain('reasoning_bare');
+    const toolPair = continuation.input.filter((item: { type: string }) => item.type === 'function_call' || item.type === 'function_call_output');
+    expect(toolPair).toHaveLength(2);
+    expect(toolPair[0]).toMatchObject({ type: 'function_call', name: 'read_run', call_id: 'read_state' });
+    expect(toolPair[1]).toMatchObject({ type: 'function_call_output', call_id: 'read_state' });
+    expect(JSON.parse(toolPair[1].output)).toMatchObject({ current: { samples: 12, replicates: 2 } });
+    // The next turn: the server's record of what was said and done, without the reasoning, then the new words.
+    await p.converse({ text: 'And now?', context, history: [], previousResponseId: 'resp_recovered' });
+    const next = JSON.parse(String(calls[2].init.body));
+    expect(next.previous_response_id).toBeUndefined();
+    expect(next.input.filter((item: { type: string }) => item.type === 'reasoning')).toEqual([]);
+    expect(next.input.filter((item: { type: string }) => item.type === 'function_call' || item.type === 'function_call_output')).toHaveLength(2);
+    expect(JSON.stringify(next.input)).toContain('Your plan still has twelve samples');
+    expect(next.input.at(-1)).toEqual({ role: 'user', content: 'And now?' });
   });
 
-  it('drops a broken action, card or face instead of asking again', async () => {
-    const bad = wire({
-      say: 'Twelve it is.',
-      expression: 'grumpy',
-      actions: [{ type: 'navigate', to: '', value: 0, id: '' }, { type: 'setSamples', to: '', value: 12, id: '' }, { type: 'launchRocket', to: '', value: 0, id: '' }],
-      a2ui: 'not even JSON',
-    });
-    const { fn, calls } = fakeFetch(said(bad));
-    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', actions: [{ type: 'setSamples', samples: 12 }], sources: [], responseId: 'resp_1' });
+  it('does not retry an unrelated 400 as though the conversation expired', async () => {
+    const { fn, calls } = fakeFetch({ status: 400, body: { error: { message: 'Unsupported tool parameter' } } });
+    await expect(provider(fn).converse({ text: 'Explain that again', context: home, previousResponseId: 'resp_1' })).rejects.toThrow(/400|Unsupported/);
     expect(calls).toHaveLength(1);
   });
 
-  it('asks Muse Spark at minimal effort, so thinking does not eat the wait', async () => {
-    const { fn, calls } = fakeFetch(said(wire()));
-    await provider(fn).converse({ text: 'hi', context: home });
-    expect(JSON.parse(calls[0].init.body as string).reasoning).toEqual({ effort: 'minimal' });
-  });
-
-  it('retries once on a reply with nothing usable, telling the model what was wrong', async () => {
-    const { fn, calls } = fakeFetch(said('{"say": "Sure", "actions": "all of them"}', 'resp_bad'), said(wire({ say: 'Fixed.' })));
-    const reply = await provider(fn).converse({ text: 'go', context: home });
-    expect(reply.say).toBe('Fixed.');
-    expect(calls).toHaveLength(2);
-    // On top of the reply it gave, which Meta keeps.
-    const retry = JSON.parse(calls[1].init.body as string);
-    expect(retry.previous_response_id).toBe('resp_bad');
-    expect(retry.input).toHaveLength(1);
-    expect(retry.input[0].content).toMatch(/actions/);
-  });
-
-  it('falls back to the words alone when the retry is no better', async () => {
-    const bad = wire({ say: 'Twelve it is.', actions: 'twelve' });
-    const { fn, calls } = fakeFetch(said(bad), said('not json at all'));
-    expect(await provider(fn).converse({ text: '12', context: home })).toEqual({ say: 'Twelve it is.', expression: 'neutral', actions: [], sources: [] });
-    expect(calls).toHaveLength(2);
-  });
-
-  it('says it lost track when neither reply has words', async () => {
-    const { fn } = fakeFetch(said('{}'), said(''));
-    const reply = await provider(fn).converse({ text: 'x', context: home });
-    expect(reply.say).toMatch(/say that again/);
+  it('does not advertise a source solely because its annotation is present, without an inline citation or original read', async () => {
+    const url = 'https://www.thermofisher.com/order/catalog/product/23225';
+    const response = said('I found the manufacturer’s page. This is a comparison only.');
+    Object.assign(response.output[0].content[0], { annotations: [{ type: 'url_citation', url, title: 'Pierce BCA Protein Assay Kit' }] });
+    const { fn } = fakeFetch(response);
+    const reply = await provider(fn).converse({ text: 'Find the original documentation, but leave my current experiment alone.', context: { screen: 'run', protocolId: 'pierce-bca', samples: 12, replicates: 2 } });
+    expect(reply.sources).toEqual([]);
+    expect(readSource).not.toHaveBeenCalled();
     expect(reply.actions).toEqual([]);
+    expect(reply.pendingTools).toBeUndefined();
   });
 
-  it('keeps the first answer’s words when the retry itself fails', async () => {
-    const { fn } = fakeFetch(said(wire({ say: 'Sure.', actions: 'none' })), { status: 500, body: { error: { message: 'oops' } } });
-    expect((await provider(fn).converse({ text: 'x', context: home })).say).toBe('Sure.');
+  it('discovers sources, reads original text, and reviews the final scientific answer against a checked quotation', async () => {
+    const source = 'https://example.org/independent-calibration-study';
+    const original = 'An independently prepared reference is required to detect a shared calibration-stock bias.';
+    vi.mocked(readSource).mockResolvedValue({ url: source, title: 'Independent calibration study', format: 'html', pages: [{ text: original }], fetchedAt: '2026-10-31T00:00:00Z' });
+    const discovery = { id: 'resp_science', status: 'completed', output: [{ type: 'web_search_call', action: { type: 'search', query: 'independent calibration reference' }, results: [{ url: source, title: 'Independent calibration study', snippet: 'Discovery only.' }] }, { type: 'message', content: [{ type: 'output_text', text: 'UNREAD GENERATED CLAIM MUST NOT BECOME EVIDENCE.' }] }] };
+    const { fn, calls } = fakeFetch(
+      toolReply([{ name: 'research_science', callId: 'research_calibration', arguments: { question: 'Can back-calculating the same standards reveal their shared stock concentration bias?' } }]),
+      discovery,
+      said('Use an independent reference. [[S1:P1:1]]', 'resp_explanation'),
+      said({ paragraphs: [{ id: 'p1', text: original, kind: 'supported' }], citations: [{ paragraphId: 'p1', ref: 'S1:P1:1', quote: original }] }, 'resp_reviewed'),
+    );
+    const text = 'If all of my standards are thirty percent low, can recalculating those same standards catch it?';
+    const history = [{ role: 'user' as const, text: 'All standards came from the same stock solution.' }];
+    const reply = await provider(fn).converse({ text, context: home, history });
+    expect(calls).toHaveLength(4);
+    expect(readSource).toHaveBeenCalledWith(source, expect.objectContaining({ timeoutMs: expect.any(Number) }));
+    const research = JSON.parse(String(calls[1].init.body));
+    expect(research.reasoning).toEqual({ effort: 'low' });
+    expect(research.tools).toEqual([{ type: 'web_search', search_context_size: 'medium' }]);
+    expect(research.include).toContain('web_search_call.results');
+    expect(research.stream).toBe(true);
+    expect(research.previous_response_id).toBeUndefined();
+    expect(JSON.parse(research.input)).toMatchObject({ originalUserMessage: text, recentConversation: history });
+    const continuation = JSON.parse(String(calls[2].init.body));
+    expect(continuation.previous_response_id).toBeUndefined();
+    expect(continuation.input.at(-1)).toEqual(expect.objectContaining({ type: 'function_call_output', call_id: 'research_calibration' }));
+    const evidence = JSON.parse(continuation.input.at(-1).output);
+    expect(evidence.sources).toEqual([expect.objectContaining({ id: 'S1', status: 'read' })]);
+    expect(evidence.excerpts).toEqual([expect.objectContaining({ id: 'S1:P1:1', text: original })]);
+    expect(JSON.stringify(evidence)).not.toContain('UNREAD GENERATED CLAIM');
+    const review = JSON.parse(String(calls[3].init.body));
+    expect(review.previous_response_id).toBeUndefined();
+    expect(review.reasoning).toEqual({ effort: 'low' });
+    expect(review.tools).toBeUndefined();
+    expect(review.text.format.name).toBe('evidence_review');
+    expect(reply.responseId).toBe('resp_explanation');
+    expect(reply.sources).toContainEqual({ url: source, title: 'Independent calibration study', quote: original });
+    expect(reply.actions).toEqual([]);
+    expect(reply.pendingTools).toBeUndefined();
+  });
+
+  it.skipIf(!local)('returns all independent read-tool results in one continuation without changing the plan', async () => {
+    const { fn, calls } = fakeFetch(
+      toolReply([{ name: 'read_run', callId: 'read_state' }, { name: 'calculate_plan', arguments: { replicates: 3 }, callId: 'read_plan' }]),
+      said('With three sample replicates and two standard replicates, the hypothetical plan uses 54 wells.', 'resp_answer'),
+    );
+    const context: ConverseContext = { screen: 'plan', protocolId: 'pierce-bca', procedure: 'microplate', samples: 12, replicates: 2, standardReplicates: 2 };
+    const reply = await provider(fn).converse({ text: 'What would happen if I did each sample three times? I am still deciding.', context });
+    expect(reply.pendingTools).toBeUndefined();
+    expect(reply.actions).toEqual([]);
+    expect(context.replicates).toBe(2);
+    expect(calls).toHaveLength(2);
+    const continuation = JSON.parse(String(calls[1].init.body));
+    expect(continuation.previous_response_id).toBeUndefined();
+    const outputs = continuation.input.filter((x: { type: string }) => x.type === 'function_call_output');
+    expect(outputs.map((x: { call_id: string }) => x.call_id).sort()).toEqual(['read_plan', 'read_state']);
+    expect(JSON.parse(outputs.find((x: { call_id: string }) => x.call_id === 'read_plan').output)).toMatchObject({ plan: { replicates: 3, standardReplicates: 2 }, wells: 54 });
+  });
+
+  it.skipIf(!local)('waits for the browser receipt, then confirms the operation itself without a second model call, the same receipt only once', async () => {
+    const { fn, calls } = fakeFetch(
+      toolReply([{ name: 'perform_action', arguments: { type: 'setSamples', value: 11 }, callId: 'change_samples' }]),
+      said('The plan now has eleven samples.', 'resp_done'),
+    );
+    const p = provider(fn);
+    const original = { text: 'One of the twelve is unusable now; take it out of the plan.', context: { screen: 'plan', protocolId: 'pierce-bca', procedure: 'microplate', samples: 12, replicates: 2 } };
+    const pending = await p.converse(original);
+    expect(pending.pendingTools).toEqual([{ callId: 'change_samples', action: { type: 'setSamples', samples: 11 } }]);
+    expect(pending.continuationToken).toBeTruthy();
+    expect(pending.actions).toEqual([]);
+    expect(calls).toHaveLength(1);
+    const resumed = { ...original, context: { ...original.context, samples: 11 }, continuationToken: pending.continuationToken, toolResults: [{ callId: 'change_samples', ok: true, message: 'Applied sample count 11.' }] };
+    const done = await p.converse(resumed);
+    // The app's own word (confirm.ts); the model's second reply above is never asked for.
+    expect(done.say).toBe('11 samples.');
+    expect(done.pendingTools).toBeUndefined();
+    expect(done.responseId).toBe(pending.responseId);
+    expect(await p.converse(resumed)).toEqual(done);
+    expect(calls).toHaveLength(1);
+  });
+
+  it.skipIf(!local)('passes a failed browser execution back to the model as failure', async () => {
+    const { fn, calls } = fakeFetch(
+      toolReply([{ name: 'perform_action', arguments: { type: 'setReplicates', value: 3 }, callId: 'change_replicates' }]),
+      said('The plan stayed unchanged because the experiment was changed elsewhere.'),
+    );
+    const p = provider(fn);
+    const request = { text: 'Use the three-replicate option we discussed.', context: { screen: 'plan', protocolId: 'pierce-bca', procedure: 'microplate', samples: 12, replicates: 2 } };
+    const pending = await p.converse(request);
+    const done = await p.converse({ ...request, continuationToken: pending.continuationToken, toolResults: [{ callId: 'change_replicates', ok: false, message: 'The active experiment changed; nothing was applied.' }] });
+    expect(done.say).toMatch(/unchanged/);
+    const body = JSON.parse(String(calls[1].init.body));
+    expect(JSON.stringify(body.input)).toContain('false');
+    expect(JSON.stringify(body.input)).toContain('nothing was applied');
   });
 
   it('reports an upstream failure without the key', async () => {
@@ -154,46 +254,21 @@ describe('meta converse', () => {
     expect(error.message).toBe('Meta converse failed (401): Invalid key ***');
   });
 
-  it('times out', async () => {
-    const hang = (async (_url: string, init: RequestInit) =>
-      new Promise((_, fail) => init.signal!.addEventListener('abort', () => fail(init.signal!.reason)))) as unknown as typeof fetch;
+  it('times out without automatically duplicating a potentially billable request', async () => {
+    let calls = 0;
+    const hang = (async (_url: string, init: RequestInit) => {
+      calls++;
+      return new Promise((_, fail) => init.signal!.addEventListener('abort', () => fail(init.signal!.reason)));
+    }) as unknown as typeof fetch;
     const error = await provider(hang, { converse: 50 }).converse({ text: 'x', context: home }).catch(e => e);
     expect(error).toBeInstanceOf(UpstreamError);
     expect(error.message).toMatch(/converse timed out/);
-  });
-
-  it('asks again once when a call hangs, while the turn has time', async () => {
-    let calls = 0;
-    const fn = (async (_url: string, init: RequestInit) => {
-      if (calls++ === 0) return new Promise((_, fail) => init.signal!.addEventListener('abort', () => fail(init.signal!.reason)));
-      return new Response(JSON.stringify(said(wire({ say: 'Here now.' }))));
-    }) as unknown as typeof fetch;
-    const reply = await provider(fn, { converse: 5000, attempt: 50 }).converse({ text: 'x', context: home });
-    expect(reply.say).toBe('Here now.');
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
   it('cannot reach the API', async () => {
     const { fn } = fakeFetch(new TypeError('fetch failed'));
     await expect(provider(fn).converse({ text: 'x', context: home })).rejects.toThrow('Could not reach the Meta API for converse');
-  });
-});
-
-describe('meta converse prompt', () => {
-  it('states the rules and the screen, and lists the protocols on this machine', () => {
-    const prompt = systemPrompt({ screen: 'plan', protocolId: null, samples: 12, replicates: 2 });
-    expect(prompt).toMatch(/one or two short sentences/);
-    expect(prompt).toMatch(/Never guess an experiment's numbers, not even typical ones/);
-    expect(prompt).toMatch(/Small talk, how the user's day is going, what something is or why it works, and what may have gone wrong: answer as a labmate would/);
-    expect(prompt).toContain('Right now: screen "plan", protocol none, 12 samples, 2 replicates.');
-    expect(prompt).not.toContain('Steps (index');
-    if (local) expect(prompt).toContain('pierce-bca (Pierce BCA Protein Assay Kit, Thermo Scientific)');
-  });
-
-  it.skipIf(!local)('carries the BCA facts when the BCA protocol is on screen', () => {
-    const prompt = systemPrompt({ screen: 'run', protocolId: 'pierce-bca', step: 0, samples: 12, replicates: 2 });
-    expect(prompt).toContain('Steps (index: id, title, what to do, page):');
-    expect(prompt).toContain('400 µL BSA stock');
   });
 });
 
@@ -259,7 +334,7 @@ describe('meta findProtocol', () => {
       ...(local ? { protocolId: 'pierce-bca' } : {}),
       progress: ['Looking for the Thermo Fisher manual.', 'Found it, opening the PDF.'],
       answer,
-      sources: [{ url: PDF, title: 'Pierce BCA Protein Assay Kit' }, { url: 'https://www.example.org/bca?page=2', title: 'A blog' }],
+      sources: [{ url: `${PDF}?ref=vastkind.com`, title: 'Pierce BCA Protein Assay Kit' }, { url: PDF }, { url: 'https://www.example.org/bca?utm_source=x&page=2', title: 'A blog' }],
     });
     const body = JSON.parse(calls[0].init.body as string);
     expect(calls[0].url).toBe('https://api.meta.ai/v1/responses');
@@ -273,6 +348,16 @@ describe('meta findProtocol', () => {
     expect(found.found).toBe(false);
     expect(found.document).toBeUndefined();
     expect(found.answer).toBe('I could not find the vendor manual for 99999.');
+  });
+
+  it('takes the manual the model named when the page it opened carried a ?ref=, not another page from the search', () => {
+    // Spark 1.1 and 1.2 on 2026-11-01: opened the PDF with ?ref=vastkind.com, wrote it without, cited nothing.
+    const r: { output: Record<string, any>[] } = searchReply('The Pierce BCA user guide.' + details, []);
+    r.output = r.output.map(o => (o.type === 'web_search_call' && o.action.type === 'open_page' ? { ...o, action: { type: 'open_page', url: `${PDF}?ref=vastkind.com` } } : o));
+    r.output.splice(2, 0, { type: 'web_search_call', status: 'completed', action: { type: 'search', query: 'BCA' }, results: [{ url: 'https://www.thermofisher.com/mc/en/home/life-science/protein-biology/protein-assay-data-analysis.html', title: 'Protein assay data analysis' }] });
+    const found = parseFound(r, 'Thermo Pierce BCA Protein Assay Kit 23225');
+    expect(found.found).toBe(true);
+    expect(found.document?.url).toBe(PDF);
   });
 
   it('gives a reagent with no manual its product page, and nothing to read into steps', () => {
@@ -290,6 +375,48 @@ describe('meta findProtocol', () => {
     expect(found.progress).toEqual(['Searching: Pierce BCA 23225 user guide', 'Opening documents.thermofisher.com']);
     expect(found.found).toBe(true);
     expect(found.document).toEqual({ title: 'Pierce BCA guide', url: PDF });
+  });
+
+  it('reads what the search read of the manual, after the details, into an intro to show first', () => {
+    const read = [
+      'Title: Pierce BCA Protein Assay',
+      'Summary: Colorimetric total-protein assay: proteins reduce Cu2+ and BCA turns purple. Read at 562 nm, 20-2000 ug/mL.',
+      'Procedure: Microplate procedure',
+      'Step: Pipette 25 uL of each standard or sample into a well | 3',
+      'Step: Add 200 uL of working reagent and mix for 30 seconds | p. 3',
+      'Bottle: Reagent A | 1000 mL',
+      'Bottle: Albumin Standard Ampules, 2 mg/mL | 10 x 1 mL',
+    ].join('\n');
+    const found = parseFound(searchReply(`The Pierce BCA user guide, Rev. D.${details}\n${read}`, [cite(PDF, 'Pierce BCA guide')]), 'pierce bca 23225');
+    expect(found.answer).toBe('The Pierce BCA user guide, Rev. D.');
+    expect(found.document?.url).toBe(PDF);
+    expect(found.intro).toMatchObject({
+      title: 'Pierce BCA Protein Assay',
+      kit: { name: 'Pierce BCA Protein Assay Kit', vendor: 'Thermo Fisher Scientific', catalogs: ['23225'] },
+      source: { title: 'Pierce BCA Protein Assay Kit User Guide', url: PDF },
+      overview: { cite: { page: 3 } },
+      procedure: { name: 'Microplate procedure', steps: [{ text: 'Pipette 25 µL of each standard or sample into a well', page: 3 }, { text: 'Add 200 µL of working reagent and mix for 30 seconds', page: 3 }] },
+      contents: [{ name: 'Reagent A', amount: '1000 mL' }, { name: 'Albumin Standard Ampules, 2 mg/mL', amount: '10 x 1 mL' }],
+    });
+    // Nothing read, or too little to show: no intro, and the manual's own comes first.
+    expect(parseFound(searchReply(`The guide.${details}\nTitle: Pierce BCA Protein Assay`, [cite(PDF, 'Pierce BCA guide')])).intro).toBeUndefined();
+  });
+
+  it('names the manual as soon as the URL line is whole, before the search writes the rest', () => {
+    const heard: FoundProtocol[] = [];
+    const watch = documentWatcher('pierce bca', found => heard.push(found));
+    watch({ type: 'response.output_item.added', item: { type: 'message', id: 'c1', phase: 'commentary' } });
+    watch({ type: 'response.output_text.delta', item_id: 'c1', delta: 'URL: https://elsewhere.example/x.pdf\n' });
+    watch({ type: 'response.output_item.done', item: { type: 'web_search_call', status: 'completed', action: { type: 'open_page', url: PDF } } });
+    watch({ type: 'response.output_item.added', item: { type: 'message', id: 'm1' } });
+    const text = `The Pierce BCA user guide.${details}\nTitle: Pierce BCA Protein Assay\nSummary: A copper assay.`;
+    const cut = text.indexOf(PDF) + PDF.length;
+    watch({ type: 'response.output_text.delta', item_id: 'm1', delta: text.slice(0, cut) });
+    expect(heard).toEqual([]);
+    watch({ type: 'response.output_text.delta', item_id: 'm1', delta: text.slice(cut, cut + 1) });
+    expect(heard.map(f => [f.found, f.document?.url])).toEqual([[true, PDF]]);
+    watch({ type: 'response.output_text.delta', item_id: 'm1', delta: text.slice(cut + 1) });
+    expect(heard).toHaveLength(1);
   });
 
   it('fails on an empty or failed response', async () => {
@@ -318,7 +445,11 @@ describe('find-protocol helpers', () => {
     const { answer, details: d } = splitDetails('Steps here.\n\n---\n**Vendor:** Abcam\nCatalog: ab287843\nKit: 3T3-L1 Differentiation Kit\nDocument: none\nVersion: v5a\nURL: <https://content.abcam.com/x.pdf>');
     expect(answer).toBe('Steps here.');
     expect(d).toEqual({ vendor: 'Abcam', catalog: 'ab287843', kit: '3T3-L1 Differentiation Kit', version: 'v5a', url: 'https://content.abcam.com/x.pdf' });
-    expect(splitDetails('No block at all.')).toEqual({ answer: 'No block at all.', details: {} });
+    expect(splitDetails('No block at all.')).toEqual({ answer: 'No block at all.', details: {}, after: [] });
+    // The block first, with what the search read after it; a stray label line in the prose is not the block.
+    expect(splitDetails('Version: 2 of the guide is newer.\nIt moved.\nVendor: Abcam\nKit: X\nURL: https://a.example/x.pdf\nTitle: X assay')).toEqual({
+      answer: 'Version: 2 of the guide is newer.\nIt moved.', details: { vendor: 'Abcam', kit: 'X', url: 'https://a.example/x.pdf' }, after: ['Title: X assay'],
+    });
   });
 
   it.each([

@@ -1,17 +1,23 @@
 import { z } from 'zod';
+import { createConversation, responseEvents } from './conversation.ts';
+import type { Router } from './router.ts';
+import { createScientificResearch, reviewScientificAnswer } from './science.ts';
+import { createProtocolPreview } from './protocolPreview.ts';
+import { readSource } from './sourceReader.ts';
+import { candidatesFromResponse } from './evidence.ts';
+import { downloadPdf, readManual } from '../imports.ts';
 import { checkA2ui, componentsOf, dataPaths, numbersIn, type A2uiMessage } from '../../shared/a2ui.ts';
-import type { Action, AIProvider, ConverseContext, ConverseReply, Expression, FindProtocolLive, FoundProtocol, Source, Transcript } from '../../shared/ai.ts';
+import type { Action, AIProvider, ConverseContext, ConverseReply, Expression, FindProtocolLive, FoundProtocol, ProtocolIntro, Source, Transcript } from '../../shared/ai.ts';
 import type { Protocol } from '../../shared/protocol.ts';
 import { dataModel } from '../../src/components/a2ui/data.ts';
 import type { RunPlan } from '../../src/components/lab/model.ts';
 import { procedureFor } from '../../src/screens/protocol/content.ts';
-import { readEvents } from '../../shared/sse.ts';
 import { distance, fixLabWords, labTerms, needsModelFix } from '../../src/voice/labWords.ts';
-import { UpstreamError } from './provider.ts';
+import { finished, UpstreamError } from './provider.ts';
 import { metaReadPlate } from './plate.ts';
-import { importProtocol, replyText } from './import.ts';
+import { importProtocol, introOf, replyText, type Intro } from './import.ts';
 import { createKitVision } from './vision.ts';
-import { costOf, meter, PER, usageLine } from './usage.ts';
+import { costOf, inputCost, outputCost, meter, PER, usageLine } from './usage.ts';
 import { authorize, claimsChange, type Rules } from './authorize.ts';
 import { ActionSchema, ConverseReplySchema, describeIssues, expressions, MAX_REPLICATES, routes } from './schema.ts';
 import { solutionReply } from './solution.ts';
@@ -31,14 +37,19 @@ const MODEL = 'muse-spark-1.3';
  * How hard Muse Spark thinks before it answers (minimal, low, medium, high, xhigh, max; high when not sent). Thinking
  * is most of the wait. On 2026-10-28 the storyboard's eight lines (scripts/converse-smoke.ts) took a median 7.0 s
  * (max 8.1) at high, 1,000–2,000 reasoning tokens each; 2.4 s (max 4.6) at low; 1.7 s (max 2.6) at minimal, about 200
- * tokens, with the same actions and manual pages every time.
+ * tokens, with the same actions and manual pages every time. The conversation's front assistant (agents.ts) answers
+ * at minimal with a short prompt: on 2026-10-31 a greeting took 1.7 s, a bench command 1.5 s and a handoff 1.6 s. The
+ * specialists think harder on fewer turns. `converse` is not an agent: set, it overrides every agent (a measuring
+ * sweep, scripts/converse-smoke.ts --effort). The manual search runs at minimal: on the BCA manual on 2026-11-01 it
+ * named the right PDF every time at minimal too, and its intro came about 5 s sooner (median 6.1 s in 12 runs, against
+ * 10.9 s in 9 at low); the search does not change what the read gets, which is the same PDF either way.
  */
-export const EFFORT = { converse: 'minimal', findProtocol: 'low', fixTranscript: 'minimal', drawStep: 'medium' } as const;
+export const EFFORT = { front: 'minimal', manual: 'low', science: 'medium', numbers: 'low', findProtocol: 'minimal', fixTranscript: 'minimal', drawStep: 'medium' } as const;
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
- * One converse call's wait. Answers take 1.5–4 s; on 2026-10-29 one call hung for the whole 30 s and the user saw an
- * error, so a call that has not answered by now is asked again while the turn has time.
+ * Retained for older benchmark callers that pass an attempt timeout. The conversation loop has a shared turn
+ * deadline and does not automatically repeat timed-out model calls (which can incur duplicate usage).
  */
 const ATTEMPT_MS = 12_000;
 
@@ -48,16 +59,18 @@ export type MetaOptions = {
   /** Injected by tests; the global fetch otherwise. */
   fetch?: typeof fetch;
   log?: (line: string) => void;
-  /** Milliseconds per operation. A converse retry shares its first attempt's budget; `attempt` caps each try. */
+  /** Milliseconds per operation; converse is the bounded model/tool-loop budget. */
   timeouts?: { converse?: number; findProtocol?: number; transcribe?: number; attempt?: number; draw?: number };
-  /** Overrides EFFORT, for measuring (scripts/converse-smoke.ts --effort). */
-  effort?: Partial<Record<keyof typeof EFFORT, Effort>>;
+  /** Overrides EFFORT, for measuring (scripts/converse-smoke.ts --effort); `converse` sets every conversation agent. */
+  effort?: Partial<Record<keyof typeof EFFORT | 'converse', Effort>>;
+  /** The embedding fast path for the plainest bench commands (router.ts); none in tests. */
+  route?: Router['route'];
 };
 
 type Json = Record<string, any>;
 
 // ---------------------------------------------------------------------------------------------------------------
-// Converse: Muse Spark answers in a strict JSON schema, which we turn into a ConverseReply and check with zod.
+// Legacy structured-reply fixtures and replay checks. Live conversation uses conversation.ts and function tools.
 
 const replyExpressions = expressions.filter(e => e !== 'listen');
 const actionTypes = ['navigate', 'setSamples', 'setReplicates', 'nextStep', 'previousStep', 'markDone', 'redo', 'startTimer', 'setStepTime', 'moveWell', 'addWell', 'addCondition', 'findProtocol'] as const;
@@ -479,43 +492,97 @@ export function checkReply(content: unknown, context: ConverseContext, question 
 // Find a protocol: Muse Spark with web search, as in scripts/find-protocol.ts.
 
 // The answer is short on purpose: the app shows the protocol on this machine (or imports the PDF found), so only the
-// document, the kit and a few lines are read from it, and every line written is time the user waits.
+// document, the kit and a few lines are read from it, and every line written is time the user waits. The document's
+// details come first: the manual is downloaded and read from its URL on (onDocument) while the search writes what it
+// read of it, which the Overview shows until the manual's own intro is ready.
 const findInstructions = `You are Chapp, a lab companion at the bench. The user names a kit or a reagent, and maybe the part of its protocol they need.
 1. Search the web for the vendor's own manual, user guide or protocol for that exact product (its catalog number when given). Prefer the newest version on the vendor's site. Before each search or page, say in a few words what you are doing: the user sees it live.
-2. Answer only from that document: the requested section's steps, or the main procedure if they name none, in at most 6 short lines, with volumes, times and temperatures exactly as written.
-3. Name the document, its version or date, and cite its URL. If you cannot find the vendor's document, say so; never fill in steps from memory or from another kit.
-4. A product with no manual or protocol of its own (a plain chemical, buffer, medium or antibody sold with a product page only): say so first, then in at most 4 short lines from the vendor's product page what it is, its catalog number, how it is stored and what it is used for. Its Document is "none" and its URL is that product page.
+2. Locate the document and identify it in one sentence: its name, its version or date, and its URL cited. If you cannot find the vendor's document, say so; never fill in steps from memory or from another kit.
+3. A product with no manual or protocol of its own (a plain chemical, buffer, medium or antibody sold with a product page only): say so first, then in at most 4 short lines from the vendor's product page what it is, its catalog number, how it is stored and what it is used for. Its Document is "none" and its URL is that product page.
 Reply in the user's language, but keep reagent names, units and numbers as the manual writes them.
-End with these six lines, labels in English exactly as shown, "none" for anything you could not find:
+Then these six lines, labels in English exactly as shown, "none" for anything you could not find:
 Vendor: <company>
 Catalog: <catalog number>
 Kit: <kit name>
 Document: <the document's title>
 Version: <its version or date, as printed>
-URL: <the document's URL>`;
+URL: <the document's URL>
+The application starts reading the document as soon as it has its URL. Then, only when you found the vendor's manual and read it yourself, these lines from it in English, for the user to see while the application reads the whole manual and checks every number; otherwise none of them, and never anything from memory or from another kit:
+Title: <the assay's name, without "Kit" or trademark signs>
+Summary: <two or three sentences: the kind of method, what it measures and how, its readout or range>
+Procedure: <the main procedure's name; the microplate one when there is also a test-tube one>
+Step: <one step of that procedure, in the manual's own words with its numbers> | <its page>
+Bottle: <one bottle the kit holds, as printed> | <its amount, as printed>
+One Step line per step, in order, and one Bottle line per bottle. Nothing after them.`;
 
 const labels = ['vendor', 'catalog', 'kit', 'document', 'version', 'url'] as const;
 type Label = (typeof labels)[number];
+const DETAIL = /^[-*>\s]*\**\s*(vendor|catalog|kit|document|version|url)\s*\**\s*[:：]\s*\**\s*(.*?)\s*\**\s*$/i;
 
-/** Splits the trailing "Vendor: … URL: …" block off the answer. Missing or "none" values come back undefined. */
-export function splitDetails(text: string): { answer: string; details: Partial<Record<Label, string>> } {
+/**
+ * Splits the "Vendor: … URL: …" block off the answer: the run of those lines naming the most of them (blank lines
+ * between allowed), so a stray "Version: 2" in the prose is not taken for it. Missing or "none" values come back
+ * undefined; `after` is what follows the block (what the search read of the manual, findInstructions).
+ */
+export function splitDetails(text: string): { answer: string; details: Partial<Record<Label, string>>; after: string[] } {
   const lines = text.split('\n');
-  const details: Partial<Record<Label, string>> = {};
-  let cut = lines.length;
-  for (let i = lines.length - 1; i >= 0; i--) {
+  type Run = { start: number; end: number; seen: Set<Label>; details: Partial<Record<Label, string>> };
+  const runs: Run[] = [];
+  let run: Run | undefined;
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
-    const m = /^[-*>\s]*\**\s*(vendor|catalog|kit|document|version|url)\s*\**\s*[:：]\s*\**\s*(.*?)\s*\**\s*$/i.exec(line);
-    if (!m) break;
-    const label = m[1].toLowerCase() as Label;
-    if (label in details) break;
+    const m = DETAIL.exec(line);
+    const label = m ? (m[1].toLowerCase() as Label) : null;
+    if (run && (!label || run.seen.has(label))) run = undefined;
+    if (!m || !label) continue;
+    if (!run) runs.push((run = { start: i, end: i + 1, seen: new Set(), details: {} }));
+    run.seen.add(label);
+    run.end = i + 1;
     const value = m[2].replace(/^<|>$/g, '').replace(/^\[(.*)\]\((.*)\)$/, label === 'url' ? '$2' : '$1').trim();
-    if (value && !/^(none|n\/a|unknown|not found|無|无)\.?$/i.test(value)) details[label] = value;
-    cut = i;
+    if (value && !/^(none|n\/a|unknown|not found|無|无)\.?$/i.test(value)) run.details[label] = value;
   }
-  let rest = lines.slice(0, cut);
+  const best = runs.reduce<Run | undefined>((b, r) => (!b || r.seen.size >= b.seen.size ? r : b), undefined);
+  let rest = lines.slice(0, best?.start ?? lines.length);
   while (rest.length && /^\s*(-{3,}|\*{3,}|_{3,})?\s*$/.test(rest[rest.length - 1])) rest = rest.slice(0, -1);
-  return { answer: rest.join('\n').trim(), details };
+  return { answer: rest.join('\n').trim(), details: best?.details ?? {}, after: best ? lines.slice(best.end) : [] };
+}
+
+const READ = /^[-*>\s]*\**\s*(title|summary|procedure|step|bottle)\s*\**\s*[:：]\s*\**\s*(.*?)\s*\**\s*$/i;
+
+/**
+ * What the search read of the manual (the lines after its details, findInstructions) → the Overview's intro until the
+ * manual's own is read, or null when it wrote too little to show (no summary or no steps).
+ */
+export function searchedIntro(lines: string[], details: Partial<Record<Label, string>>, url: string): ProtocolIntro | null {
+  const intro: Intro = {
+    kitName: details.kit ?? '', vendor: details.vendor ?? '', catalogs: details.catalog ? [details.catalog] : [], docTitle: details.document ?? '',
+    publisher: details.vendor ?? '', docId: details.catalog ?? '', revision: details.version ?? '', title: '', summary: '', overviewSteps: [],
+    overviewExpected: [], overviewCite: '', procedureName: '', steps: [], otherProcedures: [], contents: [],
+  };
+  // "Add 25 µL | 3": what is before the last bar, and the number after it.
+  const split = (value: string) => {
+    const bar = value.lastIndexOf('|');
+    return bar < 0 ? [value.trim(), ''] : [value.slice(0, bar).trim(), value.slice(bar + 1).trim()];
+  };
+  for (const line of lines) {
+    const m = READ.exec(line.trim());
+    if (!m) continue;
+    const [label, value] = [m[1].toLowerCase(), m[2]];
+    if (label === 'title') intro.title = value;
+    else if (label === 'summary') intro.summary = value;
+    else if (label === 'procedure') intro.procedureName = value;
+    else if (label === 'step') {
+      const [text, page] = split(value);
+      if (text) intro.steps.push({ text, page: Number(/\d+/.exec(page)?.[0] ?? 1) || 1 });
+    } else {
+      const [name, amount] = split(value);
+      if (name) intro.contents.push({ name, amount });
+    }
+  }
+  intro.overviewSteps = intro.steps.map(s => s.text);
+  intro.overviewCite = intro.steps.length ? `p${intro.steps[0].page}` : '';
+  return introOf(intro, url);
 }
 
 const generic = new Set(['scientific', 'biosciences', 'bioscience', 'technologies', 'technology', 'systems', 'inc', 'ltd', 'llc', 'corporation', 'corp', 'company', 'life', 'labs', 'laboratories', 'international', 'the', 'and']);
@@ -575,30 +642,36 @@ export function parseFound(r: Json, query = ''): FoundProtocol {
       o.action?.type === 'open_page' && o.action.url ? `Opening ${host(o.action.url)}` : `Searching: ${o.action?.query ?? 'the web'}`);
   }
   const parts = messages.filter(o => o.phase !== 'commentary').flatMap(said);
-  const { answer, details } = splitDetails(parts.map(c => c.text).join(''));
+  const { answer, details, after } = splitDetails(parts.map(c => c.text).join(''));
 
   const sources: Source[] = [];
   for (const a of parts.flatMap(c => (Array.isArray(c.annotations) ? c.annotations : [])) as Json[]) {
     if (a.type !== 'url_citation' || typeof a.url !== 'string') continue;
-    const url = cleanUrl(a.url);
+    const url = a.url;
     const known = sources.find(s => sameUrl(s.url, url));
     if (!known) sources.push({ url, ...(a.title ? { title: a.title } : {}) });
     else if (!known.title && a.title) known.title = a.title;
   }
-  const opened = items.filter(o => o.type === 'web_search_call' && typeof o.action?.url === 'string').map(o => cleanUrl(o.action.url));
+  const opened = items.filter(o => o.type === 'web_search_call' && typeof o.action?.url === 'string').map(o => o.action.url);
+
+  for (const group of candidatesFromResponse(r)) for (const candidate of group.candidates) {
+    if (!sources.some(s => s.url === candidate.url)) sources.push({ url: candidate.url, ...(candidate.title ? { title: candidate.title } : {}) });
+  }
 
   // Found means the vendor's own document was cited: by its site, or by the URL the model named as the document.
-  const named = details.url && /^https?:\/\//.test(details.url) ? cleanUrl(details.url) : undefined;
+  const named = details.url && /^https?:\/\//.test(details.url) ? details.url : undefined;
   const vendorSource = details.vendor ? sources.find(s => isVendorUrl(s.url, details.vendor!)) : undefined;
-  const namedCited = named && [...sources.map(s => s.url), ...opened].some(u => sameUrl(u, named)) ? named : undefined;
+  // The model often writes the link without the ?ref=… the page it opened carries, so the two are compared clean.
+  const namedCited = named && [...sources.map(s => s.url), ...opened].some(u => sameUrl(cleanUrl(u), cleanUrl(named))) ? cleanUrl(named) : undefined;
   // Without the details block, a cited site whose name the user or the answer mentions counts as the vendor's.
   const mentioned = (query + answer.slice(0, 600)).toLowerCase().replace(/[^a-z0-9]/g, '');
   const guessed = details.vendor ? undefined : sources.find(s => siteName(s.url).length >= 4 && mentioned.includes(siteName(s.url)));
   // A product with no manual (rule 4): its product page, with what the answer read from it, but nothing to import.
-  const page = !details.document && named && !/\.pdf(?:[?#]|$)/i.test(named) && (namedCited || (details.vendor && isVendorUrl(named, details.vendor))) ? named : undefined;
-  const found = !page && Boolean(vendorSource || namedCited || guessed);
-  const url = namedCited ?? (named && details.vendor && isVendorUrl(named, details.vendor) ? named : undefined) ?? vendorSource?.url ?? guessed?.url;
+  const page = !details.document && named && !/\.pdf(?:[?#]|$)/i.test(named) && namedCited ? named : undefined;
+  const found = !page && Boolean(((details.document || (namedCited && /\.pdf(?:[?#]|$)/i.test(namedCited))) && (vendorSource || namedCited)) || guessed);
+  const url = namedCited ?? vendorSource?.url ?? guessed?.url;
   const title = details.document ?? sources.find(s => url && sameUrl(s.url, url))?.title;
+  const intro = found && url ? searchedIntro(after, details, url) : null;
 
   return {
     found,
@@ -608,6 +681,35 @@ export function parseFound(r: Json, query = ''): FoundProtocol {
     answer,
     sources,
     ...(page ? { page } : {}),
+    ...(intro ? { intro } : {}),
+  };
+}
+
+const URL_LINE = /^[-*>\s]*\**\s*url\s*\**\s*[:：][^\n]*\S[^\n]*\n/im;
+
+/**
+ * Watches a streamed search for the end of its details block (findInstructions): once its URL line is whole,
+ * `onDocument` hears what parseFound makes of the reply so far, when that is a document found, so the manual can be
+ * read while the search writes the rest. Once at most.
+ */
+export function documentWatcher(query: string, onDocument: (found: FoundProtocol) => void): (event: Json) => void {
+  const items: Json[] = [];
+  const phases = new Map<string | number, string>();
+  const annotations: Json[] = [];
+  let text = '';
+  let told = false;
+  return event => {
+    if (told) return;
+    if (event.type === 'response.output_item.added' && event.item?.type === 'message') phases.set(event.item.id ?? event.output_index, event.item.phase ?? 'final');
+    if (event.type === 'response.output_item.done' && event.item && event.item.type !== 'message') items.push(event.item);
+    if (event.type === 'response.output_text.annotation.added' && event.annotation) annotations.push(event.annotation);
+    if (event.type !== 'response.output_text.delta' || typeof event.delta !== 'string') return;
+    if (phases.get(event.item_id ?? event.output_index) === 'commentary') return;
+    text += event.delta;
+    if (!URL_LINE.test(text)) return;
+    told = true;
+    const found = parseFound({ output: [...items, { type: 'message', content: [{ type: 'output_text', text, annotations }] }] }, query);
+    if (found.found && found.document) onDocument(found);
   };
 }
 
@@ -625,29 +727,6 @@ function upstreamMessage(text: string, apiKey: string): string {
   return String(message).split(apiKey).join('***').replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
-/**
- * A streamed Responses API reply (stream: true): each event to `onEvent` as it arrives, then the finished response
- * from response.completed. A failed or cut-off stream comes back as a failed response, so callers check one shape.
- */
-async function finished(body: ReadableStream<Uint8Array>, onEvent: (event: Json) => void): Promise<Json> {
-  for await (const { data } of readEvents(body)) {
-    if (data === '[DONE]') break;
-    let event: Json;
-    try {
-      event = JSON.parse(data);
-    } catch {
-      continue;
-    }
-    onEvent(event);
-    if (event.type === 'response.completed') return event.response ?? {};
-    if (event.type === 'response.failed' || event.type === 'response.incomplete') {
-      return { ...event.response, status: 'failed', error: event.response?.error ?? { message: event.response?.incomplete_details?.reason ?? event.type } };
-    }
-    if (event.type === 'error') return { status: 'failed', error: { message: event.message ?? event.error?.message ?? event.code } };
-  }
-  return { status: 'failed', error: { message: 'the stream ended before the answer' } };
-}
-
 /** Muse Spark puts misheard lab words right when the local fixes could not: the transcript back with only those changed. */
 const fixFormat = {
   type: 'json_schema',
@@ -660,8 +739,9 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   const { apiKey, baseUrl = 'https://api.meta.ai/v1', log = (line: string) => console.log(line) } = options;
   if (!apiKey) throw new Error('AI_PROVIDER=meta needs MODEL_API_KEY in .env (see .env.example).');
   const fetchFn = options.fetch ?? globalThis.fetch;
-  const timeouts = { converse: 30_000, findProtocol: 60_000, transcribe: 20_000, attempt: ATTEMPT_MS, draw: 90_000, ...options.timeouts };
-  const effort: Record<keyof typeof EFFORT, Effort> = { ...EFFORT, ...options.effort };
+  const timeouts = { converse: 90_000, findProtocol: 60_000, transcribe: 20_000, attempt: ATTEMPT_MS, draw: 90_000, ...options.timeouts };
+  const { converse: sweep, ...overrides } = options.effort ?? {};
+  const effort: Record<keyof typeof EFFORT, Effort> = { ...EFFORT, ...overrides };
 
   type Request = {
     body: string | FormData;
@@ -675,6 +755,20 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
   };
 
   async function call(what: string, path: string, init: Request, timeoutMs: number): Promise<Json> {
+    const request = typeof init.body === 'string' ? JSON.parse(init.body) as Json : null;
+    const tokenModel = init.model ?? '';
+    const estimatedInput = request ? Math.ceil(init.body.toString().length / 2) + (request.previous_response_id ? 12_000 : 0) : 0;
+    const estimate = request ? inputCost(tokenModel, estimatedInput) + outputCost(tokenModel, request.max_output_tokens ?? 6000)
+      + (request.tools?.some((t: Json) => t.type === 'web_search') ? (request.max_tool_calls ?? 3) * PER.search : 0) : 0;
+    const release = meter.reserve(estimate);
+    try {
+      return await unreservedCall(what, path, init, timeoutMs);
+    } finally {
+      release();
+    }
+  }
+
+  async function unreservedCall(what: string, path: string, init: Request, timeoutMs: number): Promise<Json> {
     meter.check();
     const started = Date.now();
     const seconds = () => ((Date.now() - started) / 1000).toFixed(1);
@@ -746,7 +840,13 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
     }
   }
 
-  return {
+  const previewProtocol = createProtocolPreview({
+    knownProtocol: request => request.protocolId ? loadProtocol(request.protocolId) : knownProtocols().find(protocol => protocol.source.url === request.url) ?? null,
+    download: (url, signal) => downloadPdf(url, { fetch: options.fetch, signal }),
+    readManual: (pdf, source, live) => readManual(provider, pdf, source, {}, live),
+  });
+
+  const provider: AIProvider = {
     async transcribe(wav: Uint8Array): Promise<Transcript> {
       const deadline = Date.now() + timeouts.transcribe;
       // One turn the phone has already cut: PUSH_TO_TALK, with the lab's words and languages (speech.ts).
@@ -764,91 +864,38 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
       return { transcript: needsModelFix(fixed, terms) && left > 1000 ? await fixTranscript(fixed, terms, Math.min(left, 8000)) : fixed };
     },
 
-    async converse({ text, context, history = [], previousResponseId }) {
-      const deadline = Date.now() + timeouts.converse;
-      const instructions = systemPrompt(context, text);
-      // The conversation so far, so a short answer like "yes" has its question: kept on Meta's side when the app sends
-      // the last reply's id (only the new words go, and the model's reasoning carries on from the turn before), else
-      // the last few turns the app keeps.
-      let chain = previousResponseId;
-      const earlier = history.map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text }));
-      let input: Json[] = [{ role: 'user', content: text }];
-      const saidBefore = history.filter(t => t.role === 'user').map(t => t.text).join('\n');
-      let first: Checked | undefined;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const left = deadline - Date.now();
-        if (attempt > 0 && left < 3000) break;
-        let body: Json;
-        try {
-          body = await call('converse', '/responses', {
-            body: JSON.stringify({
-              model: MODEL,
-              reasoning: { effort: effort.converse },
-              instructions,
-              input: chain ? input : [...earlier, ...input],
-              ...(chain ? { previous_response_id: chain } : {}),
-              text: { format: replyTextFormat },
-              prompt_cache_key: 'chapp-converse',
-              prompt_cache_retention: '24h',
-            }),
-            json: true,
-            model: MODEL,
-          }, Math.min(left, timeouts.attempt));
-        } catch (error) {
-          // Meta no longer has the conversation (deleted or expired): the same turn, from the app's own turns.
-          if (chain && error instanceof UpstreamError && / failed \(40[04]\)/.test(error.message)) {
-            log('[meta] converse could not continue on Meta’s side; sending the recent turns instead');
-            chain = undefined;
-            attempt--;
-            continue;
-          }
-          if (first && !first.ok && first.say) break; // The retry failed; fall back to the first answer's words.
-          // Only a call that hung or that the API failed itself (5xx); a refused key or a bad request would fail again.
-          const passing = error instanceof UpstreamError && / timed out after |failed \(5\d\d\)/.test(error.message);
-          if (attempt === 0 && passing && deadline - Date.now() > 3000) {
-            log(`[meta] converse asked again: ${error instanceof Error ? error.message : 'failed'}`);
-            continue;
-          }
-          throw error;
-        }
-        if (body.status === 'failed' || body.error) throw new UpstreamError(`Meta converse failed: ${upstreamMessage(JSON.stringify(body.error ?? {}), apiKey) || 'no reason given'}`);
-        const content = replyText(body);
-        const checked = checkReply(content, context, text, instructions, saidBefore);
-        const responseId = typeof body.id === 'string' && body.id ? body.id : undefined;
-        if (checked.ok) {
-          const drawn = checked.reply.a2ui?.flatMap(m => ('updateComponents' in m ? m.updateComponents.components.map(c => c.component) : [])) ?? [];
-          log(`[meta] converse a2ui: ${drawn.length ? drawn.join(' ') : 'none'}`);
-          if (checked.dropped.length) log(`[meta] converse dropped ${checked.dropped.join(', ')}`);
-          return responseId ? { ...checked.reply, responseId } : checked.reply;
-        }
-        log(`[meta] converse reply rejected: ${checked.issue.slice(0, 160)}`);
-        first ??= checked;
-        // Broken actions and cards are dropped above; only a reply with nothing usable is asked for again, showing the
-        // model what was wrong: on top of the reply it gave, or after it when Meta does not keep it.
-        const again = { role: 'user', content: `That reply did not fit the format (${checked.issue}). Answer my last message again.` };
-        if (responseId) {
-          chain = responseId;
-          input = [again];
-        } else {
-          chain = undefined;
-          earlier.push({ role: 'user', content: text }, { role: 'assistant', content });
-          input = [again];
-        }
-      }
-      const say = first && !first.ok && first.say;
-      return {
-        say: say || "Sorry, I lost my train of thought. Could you say that again?",
-        expression: say ? 'neutral' : 'thinking',
-        actions: [],
-        sources: [],
-      };
-    },
+    converse: createConversation({
+      ...(sweep ? { effort: sweep } : {}),
+      efforts: { front: effort.front, manual: effort.manual, science: effort.science, numbers: effort.numbers },
+      timeoutMs: timeouts.converse,
+      route: options.route,
+      respond: (body, live, ms) => call('converse', '/responses', {
+        body: JSON.stringify(body), json: true, model: MODEL,
+        signal: live.signal, events: responseEvents(live),
+      }, ms),
+      findProtocol: (query, live) => provider.findProtocol(query, live),
+      previewProtocol,
+      readSource,
+      researchScience: createScientificResearch((body, live, ms) => call('science-search', '/responses', {
+        body: JSON.stringify(body), json: true, model: MODEL, signal: live.signal, events: responseEvents(live),
+      }, ms)),
+      reviewAnswer: review => reviewScientificAnswer((body, live, ms) => call('evidence-review', '/responses', {
+        body: JSON.stringify(body), json: true, model: MODEL, signal: live.signal, events: responseEvents(live),
+      }, ms), review),
+      importProtocol: (url, live) => previewProtocol({ url }, live),
+    }),
 
     async findProtocol(query: string, live: FindProtocolLive = {}): Promise<FoundProtocol> {
       const started = Date.now();
       let heard = false;
       // Muse Spark narrates its search in commentary messages, each whole once its item is done: passed on as they come.
+      // The manual named, while the search goes on to write what it read of it: read from then on (server/imports.ts).
+      const watch = live.onDocument && documentWatcher(query, found => {
+        log(`[meta] find-protocol named the manual after ${((Date.now() - started) / 1000).toFixed(1)} s`);
+        live.onDocument!(found);
+      });
       const events = (event: Json) => {
+        watch?.(event);
         if (event.type !== 'response.output_item.done' || event.item?.type !== 'message' || event.item.phase !== 'commentary') return;
         const line = textParts(event.item).map(c => c.text).join('').trim();
         if (!line) return;
@@ -862,6 +909,9 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
           stream: true,
           reasoning: { effort: effort.findProtocol },
           tools: [{ type: 'web_search' }],
+          include: ['web_search_call.results'],
+          max_tool_calls: 3,
+          max_output_tokens: 3000,
           input: [{ role: 'system', content: findInstructions }, { role: 'user', content: query }],
           prompt_cache_key: 'chapp-find-protocol',
           prompt_cache_retention: '24h',
@@ -892,7 +942,8 @@ export function createMetaProvider(options: MetaOptions): AIProvider {
     },
 
     readPlate: metaReadPlate({ apiKey, baseUrl, fetch: options.fetch, log }),
-    importProtocol: (pdf, source, live) => importProtocol(pdf, source, { apiKey, baseUrl, fetch: options.fetch, log, onProgress: live?.onProgress, onIntro: live?.onIntro }),
+    importProtocol: (pdf, source, live) => importProtocol(pdf, source, { apiKey, baseUrl, fetch: options.fetch, log, onProgress: live?.onProgress, onIntro: live?.onIntro, signal: live?.signal }),
     ...createKitVision({ apiKey, baseUrl, fetch: options.fetch, log }),
   };
+  return provider;
 }

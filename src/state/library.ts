@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
+import type { Box } from '../../shared/ai.ts';
 import type { ProtocolSummary } from '../../shared/protocol.ts';
 
 /**
@@ -9,6 +10,7 @@ import type { ProtocolSummary } from '../../shared/protocol.ts';
  *          when it was last used, and when the user saved it (Save to library), if they did.
  *   kits   the user's photos of each kit's bottles, by protocol and component. Taken once, they come back whenever
  *          that kit is the run again; kept apart from the run, so a tick or a reading never rewrites every photo.
+ *   covers each kit's cover: a whole photo the user took of the kit's box or bag (screens/kit/cover.ts), by protocol.
  *
  * The run keeps both up to date (state/run.ts): its photos are always its protocol's kit, and every protocol it runs
  * is this phone's. Saving only puts a protocol in Saved; its kit photos are kept either way.
@@ -55,6 +57,29 @@ export const useKits = create<{ kits: Record<string, Kit> }>()(
   persist(() => ({ kits: {} }), { name: 'chapp.kits', storage: createJSONStorage(() => quiet) }),
 );
 
+/**
+ * A kit's cover: the photo (a small JPEG), where its packaging is on it when SAM found it (fractions of the photo, so a
+ * thumbnail can show it) and the round of photos it came from (a later round's photo of the packaging replaces it).
+ */
+export type Cover = { src: string; box?: Box; round: string };
+
+export const useCovers = create<{ covers: Record<string, Cover> }>()(
+  persist(() => ({ covers: {} }), { name: 'chapp.covers', storage: createJSONStorage(() => quiet) }),
+);
+
+/** The kit's cover, if the user ever photographed its packaging. */
+export const kitCover = (id: string): Cover | undefined => useCovers.getState().covers[id];
+
+/** Keeps `cover` as the kit's cover (null: forgets it). */
+export function rememberCover(id: string, cover: Cover | null) {
+  useCovers.setState(s => {
+    const covers = { ...s.covers };
+    if (cover) covers[id] = cover;
+    else delete covers[id];
+    return { covers };
+  });
+}
+
 const entry = (id: string): Entry => useMine.getState().protocols[id] ?? { usedAt: null, savedAt: null };
 const put = (id: string, e: Entry | null) =>
   useMine.setState(s => {
@@ -82,6 +107,13 @@ export function unsaveProtocol(id: string): number | null {
   const was = entry(id).savedAt;
   put(id, { ...entry(id), savedAt: null });
   return was;
+}
+
+/** Gone from this phone's library altogether: not saved, not recent, and its kit photos and cover with it. */
+export function forgetProtocol(id: string) {
+  put(id, null);
+  rememberKit(id, {});
+  rememberCover(id, null);
 }
 
 /** The user's photos of this protocol's kit ({} when they have none). */

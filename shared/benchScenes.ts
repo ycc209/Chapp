@@ -1,6 +1,7 @@
 import { BenchScene, wellName, type Action, type Item, type Source } from './bench.ts';
+import { ART, wellAt as wellOnPlate } from './benchArt.ts';
 import type { Procedure, Protocol, Step } from './protocol.ts';
-import { colourIn, mixColour, prepKind } from './stepFacts.ts';
+import { colourIn, colourWordIn, mixColour, prepKind } from './stepFacts.ts';
 
 /**
  * The local composer: each step of a procedure as a bench scene (shared/bench.ts), from the protocol's own fields:
@@ -22,14 +23,28 @@ type Cite = { page: number; quote?: string; table?: string; figure?: string };
 const said = (field: string, cite?: Cite): Source => ({ from: 'protocol', field, ...(cite ? { page: cite.page } : {}), ...(cite?.quote ? { quote: cite.quote.slice(0, 400) } : {}) });
 const drawn = (why: string): Source => ({ from: 'drawn', why });
 
-/** What is on the bench between steps. */
-type Bench = { tubes: string[]; mix: { colour: string; level: number } | null; wells: Record<string, string>; samples: { colour: string; level: number } | null; flask: { colour: string; level: number } };
+/**
+ * The run's own numbers, where the plan sized them (src/screens/run/model.ts), for the pictures while the protocol
+ * plays: the scenes write these instead of the manual's.
+ */
+export type Sized = {
+  /** The mix: what goes in from each bottle, by component id ("9.8 mL"), and what it makes ("10 mL"). */
+  mix?: { parts: Record<string, string>; make: string };
+  /** The wells the plan fills, column by column. */
+  wells?: string[];
+  /** The incubation the user chose ("2 h"). */
+  incubation?: string;
+  /** Drawn big (the run's pictures): the words readable from arm's length, so the layout spreads them. */
+  big?: boolean;
+};
 
-/** Where a plate's well is on the bench, for a plate at (x, y). Mirrors Items.tsx wellAt. */
+/** What is on the bench between steps. */
+type Bench = { tubes: string[]; mix: { colour: string; level: number; label?: string } | null; wells: Record<string, string>; samples: { colour: string; level: number } | null; flask: { colour: string; level: number } };
+
+/** Where a plate's well is on the bench, for a plate standing at (x, y): the drawn plate's well (benchArt.ts) moved there. */
 function wellAt(px: number, py: number, row: number, col: number) {
-  const t = (row + 0.5) / 8;
-  const half = 79 + t * 8;
-  return { x: px - half + ((col + 0.5) * (2 * half)) / 12, y: py - 66 + t * 50 };
+  const w = wellOnPlate(row, col);
+  return { x: px + w.x, y: py + w.y };
 }
 
 /** The pipette whose range takes this volume: its plunger colour and what its window shows. */
@@ -50,12 +65,36 @@ function resultColour(p: Protocol, proc: Procedure): { colour: string; source: S
   return turn ? { colour: colourIn(turn[1]!)!, source: said('summary') } : null;
 }
 
-const shortName = (name: string) => {
-  const words = name.replace(/\s*\(.*?\)\s*/g, ' ').replace(/^(?:pierce|thermo|invitrogen|abcam)\s+/i, '').trim().split(/\s+/);
+/**
+ * A name as a label: without its parenthetical, the vendor and a "1000X" in front, and without `drop` at its end (what
+ * the kit's other bottles end with too). Whole when it fits a label (22 characters), else its last words.
+ */
+const shortName = (name: string, drop = '') => {
+  let plain = name.replace(/\s*\(.*?\)\s*/g, ' ').replace(/^(?:pierce|thermo|invitrogen|abcam)\s+/i, '').replace(/^\d+(?:\.\d+)?\s*[xX×]\s+/, '').trim();
+  if (drop && plain.length > drop.length && plain.toLowerCase().endsWith(drop.toLowerCase())) plain = plain.slice(0, -drop.length).trim();
+  if (plain.length <= 22) return plain;
+  const words = plain.split(/\s+/);
+  // A brand name in front (CellMask, OxiRed: a capital inside the word) with the last word: "CellMask Stain".
+  if (words.length > 2 && /^[A-Z][a-z]+[A-Z]\w*$/.test(words[0]!) && `${words[0]} ${words.at(-1)}`.length <= 22) return `${words[0]} ${words.at(-1)}`;
   let out = words.at(-1)!;
   for (let i = words.length - 2; i >= 0 && `${words[i]} ${out}`.length <= 22 && words.length - i <= 3; i--) out = `${words[i]} ${out}`;
   return out.slice(0, 22);
 };
+
+/** Words two or more of the kit's bottles end with ("Plasma Membrane Stain" on four CellMask stains): the rest tells them apart. */
+function sharedEnding(names: string[]): string {
+  const ends = new Map<string, number>();
+  for (const name of names) {
+    const words = name.replace(/\s*\(.*?\)\s*/g, ' ').trim().split(/\s+/);
+    for (let n = 2; n <= Math.min(4, words.length - 1); n++) {
+      const end = words.slice(-n).join(' ');
+      ends.set(end, (ends.get(end) ?? 0) + 1);
+    }
+  }
+  let best = '';
+  for (const [end, count] of ends) if (count >= 2 && end.length > best.length) best = end;
+  return best;
+}
 
 const mixHex = (a: string, b: string, k: number) => {
   const c = (h: string, i: number) => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16);
@@ -82,7 +121,7 @@ class Scene {
   }
 }
 
-function pipette(sc: Scene, p: Protocol, x: number, y: number, volume?: { value: number; unit: string }) {
+function pipette(sc: Scene, p: Protocol, x: number, y: number, volume?: { value: number; unit: string }, labelled = true) {
   const kind = pipetteFor(volume);
   const named = p.equipment.find(e => /pipette/.test(e.icon));
   return sc.add({
@@ -94,6 +133,8 @@ function pipette(sc: Scene, p: Protocol, x: number, y: number, volume?: { value:
     scale: 0.78,
     cap: kind.cap,
     text: kind.text,
+    // Its volume beside it, where the words are drawn big (not where every vial takes its own).
+    ...(volume && labelled ? { label: `${volume.value} ${volume.unit}` } : {}),
     represents: `Pipette${volume ? ` set to ${volume.value} ${volume.unit}` : ''}`,
     source: named ? said(`equipment.${named.id}`, named.cite) : drawn('Liquid moves by pipette, though the protocol names none.'),
     drawn: { look: 'A single-channel pipette; its plunger colour is the usual one for this range.' },
@@ -142,17 +183,25 @@ function moveWith(sc: Scene, id: string, to: { x: number; y: number; scale: numb
 
 // ---------------------------------------------------------------------------------------------------------------
 
-function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchScene {
+function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench, sized: Sized): BenchScene {
   const sc = new Scene();
+  const big = !!sized.big;
   const src = said(`steps.${step.id}`, step.cite);
   const mixC = mixColour(p, proc);
   const mixSource = mixC ? said('summary') : drawn('The protocol does not give its colour: drawn clear.');
   const words = `${step.title} ${step.key}`.toLowerCase();
   const curve = p.standardCurves.find(c => c.id === (step.standardCurve ?? proc.standardCurve));
   const used = Math.min(96, (curve?.points.length ?? 8) * 2 + 24);
-  const wellNames = Array.from({ length: used }, (_, i) => wellName(i % 8, Math.floor(i / 8)));
+  const wellNames = sized.wells?.length ? sized.wells : Array.from({ length: used }, (_, i) => wellName(i % 8, Math.floor(i / 8)));
   const vessel = proc.format === 'cells' ? 'flask' : proc.format === 'microplate' ? 'plate' : 'rack';
-  const named = p.components.filter(c => words.includes(c.name.toLowerCase()) || words.includes(c.name.split(/[\s,(]/)[0]!.toLowerCase()) || words.includes(shortName(c.name).toLowerCase()));
+  // A bottle the step's words name: by its whole name or its label, or by its first word when that word is its own
+  // ("ddH2O", "Insulin") rather than any kit's ("Assay Buffer 23" is not in "for desired assays").
+  const generic = /^(?:assay|reagent|buffer|mix|solution|standard|working|reaction|stain|medium|probe|wash|sample|kit|control|lysis|dilution|stop|dye)$/;
+  const named = p.components.filter(c => {
+    const first = c.name.split(/[\s,(]/)[0]!.toLowerCase();
+    return words.includes(c.name.toLowerCase()) || words.includes(shortName(c.name).toLowerCase()) || (!generic.test(first) && words.includes(first));
+  });
+  const ending = sharedEnding(p.components.filter(c => c.suppliedBy === 'kit').map(c => c.name));
 
   const bottle = (c: Protocol['components'][number], i: number, x: number, scale = 0.86): Item => {
     const note = c.notes?.map(n => colourIn(n.text)).find(Boolean);
@@ -162,7 +211,7 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
       x,
       y: BENCH - 6,
       scale,
-      label: shortName(c.name),
+      label: shortName(c.name, ending),
       cap: CAPS[i % CAPS.length],
       level: 0.72,
       liquid: note ?? CLEAR,
@@ -200,6 +249,30 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
     drawn: { look: 'A culture flask; medium drawn pink, as phenol red makes most media, and buffer clear.' },
   });
 
+  // What a step takes its reagent up from, standing on the bench at x: the mix in the tube its own step made it in (named
+  // as that step named it, as full as it left it), else the component's bottle. Nothing the protocol does not have (no
+  // reservoir to pour it into). Where the pipette's tip goes into it, or null when the protocol names neither.
+  const takeFrom = (add: NonNullable<Step['add']>[number] | undefined, x: number, scale: number): { id: string; x: number; y: number } | null => {
+    if (add?.what === 'mix') {
+      const m = p.mixes.find(q => q.id === add.ref) ?? p.mixes.find(q => q.id === (step.mix ?? proc.mix));
+      const label = bench.mix?.label ?? (m ? m.short || shortName(m.name) : undefined);
+      sc.add({ id: 'mix', kind: 'conical', x, y: BENCH - 4, scale, label, cap: '#2b7de9', level: bench.mix?.level ?? 0.6, liquid: bench.mix?.colour ?? mixC ?? CLEAR, represents: m ? `${m.name}, in the tube it was made in` : 'The mix', source: m ? said(`mixes.${m.id}`, m.cite) : src, drawn: { vessel: 'The 15 mL conical tube its step made it in.' } });
+      return { id: 'mix', x, y: BENCH - 4 - ART.conical.h * scale + 12 };
+    }
+    const c = add?.ref ? p.components.find(q => q.id === add.ref) : named[0];
+    if (!c) return null;
+    const id = sc.add(bottle(c, 0, x, scale));
+    return { id, x, y: BENCH - 6 - ART.bottle.h * scale - 6 };
+  };
+  /** The pipette goes to take it up; the mix's tube goes down a little each time. */
+  const take = (from: { id: string; x: number; y: number }, after: number) => {
+    sc.at('pipette', { x: from.x, y: from.y }, 280, after);
+    if (from.id === 'mix' && bench.mix) {
+      bench.mix = { ...bench.mix, level: Math.max(0.15, bench.mix.level - 0.05) };
+      sc.at('mix', { level: bench.mix.level }, 260, 0);
+    }
+  };
+
   // A step that spins (a centrifuge, "× g"), whatever its stage: the centrifuge, its force on the display.
   const spinWords = `${step.title} ${step.key}`;
   const spins =
@@ -233,6 +306,12 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
         }
         break;
       }
+      // The stock the standards are made from and their diluent stand behind the rack: the user's own photo of the
+      // stock, when they took one, is what they see on the bench.
+      const stock = p.components.find(c => c.id === shown.stock);
+      const diluent = p.components.find(c => c.id === shown.diluent);
+      if (stock) sc.add({ ...bottle(stock, 0, 34, 0.6), y: BENCH - 60 });
+      if (diluent && diluent.id !== stock?.id) sc.add({ ...bottle(diluent, 1, 206, 0.6), y: BENCH - 60 });
       const n = Math.max(1, pts.length);
       const step_ = Math.min(21, 200 / n);
       const x0 = 120 - ((n - 1) * step_) / 2;
@@ -251,7 +330,7 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
           drawn: { colour: 'Protein standards are colourless: drawn clear.' },
         }),
       );
-      pipette(sc, p, x0, 150, pts.find(pt => pt.diluent.value > 0)?.diluent);
+      pipette(sc, p, x0, 150, pts.find(pt => pt.diluent.value > 0)?.diluent, false);
       pts.forEach((pt, i) => {
         const id = `tube:${pt.id}`;
         const x = x0 + i * step_;
@@ -279,23 +358,41 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
         });
         break;
       }
-      const parts = m.parts.slice(0, 3);
-      const xs = parts.length === 3 ? [36, 86, 136] : [44, 104];
+      // Every part, up to four bottles side by side (smaller when there are four). Drawn big, two bottles stand
+      // bigger, and the arrows end one under the other so their big amounts read apart.
+      const parts = m.parts.slice(0, 4);
+      const xs = parts.length === 4 ? [28, 70, 112, 154] : parts.length === 3 ? [36, 86, 136] : big ? [46, 114] : [44, 104];
+      const bottleScale = parts.length === 4 ? 0.74 : parts.length === 2 && big ? 1 : 0.86;
       parts.forEach((part, i) => {
         const c = p.components.find(x => x.id === part.component);
-        if (c) sc.add(bottle(c, i, xs[i]!));
+        if (c) sc.add(bottle(c, i, xs[i]!, bottleScale));
       });
-      const tubeX = 202;
-      sc.add({ id: 'mix', kind: 'conical', x: tubeX, y: BENCH - 4, scale: 0.98, label: m.short || shortName(m.name), cap: '#2b7de9', level: bench.mix?.level ?? 0, liquid: bench.mix?.colour ?? CLEAR, represents: `${m.name}: ${m.parts.map(x => `${x.parts} ${p.components.find(c => c.id === x.component)?.name ?? x.component}`).join(' + ')}`, source: said(`mixes.${m.id}`, m.cite), drawn: { vessel: 'A 15 mL conical tube; the protocol names the mix, not its tube.' } });
+      const tubeX = big ? 206 : 202;
+      // What goes in, on each arrow: the amount the manual prints when the protocol kept it ("44 µL"), else the share
+      // as a number; "part" only where the manual itself counts in parts (BCA's "50 parts of A with 1 part of B").
+      // The ratio stands by the tube's name when the arrows carry bare numbers. While the protocol plays, the arrows
+      // carry the run's own amounts and the tube says how much they make.
+      const inParts = /\bparts?\b/i.test(m.cite?.quote ?? '');
+      const share = (part: (typeof m.parts)[number]) => sized.mix?.parts[part.component] ?? (part.amount || (inParts ? `${part.parts} part${part.parts === 1 ? '' : 's'}` : String(part.parts)));
+      // Drawn big, the arrows also say the order the parts go in (①, ②: BCA's B goes in last).
+      const ORDER = ['①', '②', '③', '④'];
+      const onArrow = (part: (typeof m.parts)[number], i: number) => (big && parts.length > 1 ? `${ORDER[i]} ${share(part)}` : share(part));
+      const short = m.short || shortName(m.name);
+      const withRatio = `${short} · ${m.parts.map(x => x.parts).join(' : ')}`;
+      const label = sized.mix ? `${short} · ${sized.mix.make}` : !m.parts.every(x => x.amount) && withRatio.length <= 40 ? withRatio : short;
+      sc.add({ id: 'mix', kind: 'conical', x: tubeX, y: BENCH - 4, scale: big ? 1.05 : 0.98, label, cap: '#2b7de9', level: bench.mix?.level ?? 0, liquid: bench.mix?.colour ?? CLEAR, represents: `${m.name}: ${m.parts.map(x => `${share(x)} ${p.components.find(c => c.id === x.component)?.name ?? x.component}`).join(' + ')}`, source: said(`mixes.${m.id}`, m.cite), drawn: { vessel: 'A 15 mL conical tube; the protocol names the mix, not its tube.' } });
+      const top = BENCH - 4 - 89 * bottleScale;
       parts.forEach((part, i) =>
-        sc.add({ id: `arrow:${i}`, kind: 'arrow', x: xs[i]! + 4, y: BENCH - 92, to: [tubeX - 16, BENCH - 112 + i * 8], label: `${part.parts} part${part.parts === 1 ? '' : 's'}`, hidden: true, represents: `${part.parts} part${part.parts === 1 ? '' : 's'}`, source: said(`mixes.${m.id}.parts`, m.cite) }),
+        sc.add({ id: `arrow:${i}`, kind: 'arrow', x: xs[i]! + 4, y: big ? top : BENCH - 92, to: [tubeX - 16, big ? BENCH - 126 + i * 38 : BENCH - 112 + i * 8], label: onArrow(part, i), hidden: true, represents: `${share(part)} ${p.components.find(c => c.id === part.component)?.name ?? part.component}`, source: said(`mixes.${m.id}.parts`, m.cite) }),
       );
       parts.forEach((_, i) => {
         sc.at(`arrow:${i}`, { hidden: false }, 400, i ? 700 : 500);
         sc.at('mix', { level: 0.3 + (0.3 * (i + 1)) / parts.length, liquid: CLEAR }, 700, 300);
       });
-      sc.at('mix', { liquid: mixC ?? CLEAR }, 1400, 700);
-      bench.mix = { colour: mixC ?? CLEAR, level: 0.6 };
+      // Drawn big, what to do once it is all in, as it turns: mix, until the colour the manual says it turns.
+      const turns = m.notes.map(n => colourWordIn(n.text)).find(Boolean);
+      sc.at('mix', { liquid: mixC ?? CLEAR, ...(big ? { text: turns ? `Mix until ${turns}` : 'Mix' } : {}) }, 1400, 700);
+      bench.mix = { colour: mixC ?? CLEAR, level: 0.6, label };
       break;
     }
     case 'load':
@@ -305,26 +402,33 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
         const intoWells = add?.what === 'standards-and-samples' || !add;
         const colour = add?.what === 'mix' ? (bench.mix?.colour ?? mixC ?? CLEAR) : SAMPLE;
         sc.add(plateItem(bench.wells));
-        if (!intoWells) sc.add({ id: 'reservoir', kind: 'reservoir', x: 46, y: 128, level: 0.7, liquid: colour, represents: `Reservoir of ${add?.what === 'mix' ? (p.mixes.find(x => x.id === proc.mix)?.name ?? 'the mix') : 'reagent'}`, source: drawn('A reservoir to take it up from, many wells at a time.'), drawn: { colour: add?.what === 'mix' && mixC ? 'The protocol gives the colour.' : 'Drawn clear.' } });
+        // Left of the plate's corner, on the bench: what it is taken up from.
+        const from = intoWells ? null : takeFrom(add, 28, 0.78);
         const first = wellAt(120, BENCH, 0, 0);
         pipette(sc, p, first.x, first.y - 34, add?.volume);
         const cols = Math.ceil(wellNames.length / 8);
         for (let col = 0; col < cols; col++) {
           const names = wellNames.slice(col * 8, col * 8 + 8);
           const top = wellAt(120, BENCH, 0, col);
-          if (!intoWells && col % 2 === 0) sc.at('pipette', { x: 46, y: 120 }, 280, col ? 300 : 500);
+          if (from && col % 2 === 0) take(from, col ? 300 : 500);
           dispense(sc, top.x, top.y - 34, top.y - 2, colour, intoWells ? 240 : 320);
           sc.at('plate', { wells: Object.fromEntries(names.map(n => [n, colour])) }, 420, 160);
         }
-        if (step.timer && /shak/.test((step.equipment ?? []).join(' ') + words))
+        if (step.timer && /shak/.test((step.equipment ?? []).join(' ') + words)) {
+          // Drawn big, the shake is written on the plate ("Shake 30 s"), the pipette out of its way.
+          if (big) {
+            sc.at('pipette', from ? { x: from.x, y: from.y - 10 } : { x: 46, y: 120 }, 400, 300);
+            sc.at('plate', { label: `${step.timer.label} ${step.timer.duration.value} ${step.timer.duration.unit}` }, 300, 100);
+          }
           for (let i = 0; i < 6; i++) sc.at('plate', { x: 120 + (i % 2 ? -2 : 2) }, 90, i ? 100 : 400);
+        }
         if (step.timer) sc.at('plate', { x: 120 }, 120, 100);
         for (const n of wellNames) bench.wells[n] = colour;
       } else {
         const c = (add?.ref ? p.components.find(x => x.id === add.ref) : named[0]) ?? null;
         const intoTubes = add?.what === 'standards-and-samples';
         const colour = add?.what === 'mix' ? (bench.mix?.colour ?? mixC ?? CLEAR) : intoTubes ? SAMPLE : c?.notes?.map(n => colourIn(n.text)).find(Boolean) ?? CLEAR;
-        if (c && !intoTubes) sc.add(bottle(c, 0, 52));
+        const from = intoTubes ? null : takeFrom(add, 52, 0.9);
         if (vessel === 'flask') sc.add(flask(152, BENCH - 4, 1.05));
         else sampleTubes(sc, bench, 150, 1);
         const target = vessel === 'flask' ? { x: 150, top: BENCH - 80, y: BENCH - 30 } : { x: 110, top: BENCH - 84, y: BENCH - 30 };
@@ -333,14 +437,16 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
           const level = Math.min(0.8, (bench.samples?.level ?? 0) + (add?.what === 'mix' ? 0.45 : 0.25));
           const now = bench.samples ? (colour === CLEAR ? bench.samples.colour : mixHex(bench.samples.colour, colour, 0.8)) : colour;
           for (let i = 0; i < 5; i++) {
-            sc.at(`tube:${i + 1}`, { open: true }, 250, i ? 200 : 400);
-            dispense(sc, 110 + i * 20, BENCH - 84, BENCH - 30, colour, 0);
+            if (from) take(from, i ? 200 : 400);
+            sc.at(`tube:${i + 1}`, { open: true }, 250, from ? 0 : i ? 200 : 400);
+            dispense(sc, 110 + i * 20, BENCH - 84, BENCH - 30, colour, from ? 200 : 0);
             sc.at(`tube:${i + 1}`, { level, liquid: now }, 450, 150);
             sc.at(`tube:${i + 1}`, { open: false }, 250, 300);
           }
           bench.samples = { colour: now, level };
         } else {
-          for (let i = 0; i < 3; i++) dispense(sc, target.x + i * 6, target.top, target.y, colour, i ? 300 : 500);
+          if (from) take(from, 500);
+          for (let i = 0; i < 3; i++) dispense(sc, target.x + i * 6, target.top, target.y, colour, i ? 300 : from ? 300 : 500);
           const level = Math.min(0.5, bench.flask.level + 0.06);
           const now = colour === CLEAR ? bench.flask.colour : mixHex(bench.flask.colour, colour, 0.5);
           sc.at('flask', { level, liquid: now }, 700, 200);
@@ -378,12 +484,13 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
       const temp = deg !== undefined ? `${deg} °C` : undefined;
       // Warm (an incubator says 37 °C); room temperature or cold stays on the bench, with the thermometer saying so.
       const warm = deg !== undefined && deg >= 30;
-      const timer = t ? sc.add({ id: 'timer', kind: 'timer', x: warm ? 48 : 196, y: warm ? 72 : 82, text: `${t.duration.value} ${t.duration.unit}`, progress: 0, represents: `Timer: ${t.duration.value} ${t.duration.unit}${temp ? ` at ${temp}` : ''}${t.covered ? ', covered' : ''}`, source: said(`steps.${step.id}.timer`, step.cite) }) : null;
-      if (warm) sc.add(equipmentItem(p, 'incubator', /incubat|oven|bath/, 162, BENCH, 0.92, { text: `${deg!.toFixed(1)} °C` }));
-      else sc.add({ id: 'thermometer', kind: 'thermometer', x: 30, y: 196, text: temp ?? 'RT', represents: temp ?? 'Room temperature', source: t?.temperature ? said(`steps.${step.id}.timer`, step.cite) : drawn('The protocol gives no temperature: room temperature.') });
+      const length = sized.incubation ?? (t ? `${t.duration.value} ${t.duration.unit}` : '');
+      const timer = t ? sc.add({ id: 'timer', kind: 'timer', x: warm ? 48 : 196, y: warm ? 72 : 82, scale: big ? 1.5 : 1, text: length, progress: 0, represents: `Timer: ${length}${temp ? ` at ${temp}` : ''}${t.covered ? ', covered' : ''}`, source: said(`steps.${step.id}.timer`, step.cite) }) : null;
+      if (warm) sc.add(equipmentItem(p, 'incubator', /incubat|oven|bath/, 162, BENCH, 0.92, { text: `${deg!.toFixed(1)} °C`, label: temp }));
+      else sc.add({ id: 'thermometer', kind: 'thermometer', x: 30, y: 196, scale: big ? 1.3 : 1, text: temp ?? 'RT', represents: temp ?? 'Room temperature', source: t?.temperature ? said(`steps.${step.id}.timer`, step.cite) : drawn('The protocol gives no temperature: room temperature.') });
       const home = vessel === 'plate' ? { x: warm ? 66 : 120, y: BENCH, scale: warm ? 0.5 : 0.9 } : vessel === 'flask' ? { x: warm ? 56 : 120, y: BENCH - 4, scale: warm ? 0.7 : 1.1 } : { x: warm ? 60 : 120, y: BENCH, scale: warm ? 0.6 : 1 };
       let what: string;
-      if (vessel === 'plate') what = sc.add(plateItem(bench.wells, home));
+      if (vessel === 'plate') what = sc.add(plateItem(bench.wells, { ...home, ...(big && t?.covered ? { label: 'Cover' } : {}) }));
       else if (vessel === 'flask') what = sc.add(flask(home.x, home.y, home.scale));
       else {
         what = 'rack';
@@ -424,13 +531,17 @@ function compose(p: Protocol, proc: Procedure, step: Step, bench: Bench): BenchS
     }
     case 'read': {
       const wl = p.analysis?.readout;
+      // Drawn big: cooling to room temperature first (the step's words), a thermometer saying so; what it reads at,
+      // over the reader as it reads.
+      const cool = big && /\bcool|room temperature/i.test(`${step.title} ${step.key}`);
       sc.add(equipmentItem(p, 'reader', /reader|spectro|cytomet/, 108, BENCH, 1.15));
-      sc.add(plateItem(bench.wells, { x: 64, y: 96, scale: 0.42 }));
+      if (cool) sc.add({ id: 'thermometer', kind: 'thermometer', x: 22, y: 120, scale: 1.1, label: 'Cool to RT', represents: 'Room temperature', source: src });
+      sc.add(plateItem(bench.wells, { x: cool ? 76 : 64, y: 96, scale: 0.42 }));
       sc.at('reader', { open: true }, 600, 400);
       sc.at('plate', { x: 180, y: BENCH - 22, scale: 0.3 }, 900, 600);
       sc.at('reader', { open: false }, 700, 900);
       sc.at('plate', { x: 128, hidden: true }, 700, 0);
-      if (wl) sc.at('reader', { text: `${wl.value} nm` }, 300, 700);
+      if (wl) sc.at('reader', { text: `${wl.value} nm`, ...(big ? { label: `${wl.value} nm` } : {}) }, 300, 700);
       break;
     }
     case 'analyze': {
@@ -506,8 +617,11 @@ function finish(sc: Scene, step: Step, src: Source): BenchScene {
   return BenchScene.parse({ title: cut(step.title, 120), caption: { text: cut(step.key, 300), source: src }, items, actions: sc.actions.sort((a, b) => a.at - b.at) });
 }
 
-/** Every step of the procedure (its prep first) as a bench scene, by step id, one bench carrying on from each to the next. */
-export function benchScenes(p: Protocol, proc: Procedure): Map<string, BenchScene> {
+/**
+ * Every step of the procedure (its prep first) as a bench scene, by step id, one bench carrying on from each to the
+ * next; with the run's numbers (`sized`) where the plan set them.
+ */
+export function benchScenes(p: Protocol, proc: Procedure, sized: Sized = {}): Map<string, BenchScene> {
   const bench: Bench = { tubes: [], mix: null, wells: {}, samples: null, flask: { colour: MEDIUM, level: 0.3 } };
-  return new Map([...(proc.prep ?? []), ...proc.steps].map(step => [step.id, compose(p, proc, step, bench)]));
+  return new Map([...(proc.prep ?? []), ...proc.steps].map(step => [step.id, compose(p, proc, step, bench, sized)]));
 }

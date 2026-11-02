@@ -69,14 +69,15 @@ describe.skipIf(!existsSync(atpFile))('a kit in nmol/well', () => {
     const p = atp();
     const s = standardSeries(p, 'colorimetric-assay', 2);
     const w = s.vials.find(v => v.intermediate)!;
-    // 10 µL of 10 mM + 90 µL = 1 mM: 50 nmol in a 50 µL well, but shown as the manual prints it, since it is never in one.
-    expect([w.id, w.concentration, w.from]).toEqual(['1', 50, 'stock']);
+    // 10 µL of 10 mM + 90 µL = 1 mM: 50 nmol in a 50 µL well, but shown as the manual prints it, since it is never in one
+    // (the reading of 2026-10-31 calls the working stock "Ws" and numbers the standards 1–6, as the manual's table does).
+    expect([w.id, w.concentration, w.from]).toEqual(['Ws', 50, 'stock']);
     expect(w.printed).toEqual({ value: 1, unit: 'mM' });
     expect(s.vials.find(v => !v.intermediate)?.printed).toBeUndefined();
     expect(s.vials.filter(v => !v.intermediate).map(v => v.concentration)).toEqual([0, 2, 4, 6, 8, 10]);
     expect(s.unit).toBe('nmol/well');
     const wells = plateLayout(p, 'colorimetric-assay', 2, 2);
-    expect(wells.filter(x => x.kind === 'standard').map(x => x.ref)).toEqual(['2', '2', '3', '3', '4', '4', '5', '5', '6', '6', '7', '7']);
+    expect(wells.filter(x => x.kind === 'standard').map(x => x.ref)).toEqual(['1', '1', '2', '2', '3', '3', '4', '4', '5', '5', '6', '6']);
     expect(workingReagent(p, 'colorimetric-assay', 2, 2).total).toBe((6 + 2) * 2 * 50);
   });
 

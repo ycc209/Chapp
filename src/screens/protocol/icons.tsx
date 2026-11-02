@@ -66,6 +66,14 @@ export const StepsIcon = () => (
   </Icon>
 );
 
+/** Not in the kit: a bag, for what the user brings. */
+export const BagIcon = () => (
+  <Icon size={20} color="#55555c">
+    <path d="M5 8h14l-1.2 12.1a1 1 0 0 1-1 .9H7.2a1 1 0 0 1-1-.9z" />
+    <path d="M9 8V6a3 3 0 0 1 6 0v2" />
+  </Icon>
+);
+
 /** Reagent prep: a flask. */
 export const FlaskIcon = () => (
   <Icon size={20} color="#55555c">

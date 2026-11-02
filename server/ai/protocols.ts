@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { ratioOf } from '../../shared/calc.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +63,7 @@ export function protocolList(dir = PROTOCOLS_DIR): ProtocolSummary[] {
     const p = loadProtocol(id, dir);
     if (!p) continue;
     const procedure = p.procedures.find(x => x.id === p.defaults.procedure) ?? p.procedures[0]!;
-    list.push({ id, title: p.title, kit: p.kit.name, catalogs: p.kit.variants.map(v => v.catalog), procedure: procedure.name, steps: procedure.steps.length, updated: statSync(join(dir, f)).mtimeMs });
+    list.push({ id, title: p.title, kit: p.kit.name, catalogs: p.kit.variants.map(v => v.catalog), procedure: procedure.name, steps: procedure.steps.length, updated: statSync(join(dir, f)).mtimeMs, imported: Boolean(p.imported) });
   }
   return list.sort((a, b) => b.updated - a.updated);
 }
@@ -104,6 +104,21 @@ export function manualFile(id: string, manuals = MANUALS_DIR): string | null {
   if (!/^[a-z0-9-]+$/.test(id)) return null;
   const file = join(manuals, id, 'manual.pdf');
   return existsSync(file) ? file : null;
+}
+
+/**
+ * Removes a protocol Chapp read from a manual (DELETE /api/protocols/:id): its document, the manual it kept
+ * (<manuals>/<id>/) and its step pictures (<pictures>/v2/<id>/). A hand-made document is left alone, since nothing
+ * could bring it back: false then, as for an id that is not here.
+ */
+export function deleteProtocol(id: string, opts: { dir?: string; manuals?: string; pictures?: string } = {}): boolean {
+  const dir = opts.dir ?? PROTOCOLS_DIR;
+  if (!loadProtocol(id, dir)?.imported) return false;
+  rmSync(join(dir, `${id}.json`), { force: true });
+  rmSync(join(opts.manuals ?? MANUALS_DIR, id), { recursive: true, force: true });
+  if (opts.pictures) rmSync(join(opts.pictures, 'v2', id), { recursive: true, force: true });
+  cache.delete(`${dir}\0${id}`);
+  return true;
 }
 
 /**

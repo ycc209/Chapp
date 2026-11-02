@@ -25,6 +25,11 @@ export function colourIn(text: string): string | null {
   return m ? COLOURS.find(([re]) => re.test(m[0]))![1] : null;
 }
 
+/** The first colour word a sentence uses ("green"), as it says it; null when it names none. */
+export function colourWordIn(text: string): string | null {
+  return COLOUR_WORDS.exec(text)?.[0].toLowerCase() ?? null;
+}
+
 /** The procedure's mix colour as the protocol says it: in its notes, or in the summary just before its name. */
 export function mixColour(p: Protocol, proc: Procedure): string | null {
   const m = proc.mix ? p.mixes.find(x => x.id === proc.mix) : undefined;
