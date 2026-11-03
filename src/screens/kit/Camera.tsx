@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
 import { ForwardIcon, PhotosIcon } from '../protocol/icons.tsx';
+import { sendAhead } from '../../api/events.ts';
 import { fileToShot, frameToShot, isVideo, recordSweep, type Footage, type Shot } from './photo.ts';
 
 type CameraProps = {
@@ -10,6 +11,8 @@ type CameraProps = {
   onShots: (shots: Shot[]) => void;
   /** A sweep (analysis.ts followBottles); onDone follows. */
   onFootage: (footage: Footage) => void;
+  /** Each frame a sweep keeps, as it keeps it: the first say which kit it is while the sweep goes on. */
+  onSweepFrame?: (shot: Shot) => void;
   /** A video chosen from the library, to play on screen while the models look at it (Watch.tsx). */
   onVideo: (video: File) => void;
   /** Done: on to matching the bottles. */
@@ -22,8 +25,8 @@ type Mode = 'photo' | 'sweep';
 /** A sweep's length: long enough to pass the camera over a kit's bottles, short enough to hold steady. */
 export const SWEEP_SECONDS = 12;
 /**
- * While sweeping, a frame is kept this often, and the last one when it stops: the photos when SAM cannot follow the
- * bottles through the recording itself, and the first may show the kit's packaging.
+ * While sweeping, a frame is kept as it starts and this often after, and the last one when it stops: the photos when
+ * SAM cannot follow the bottles through the recording itself; the first may show the kit's packaging.
  */
 const SWEEP_EVERY_MS = 2500;
 /** The sweep button's ring: its radius and length, for the progress drawn around it. */
@@ -38,11 +41,12 @@ const ROUND = 'flex size-11 shrink-0 items-center justify-center rounded-full bg
  * shutter open the photo library instead, as the button at the top left always does.
  *
  * Sweep: the camera passed slowly over the bottles for up to SWEEP_SECONDS, a ring filling around the button. It is
- * recorded (an MP4, where the browser can) for SAM to follow the bottles through, frames kept along the way in case it
- * cannot, and the sweep goes straight on to matching, so the next screen is what was found. A video chosen from the
+ * recorded (an MP4, where the browser can) for SAM to follow the bottles through, each second of it sent to the server
+ * as it is recorded, frames kept along the way in case it cannot (the first read for which kit it is meanwhile), and
+ * the sweep goes straight on to matching, so the next screen is what was found. A video chosen from the
  * library plays on screen while SAM follows the bottles through it (Watch.tsx), then matching.
  */
-export function Camera({ shots, onShots, onFootage, onVideo, onDone }: CameraProps) {
+export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDone }: CameraProps) {
   const video = useRef<HTMLVideoElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const [lens, setLens] = useState<Lens>('starting');
@@ -53,6 +57,9 @@ export function Camera({ shots, onShots, onFootage, onVideo, onDone }: CameraPro
   const frames = useRef<Shot[]>([]);
   const sweeping = useRef(false);
   const recording = useRef<ReturnType<typeof recordSweep>>(null);
+  const ahead = useRef<ReturnType<typeof sendAhead> | null>(null);
+  const onKept = useRef(onSweepFrame);
+  onKept.current = onSweepFrame;
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -90,7 +97,10 @@ export function Camera({ shots, onShots, onFootage, onVideo, onDone }: CameraPro
 
   const keepFrame = () => {
     const v = video.current;
-    if (v?.videoWidth) frames.current.push({ ...frameToShot(v), sweep: true });
+    if (!v?.videoWidth) return;
+    const shot: Shot = { ...frameToShot(v), sweep: true };
+    frames.current.push(shot);
+    onKept.current?.(shot);
   };
 
   const startSweep = () => {
@@ -100,7 +110,10 @@ export function Camera({ shots, onShots, onFootage, onVideo, onDone }: CameraPro
     }
     frames.current = [];
     sweeping.current = true;
-    recording.current = recordSweep(video.current.srcObject as MediaStream);
+    const up = sendAhead();
+    recording.current = recordSweep(video.current.srcObject as MediaStream, piece => up.send(piece));
+    ahead.current = recording.current ? up : null;
+    keepFrame();
     const started = Date.now();
     setNow(started);
     setSweep({ started });
@@ -114,11 +127,14 @@ export function Camera({ shots, onShots, onFootage, onVideo, onDone }: CameraPro
     const kept = frames.current;
     frames.current = [];
     const recorder = recording.current;
+    const up = ahead.current;
     recording.current = null;
+    ahead.current = null;
     setSweep(null);
     if (!kept.length) return void recorder?.stop();
     void (recorder?.stop() ?? Promise.resolve(null)).then(clip => {
-      onFootage({ kind: 'sweep', frames: kept, video: clip });
+      // Its last piece came before the recording stopped: every piece is on its way.
+      onFootage({ kind: 'sweep', frames: kept, video: clip, ...(clip && up ? { uploaded: up.done() } : {}) });
       onDone();
     });
   };

@@ -382,15 +382,33 @@ export type TrackEvent =
 export type LabelTarget = { id: string; name: string; role: string; kit: boolean; labels: string[]; volumes?: string[] };
 
 /**
- * How sure a label's match is. `read`: its label was read and names the component. `guess`: the label was not read and
- * the component is a guess from shape, size and colour, for the user to confirm. `other`: its label was read and names
- * nothing in this run. `none`: neither read nor guessed.
+ * How sure a label's match is. `read`: its label was read and names the component. `mismatch`: what was read disagrees
+ * (the words name one bottle and the model picked another, the words name two, or another picture of it shows another
+ * name), every bottle named a candidate, for the user to settle. `guess`: the label was not read and the component is a
+ * guess from shape, size and colour, for the user to confirm. `other`: its label was read and names nothing in this
+ * run (not made to fit one). `none`: neither read nor guessed.
  */
-export type LabelMatch = 'read' | 'guess' | 'other' | 'none';
+export type LabelMatch = 'read' | 'mismatch' | 'guess' | 'other' | 'none';
 
-/** Each crop's label, in the order asked: the words read ("" when none), what it looks like ("small vial"), its match. */
-/** `bottle: false` when the picture shows no bottle, vial, tube or box at all (SAM took a cloth or a hand for one). */
-export type ReadLabels = { labels: { text: string; looks: string; componentId: string | null; match: LabelMatch; bottle?: false }[] };
+/**
+ * One bottle's label, in the order asked: the words read ("" when none) and the volume printed ("25 mL", "" when none),
+ * as read; what it looks like ("small vial"); the component it is and how sure that is (`match`, and `confidence` 0–1,
+ * server/ai/vision.ts labelConfidence); for a mismatch, every component the evidence names, the likeliest first; of its
+ * pictures, how many showed the words read. `bottle: false` when the picture shows no bottle, vial, tube or box at all
+ * (SAM took a cloth or a hand for one).
+ */
+export type ReadLabel = {
+  text: string;
+  volume: string;
+  looks: string;
+  componentId: string | null;
+  match: LabelMatch;
+  confidence: number;
+  candidates?: string[];
+  views?: { read: number; of: number };
+  bottle?: false;
+};
+export type ReadLabels = { labels: ReadLabel[] };
 
 /** A photo inside a JSON body: base64, without the data: prefix. */
 export type PhotoData = { type: Photo['type']; data: string };

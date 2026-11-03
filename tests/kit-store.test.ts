@@ -33,6 +33,20 @@ describe('outlineAt', () => {
   });
 });
 
+describe('a label whose evidence disagrees', () => {
+  it('is about the other bottles once one it named is matched, and moot once none is left', () => {
+    const crop = 'data:image/jpeg;base64,AAAA';
+    const torn = { id: 'torn', shot: 's1', box, crop, looks: 'small bottle', text: 'Reagent B', component: 'reagent-b', candidates: ['reagent-b', 'reagent-a'], match: 'mismatch' as const };
+    const guess = { id: 'guess', shot: 's1', box: { ...box, x: 0.6 }, crop, looks: 'large bottle', text: '', component: 'reagent-a', match: 'guess' as const };
+    useKit.setState({ sample: true, things: [torn, guess] });
+    useKit.getState().answer('guess', 'reagent-a', 'confirmed', '');
+    expect(useKit.getState().things).toMatchObject([{ id: 'torn', component: 'reagent-b', candidates: ['reagent-b'] }]);
+    useKit.getState().answer('torn', 'reagent-b', 'confirmed', '');
+    expect(useKit.getState().things).toEqual([]);
+    expect(Object.keys(useKit.getState().picks)).toEqual(['reagent-a', 'reagent-b']);
+  });
+});
+
 describe('retake', () => {
   it('drops the match and asks for the bottle again; the run keeps the picture it had', () => {
     useKit.getState().found({ 'reagent-a': { shot: 's1', box, crop: 'data:a', how: 'read' }, 'reagent-b': { shot: 's1', box, crop: 'data:b', how: 'read' } }, [], 'Found 2.');

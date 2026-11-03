@@ -1,5 +1,5 @@
 import type { Box, PhotoData, Point, ReadLabels, RecognizedKit, Sighting, TrackedBottles } from '../../../shared/ai.ts';
-import type { TrackHeard } from '../../api/events.ts';
+import { UPLOAD_GONE, type TrackHeard } from '../../api/events.ts';
 import { area, labelCrop, overlap, squareOn } from '../../../shared/kit.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { api } from '../../api/client.ts';
@@ -50,13 +50,63 @@ const tells = (r: RecognizedKit | null): r is RecognizedKit => !!r?.found && !!r
 /** A reading that settles which kit at once (kitReads): a kit Chapp has, or one read on its box or bag. */
 export const settles = (r: RecognizedKit | null) => tells(r) && !!(r.protocolId || r.packaging);
 
+/** Words of a kit's name that tell one kit from another: not "protein assay kit", not a bottle's letter. */
+const GENERIC = new Set(['kit', 'kits', 'assay', 'assays', 'protein', 'reagent', 'reagents', 'buffer', 'solution', 'standard', 'standards', 'the', 'and', 'for', 'of', 'with']);
+const telling = (name: string) => new Set(name.normalize('NFKC').toLowerCase().replace(/[™®©]/g, '').split(/[^a-z0-9]+/).filter(w => w.length > 1 && !GENERIC.has(w)));
+
 /**
- * The reading that best says which kit some photos (a video's frames) show: one of a kit Chapp has the protocol of,
- * else one read on the kit's packaging, else one read on a bottle's label. Null when none says. Pure, so it is tested.
+ * Whether two readings name the same kit: the same protocol Chapp has; not when they name two it has, or two catalog
+ * numbers (one of them misread, or two kits); else when most of the words that tell kits apart are the same ("Pierce
+ * BCA Protein Assay Kit" on the box, "Pierce BCA Protein Assay Reagent A" on a bottle). Pure, so it is tested.
+ */
+export function sameKit(a: RecognizedKit, b: RecognizedKit): boolean {
+  if (a.protocolId && b.protocolId) return a.protocolId === b.protocolId;
+  const [ca, cb] = [a.kit?.catalog.toUpperCase() ?? '', b.kit?.catalog.toUpperCase() ?? ''];
+  if (ca && cb) return ca === cb;
+  const [x, y] = [telling(a.kit?.name ?? ''), telling(b.kit?.name ?? '')];
+  const shared = [...x].filter(w => y.has(w)).length;
+  return shared > 0 && shared / Math.min(x.size, y.size) > 0.5;
+}
+
+/** A reading's vote: one on the kit's box or bag counts twice what a bottle's label does. */
+const weight = (r: RecognizedKit) => (r.packaging ? 2 : 1);
+
+/**
+ * The kits some photos (a video's frames) are read as, most votes first: readings of one kit together (sameKit), each
+ * read on its packaging two votes, on a bottle's label one; a tie to the kit read on packaging, then to one Chapp has
+ * the protocol of, then to the one read first. Each kit's reading is its best: one Chapp has, else on packaging (with
+ * its catalog number first), else the first. Pure, so it is tested.
+ */
+export function kitVotes(reads: (RecognizedKit | null)[]): { read: RecognizedKit; votes: number; reads: number }[] {
+  const kits: { all: RecognizedKit[]; first: number }[] = [];
+  reads.forEach((r, i) => {
+    if (!tells(r)) return;
+    const same = kits.find(k => k.all.some(o => sameKit(o, r)));
+    if (same) same.all.push(r);
+    else kits.push({ all: [r], first: i });
+  });
+  const best = (all: RecognizedKit[]) => all.find(r => r.protocolId) ?? all.find(r => r.packaging && r.kit?.catalog) ?? all.find(r => r.packaging) ?? all[0]!;
+  return kits
+    .map(k => ({ read: best(k.all), votes: k.all.reduce((n, r) => n + weight(r), 0), reads: k.all.length, first: k.first, packaging: k.all.some(r => r.packaging) }))
+    .sort((a, b) => b.votes - a.votes || Number(b.packaging) - Number(a.packaging) || Number(!!b.read.protocolId) - Number(!!a.read.protocolId) || a.first - b.first)
+    .map(({ read, votes, reads }) => ({ read, votes, reads }));
+}
+
+/**
+ * The reading that best says which kit some photos (a video's frames) show: the kit with the most votes (kitVotes), so
+ * one frame misread as a kit Chapp has does not outvote the box. Null when none says. Pure, so it is tested.
  */
 export function bestKitRead(reads: (RecognizedKit | null)[]): RecognizedKit | null {
-  const told = reads.filter(tells);
-  return told.find(r => r.protocolId) ?? told.find(r => r.packaging) ?? told[0] ?? null;
+  return kitVotes(reads)[0]?.read ?? null;
+}
+
+/**
+ * Another kit the photos are read as just as surely as the best (as many votes, both read on packaging or neither): the
+ * user is asked which it is. Null when the best is clear. Pure, so it is tested.
+ */
+export function otherKitRead(reads: (RecognizedKit | null)[]): RecognizedKit | null {
+  const [first, second] = kitVotes(reads);
+  return first && second && second.votes === first.votes && !!second.read.packaging === !!first.read.packaging ? second.read : null;
 }
 
 /**
@@ -114,10 +164,19 @@ function hearContents(query: string) {
 export const KIT_READS = 4;
 
 /**
- * The readings of a video's frames as soon as they say which kit it is: a frame read as a kit Chapp has the protocol
- * of, or read on its box or bag (whose name says it best), settles it at once, so its manual's search starts then (the
- * rest need not be waited for, 4 to 8 s each); otherwise every reading, for bestKitRead to pick from. `onRead` says
- * each time one comes in.
+ * Whether the readings so far settle which kit it is before the rest come in: two frames read as one kit, a kit Chapp
+ * has or one read on its box or bag, and no frame read as another. One frame alone never does: it may be misread.
+ * Pure, so it is tested.
+ */
+export function agreed(reads: (RecognizedKit | null)[]): boolean {
+  const votes = kitVotes(reads);
+  return votes.length === 1 && votes[0]!.reads >= 2 && settles(votes[0]!.read);
+}
+
+/**
+ * The readings of a video's frames as soon as they say which kit it is: two frames that agree on a kit that settles it
+ * (agreed) settle it then, so its manual's search starts (the rest need not be waited for, 4 to 8 s each); otherwise
+ * every reading, for bestKitRead to pick from. `onRead` says each time one comes in.
  */
 export function kitReads(reads: Promise<RecognizedKit | null>[], onRead?: (done: number) => void): Promise<(RecognizedKit | null)[]> {
   return new Promise(resolve => {
@@ -129,11 +188,34 @@ export function kitReads(reads: Promise<RecognizedKit | null>[], onRead?: (done:
         all[i] = r;
         done++;
         onRead?.(done);
-        if (settles(r) || done === reads.length) resolve([...all]);
+        if (agreed(all) || done === reads.length) resolve([...all]);
       });
     });
     if (!reads.length) resolve(all);
   });
+}
+
+/**
+ * Which kit a sweep shows, told while it is still recorded: its first frames (KIT_READS) are read as the camera keeps
+ * them, and once two agree (agreed) it is told at once (tellKit: the protocol is the run's, or its manual's search
+ * starts), before the sweep is over. `done` once it is over: told by then, or once the frames read say.
+ */
+export function tellAsTaken(): { add(shot: Shot): void; done(): Promise<KitTold> } {
+  const reads: Promise<RecognizedKit | null>[] = [];
+  const heard: (RecognizedKit | null)[] = [];
+  let told: Promise<KitTold> | null = null;
+  const decide = () => (told ??= kitReads(reads).then(tellKit));
+  return {
+    add(shot) {
+      if (told || reads.length >= KIT_READS) return;
+      const at = reads.push(readKitOf(shot)) - 1;
+      void reads[at]!.then(r => {
+        heard[at] = r;
+        if (agreed(heard)) void decide();
+      });
+    },
+    done: decide,
+  };
 }
 
 /** Which kit a frame shows, read once a frame (the cover reads the same frames): null when it cannot be read. */
@@ -197,8 +279,15 @@ const FOLLOW_WAIT_MS = 170_000;
  * SAM follows the bottles through `video` (asked as soon as a video starts playing on screen: Watch.tsx, which hears
  * each frame as SAM is done with it through `live`).
  */
-export const startFollowing = (video: Blob, signal?: AbortSignal, live?: TrackHeard) =>
-  api.trackBottles(video, videoType(video), AbortSignal.any([AbortSignal.timeout(FOLLOW_WAIT_MS), ...(signal ? [signal] : [])]), live);
+export const startFollowing = async (video: Blob, signal?: AbortSignal, live?: TrackHeard, ahead?: Promise<string | null>) => {
+  const wait = AbortSignal.any([AbortSignal.timeout(FOLLOW_WAIT_MS), ...(signal ? [signal] : [])]);
+  // Sent ahead as it was recorded: named; when the server no longer has it, sent itself.
+  const uploaded = await ahead?.catch(() => null);
+  return api.trackBottles(video, videoType(video), wait, live, uploaded).catch(error => {
+    if (uploaded && error instanceof Error && UPLOAD_GONE.test(error.message)) return api.trackBottles(video, videoType(video), wait, live);
+    throw error;
+  });
+};
 
 /**
  * A sweep or a video the user chose. SAM follows the bottles through the video, so each counts once however many
@@ -230,8 +319,8 @@ export async function followBottles(footage: Footage) {
 }
 
 /** The frames SAM picked from a video, as photos with each bottle on them outlined; null when it followed none. */
-async function framesFollowed({ kind, video, player: played, tracked: asked, grab }: Footage): Promise<{ shots: Shot[]; looks: Look[] } | null> {
-  const tracked: TrackedBottles = await (asked ?? startFollowing(video!));
+async function framesFollowed({ kind, video, player: played, tracked: asked, grab, uploaded }: Footage): Promise<{ shots: Shot[]; looks: Look[] } | null> {
+  const tracked: TrackedBottles = await (asked ?? startFollowing(video!, undefined, undefined, uploaded));
   if (!tracked.frames || !tracked.picks.length) return null;
   // The video played on screen is still on the page; else it is opened here.
   const url = played ? null : URL.createObjectURL(video!);
@@ -407,7 +496,7 @@ export async function readFound(target: ReadTarget) {
     const calls = labelCalls(groups);
     const reads = await Promise.all(calls.map(c => api.readLabels({ crops: c.crops, components, ...(several ? { views: c.views } : {}) })));
     const labels: ReadLabels['labels'] = reads.flatMap(r => r.labels);
-    const all: Seen[] = bottles.map(({ shot, box }, i) => ({ shot, box, label: labels[i] ?? { text: '', looks: 'bottle', componentId: null, match: 'none' } }));
+    const all: Seen[] = bottles.map(({ shot, box }, i) => ({ shot, box, label: labels[i] ?? { text: '', volume: '', looks: 'bottle', componentId: null, match: 'none', confidence: 0 } }));
     const now = useKit.getState();
     // The round ended while the labels were read (Done, or a review): nothing to add to.
     if (!shots.every(s => now.shots.includes(s))) return;
@@ -433,7 +522,9 @@ export async function readFound(target: ReadTarget) {
     const read = Object.values({ ...after.picks, ...picks }).filter(p => p.how === 'read').length;
     const unsure = after.things.length + things.length;
     const found = Object.values(after.seen).reduce((n, l) => n + l.boxes.length, 0);
-    const said = read + unsure ? recognized(found, takenOf(after.shots), read, unsure) : noneFound(takenOf(after.shots), needs.length);
+    // Labels read that name nothing in this kit: said, never made to fit one of its bottles.
+    const others = seen.filter(b => b.label.match === 'other').length;
+    const said = read + unsure ? recognized(found, takenOf(after.shots), read, unsure, others) : noneFound(takenOf(after.shots), needs.length);
     after.found(picks, things, said);
   } catch {
     done('failed');

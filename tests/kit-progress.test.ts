@@ -92,23 +92,31 @@ describe('which kit a video shows, as its frames are read', () => {
   const known = { found: true, kit: { vendor: 'Thermo Scientific', catalog: '23225', name: 'Pierce BCA Protein Assay Kit' }, protocolId: 'pierce-bca' };
   const other = { found: true, kit: { vendor: 'Thermo Scientific', catalog: '23236', name: 'Coomassie Plus' }, protocolId: null, query: 'Coomassie Plus 23236' };
 
-  it('settles as soon as a frame is a kit Chapp has, without waiting for the rest', async () => {
+  it('settles as soon as two frames agree on a kit Chapp has, without waiting for the rest', async () => {
     const never = new Promise<null>(() => {});
     const got: number[] = [];
-    const reads = await kitReads([never, Promise.resolve(known), never], n => got.push(n));
-    expect(reads).toEqual([null, known, null]);
-    expect(got).toEqual([1]);
+    const reads = await kitReads([never, Promise.resolve(known), never, Promise.resolve({ ...known, kit: { ...known.kit, catalog: '23227' } })], n => got.push(n));
+    expect(reads.filter(Boolean)).toHaveLength(2);
+    expect(got).toEqual([1, 2]);
   });
 
-  it('settles as soon as a frame reads the kit on its box or bag, so its manual is looked up then', async () => {
+  it('settles as soon as two frames agree on the kit read on its box or bag, so its manual is looked up then', async () => {
     const never = new Promise<null>(() => {});
     const onBag = { ...other, packaging: 'bag' };
-    expect(await kitReads([never, Promise.resolve(onBag)])).toEqual([null, onBag]);
+    expect(await kitReads([never, Promise.resolve(onBag), Promise.resolve(other)])).toEqual([null, onBag, other]);
   });
 
-  it('otherwise waits for every frame', async () => {
-    const reads = await kitReads([Promise.resolve(null), Promise.resolve(other)]);
-    expect(reads).toEqual([null, other]);
+  it('never settles on one frame alone, or while frames disagree: it waits for every frame', async () => {
+    let last!: (r: typeof known | null) => void;
+    const later = new Promise<typeof known | null>(r => (last = r));
+    const reads = kitReads([Promise.resolve(known), Promise.resolve({ ...other, packaging: 'box' }), later]);
+    let settled = false;
+    void reads.then(() => (settled = true));
+    await new Promise(r => setTimeout(r, 0));
+    expect(settled).toBe(false);
+    last(null);
+    expect(await reads).toEqual([known, { ...other, packaging: 'box' }, null]);
+    expect(await kitReads([Promise.resolve(null), Promise.resolve(other)])).toEqual([null, other]);
   });
 });
 

@@ -12,7 +12,7 @@ import { imageType } from '../server/kit.ts';
 import { createMockProvider } from '../server/ai/mock.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { loadProtocol } from '../server/ai/protocols.ts';
-import { boxesAt, createKitVision, createMockKitVision, framesToRead, imageSize, millilitres, namedBy, samBoxPrompt, packagingOf, packagingPrompt, parseSamVideo, parseLabels, parseRecognized, parseSam, parseSamRecords, samPointPrompt, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
+import { boxesAt, createKitVision, createMockKitVision, framesToRead, imageSize, labelConfidence, millilitres, namedBy, samBoxPrompt, packagingOf, packagingPrompt, parseSamVideo, parseLabels, parseRecognized, parseSam, parseSamRecords, samPointPrompt, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
 import { labelTargets } from '../src/screens/kit/found.ts';
 
 // Kit photos on the server: SAM 3.1's and Muse Spark's real replies (copied from data/smoke/kit/raw/, masks cut
@@ -205,19 +205,23 @@ describe('labels', () => {
   it('counts a label as read only when the words read name the component', () => {
     const { labels } = parseLabels(LABELS_23227, targets, 12);
     expect(labels.slice(0, 10).every(l => l.match === 'guess' && l.componentId === 'bsa' && l.text === '' && l.looks === 'glass ampule')).toBe(true);
-    expect(labels[10]).toEqual({ text: '', looks: 'small blue bottle', componentId: 'reagent-b', match: 'guess' });
-    expect(labels[11]).toEqual({ text: 'Pierce BCA Protein Assay Reagent A', looks: 'large white bottle', componentId: 'reagent-a', match: 'read' });
+    expect(labels[10]).toMatchObject({ text: '', looks: 'small blue bottle', componentId: 'reagent-b', match: 'guess', confidence: 0.25 });
+    expect(labels[11]).toMatchObject({ text: 'Pierce BCA Protein Assay Reagent A', looks: 'large white bottle', componentId: 'reagent-a', match: 'read', confidence: 0.9 });
   });
 
   it('trusts the words over the pick, calls an unbacked pick a guess, and leaves other products out', () => {
     const item = (over: object) => ({ crop: 1, name: '', looks: 'bottle', component: '', guess: '', ...over });
     const one = (over: object) => parseLabels(JSON.stringify({ items: [item(over)] }), targets, 1).labels[0];
-    expect(one({ name: 'Pierce BCA Protein Assay Reagent B', component: 'reagent-a' })).toMatchObject({ componentId: 'reagent-b', match: 'read' });
+    // The words name Reagent B, the model picked A: neither made to fit, the user asked (B first: what is printed).
+    expect(one({ name: 'Pierce BCA Protein Assay Reagent B', component: 'reagent-a' })).toMatchObject({ componentId: 'reagent-b', match: 'mismatch', candidates: ['reagent-b', 'reagent-a'], confidence: 0.4 });
+    expect(one({ name: 'Pierce BCA Protein Assay Reagent B', component: 'reagent-b' })).toMatchObject({ componentId: 'reagent-b', match: 'read' });
     expect(one({ name: 'Pierce BCA Protein Assay', component: 'reagent-a' })).toMatchObject({ componentId: 'reagent-a', match: 'guess' });
     expect(one({ name: 'PBS', component: 'diluent' })).toMatchObject({ componentId: 'diluent', match: 'guess' });
     expect(one({ name: 'Albumin Standard 2.0 mg/mL', component: 'bsa' })).toMatchObject({ componentId: 'bsa', match: 'read' });
     expect(one({ name: 'Coomassie Plus Protein Assay Reagent' })).toMatchObject({ componentId: null, match: 'other' });
-    expect(one({ looks: '' })).toEqual({ text: '', looks: 'bottle', componentId: null, match: 'none' });
+    // This kit's words that name no one bottle of it: nobody can tell which, not another product.
+    expect(one({ name: 'Pierce BCA Protein Assay' })).toMatchObject({ componentId: null, match: 'none', text: 'Pierce BCA Protein Assay' });
+    expect(one({ looks: '' })).toMatchObject({ text: '', looks: 'bottle', componentId: null, match: 'none', confidence: 0 });
     // A crop the model skipped is one nobody could tell.
     expect(parseLabels(JSON.stringify({ items: [item({ crop: 2, name: 'Reagent A', component: 'reagent-a' })] }), targets, 2).labels[0].match).toBe('none');
     expect(() => parseLabels('not json', targets, 1)).toThrow(UpstreamError);
@@ -260,7 +264,32 @@ describe('labels', () => {
 
   it('leaves out what is not a bottle at all', () => {
     const cloth = JSON.stringify({ items: [{ crop: 1, bottle: false, name: '', looks: 'white fabric', component: '', guess: '' }] });
-    expect(parseLabels(cloth, targets, 1).labels[0]).toEqual({ text: '', looks: 'white fabric', componentId: null, match: 'other', bottle: false });
+    expect(parseLabels(cloth, targets, 1).labels[0]).toMatchObject({ text: '', looks: 'white fabric', componentId: null, match: 'other', bottle: false });
+  });
+
+  it('calls it a mismatch when another picture of the bottle, or the words themselves, name another bottle', () => {
+    const reply = (over: object) => JSON.stringify({ items: [{ crop: 1, bottle: true, name: '', volume: '', looks: 'small bottle', component: '', guess: '', seen: 0, differs: '', ...over }] });
+    const one = (over: object, views = [3]) => parseLabels(reply(over), targets, 1, views).labels[0]!;
+    // Three pictures of one bottle: two say Reagent B, the third Reagent A (SAM joined two bottles into one).
+    expect(one({ name: 'BCA Reagent B', component: 'reagent-b', seen: 2, differs: 'BCA Reagent A' })).toMatchObject({ componentId: 'reagent-b', match: 'mismatch', candidates: ['reagent-b', 'reagent-a'], views: { read: 2, of: 3 } });
+    // What differs names nothing of this run, or the same bottle again: no mismatch.
+    expect(one({ name: 'BCA Reagent B', component: 'reagent-b', seen: 3, differs: 'Thermo Scientific' })).toMatchObject({ match: 'read', views: { read: 3, of: 3 } });
+    expect(one({ name: 'BCA Reagent B', component: 'reagent-b', seen: 1, differs: 'Reagent B, 25 mL' }).match).toBe('read');
+    // Words that name two bottles at once.
+    expect(one({ name: 'Reagent A / Reagent B', component: 'reagent-a', seen: 1 })).toMatchObject({ match: 'mismatch', candidates: ['reagent-a', 'reagent-b'] });
+    // A label of another product, another picture showing one of this run's: that one, to confirm.
+    expect(one({ name: 'Coomassie Plus Protein Assay Reagent', seen: 1, differs: 'Albumin Standard' })).toMatchObject({ componentId: 'bsa', match: 'mismatch', candidates: ['bsa'] });
+    // An unread label whose guess nothing disagrees with stays a guess.
+    expect(one({ guess: 'bsa', looks: 'glass ampule' })).toMatchObject({ match: 'guess', componentId: 'bsa' });
+  });
+
+  it('is surer the more of its pictures show the words read, and keeps the volume read', () => {
+    const reply = (seen: number) => JSON.stringify({ items: [{ crop: 1, bottle: true, name: 'BCA Reagent A', volume: '500 mL', looks: 'large bottle', component: 'reagent-a', guess: '', seen, differs: '' }] });
+    const at = (seen: number, views = [3]) => parseLabels(reply(seen), targets, 1, views).labels[0]!;
+    expect([at(1).confidence, at(2).confidence, at(3).confidence]).toEqual([0.9, expect.closeTo(0.95), expect.closeTo(0.98)]);
+    expect(at(9, [2]).views).toEqual({ read: 2, of: 2 });
+    expect(at(1).volume).toBe('500 mL');
+    expect([labelConfidence('read', false, 1), labelConfidence('guess', false, 0), labelConfidence('other', false, 1), labelConfidence('none', false, 0)]).toEqual([0.75, 0.25, 0, 0]);
   });
 
   it('matches label words whole', () => {
@@ -312,7 +341,7 @@ function fakeFetch(...answers: (unknown | { status: number; body: unknown } | Er
   }) as unknown as typeof fetch;
   return { fn, calls };
 }
-const vision = (fetch: typeof globalThis.fetch, timeouts = {}) => createKitVision({ apiKey: KEY, fetch, log: () => {}, timeouts });
+const vision = (fetch: typeof globalThis.fetch, timeouts = {}) => createKitVision({ apiKey: KEY, fetch, log: () => {}, timeouts, smallVideo: null });
 const chat = (content: string) => ({ choices: [{ message: { role: 'assistant', content } }] });
 
 describe('meta kit vision', () => {
@@ -354,14 +383,14 @@ describe('meta kit vision', () => {
     expect(found.bottles.map(b => Math.round(b.box.x * 500))).toEqual([345]);
   });
 
-  it('asks Muse Spark for strict JSON at low effort, every crop numbered, and checks what it read', async () => {
+  it('asks Muse Spark for strict JSON at minimal effort, every crop numbered, and checks what it read', async () => {
     const { fn, calls } = fakeFetch(chat(LABELS_23227));
     const read = await vision(fn).readLabels(Array.from({ length: 12 }, () => jpeg), targets);
     expect(read.labels.filter(l => l.match === 'read').map(l => l.componentId)).toEqual(['reagent-a']);
     const body = calls[0].body;
     expect(calls[0].url).toBe('https://api.meta.ai/v1/chat/completions');
     expect(body.model).toBe('muse-spark-1.3');
-    expect(body.reasoning_effort).toBe('low');
+    expect(body.reasoning_effort).toBe('minimal');
     expect(body.response_format.json_schema.strict).toBe(true);
     expect(body.response_format.json_schema.schema.properties.items.items.properties.component.enum).toEqual(['', 'reagent-a', 'reagent-b', 'bsa', 'diluent']);
     expect(body.messages[0].content).toContain('- reagent-a: BCA Reagent A (reagent; label says "BCA Reagent A" or "Reagent A")');
@@ -378,6 +407,12 @@ describe('meta kit vision', () => {
     expect(asked).toEqual(['2 bottles:', 'Bottle 1 (3 pictures):', 'image', 'image', 'image', 'Bottle 2 (1 picture):', 'image']);
     expect(views.calls[0].body.messages[0].content).toContain('one group per bottle');
     expect(await vision(fakeFetch().fn).readLabels([], targets)).toEqual({ labels: [] });
+  });
+
+  it('asks which way a cap points at low effort: no one waits on it, and minimal turned an ampule over', async () => {
+    const { fn, calls } = fakeFetch(chat(JSON.stringify({ look: 'white screw cap at the top', cap: 'up' })));
+    expect(await vision(fn).capSide!(jpeg)).toBe('up');
+    expect(calls[0].body.reasoning_effort).toBe('low');
   });
 
   it('asks SAM 3.1 for the packaging by Muse Spark’s word, then as "package", and returns what it found or none', async () => {
@@ -418,7 +453,7 @@ describe('meta kit vision', () => {
       calls.push({ url, body: init.body instanceof FormData ? Object.fromEntries([...init.body.keys()].map(k => [k, true])) : JSON.parse(String(init.body)) });
       return new Response(JSON.stringify(url.endsWith('/files') ? { id: 'file-842549258569145', object: 'file' } : done));
     }) as unknown as typeof fetch;
-    await createKitVision({ apiKey: KEY, fetch: store, log: () => {}, inlineVideoMax: 4 }).trackBottles!({ ...mp4, type: 'video/quicktime' });
+    await createKitVision({ apiKey: KEY, fetch: store, log: () => {}, inlineVideoMax: 4, smallVideo: null }).trackBottles!({ ...mp4, type: 'video/quicktime' });
     expect(calls[0]).toEqual({ url: 'https://api.meta.ai/v1/files', body: { purpose: true, 'expires_after[anchor]': true, 'expires_after[seconds]': true, file: true } });
     expect((calls[1].body as any).input[0].content[1]).toEqual({ type: 'input_video', file_id: 'file-842549258569145' });
     // Too big for the request after all: sent again through the store.
@@ -573,6 +608,25 @@ describe('/api/kit routes', () => {
     expect((await send(mock, 'not a video at all', 'video/mp4')).status).toBe(400);
     expect((await send(mock, JSON.stringify({ photo }), 'application/json')).status).toBe(415);
     expect((await send(blind, mp4, 'video/mp4')).status).toBe(501);
+  });
+
+  it('follows a video sent ahead piece by piece, named by its upload, and says when that upload is gone', async () => {
+    const bytes = [0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 2, 0];
+    const piece = (n: number, part: number[], id = 'sweep-1234abcd') =>
+      fetch(`${mock}/api/kit/track/part?upload=${id}&n=${n}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: new Uint8Array(part) });
+    // Out of order is fine: they are put together by their numbers.
+    expect((await piece(1, bytes.slice(8))).status).toBe(204);
+    expect((await piece(0, bytes.slice(0, 8))).status).toBe(204);
+    const named = (id: string) => fetch(`${mock}/api/kit/track`, { method: 'POST', headers: { 'content-type': 'video/mp4', 'x-chapp-upload': id } });
+    const ok = await named('sweep-1234abcd');
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({ frames: 0, picks: [], seen: [] });
+    // Used once; a piece missing, or an id never sent: gone.
+    expect((await named('sweep-1234abcd')).status).toBe(410);
+    await piece(1, bytes.slice(8), 'sweep-gap00000');
+    expect((await named('sweep-gap00000')).status).toBe(410);
+    expect(await (await named('sweep-never000')).json()).toEqual({ error: 'That upload is gone: send the video itself' });
+    expect((await fetch(`${mock}/api/kit/track/part?upload=no&n=0`, { method: 'POST', body: 'x' })).status).toBe(400);
   });
 
   it('with accept: text/event-stream, sends the video’s frames, how it goes to SAM, each frame, then the bottles', async () => {

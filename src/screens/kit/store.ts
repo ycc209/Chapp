@@ -110,8 +110,17 @@ function keep(component: string, pick: Pick, session: { shots: Shot[]; seen: Rec
 
 const empty: KitSession = { shots: [], seen: {}, picks: {}, things: [], skipped: {}, pending: null, asking: null, reassign: false, said: null, sample: false, following: null, contents: null };
 
-/** Guesses about a bottle the user has now matched are moot. */
-const settled = (things: Thing[], component: string) => things.filter(t => !(t.match === 'guess' && t.component === component));
+/**
+ * Guesses about a bottle the user has now matched are moot; a mismatch that named it among others is about the others
+ * now, and moot once none is left.
+ */
+const settled = (things: Thing[], component: string) =>
+  things.flatMap((t): Thing[] => {
+    if (t.match === 'guess') return t.component === component ? [] : [t];
+    if (t.match !== 'mismatch') return [t];
+    const left = (t.candidates ?? [t.component]).filter((c): c is string => !!c && c !== component);
+    return left.length ? [{ ...t, component: left[0]!, candidates: left }] : [];
+  });
 
 /** In-flight looks don't survive a reload: a photo still being looked at is looked at again, its labels read again. */
 function keepable(seen: Record<string, Look>): Record<string, Look> {
@@ -170,7 +179,13 @@ export const useKit = create<KitSession & KitActions>()(
         const fresh = moved.filter(([id], i) => !picks[id] && moved.findIndex(([other]) => other === id) === i);
         for (const [id, pick] of fresh) picks[id] = pick;
         if (!s.sample) for (const [id, pick] of fresh) keep(id, pick, s);
-        const things = s.things.map(t => (!t.component || !isContents(t.component) ? t : ids[t.component] ? { ...t, component: ids[t.component] } : { ...t, component: null, match: 'none' as const }));
+        const things = s.things.map((t): Thing => {
+          if (!t.component || !isContents(t.component)) return t;
+          // A mismatch's candidates move to the protocol's bottles too; those it has none like drop out.
+          const candidates = t.candidates?.flatMap(c => (!isContents(c) ? [c] : ids[c] ? [ids[c]!] : []));
+          if (t.match === 'mismatch' && candidates?.length) return { ...t, component: candidates[0]!, candidates };
+          return ids[t.component] ? { ...t, component: ids[t.component] } : { ...t, component: null, match: 'none', candidates: undefined };
+        });
         set({ picks, things: [...things, ...unlike], contents: null });
       },
       found: (picks, things, said) => {

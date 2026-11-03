@@ -44,13 +44,18 @@ export type TrackHeard = Omit<TrackLive, 'signal'> & { onUpload?: (sent: number)
  * on an error, or when the stream ends without an answer. Sent with XMLHttpRequest: fetch cannot tell how much of a
  * body has gone up, and a phone's video is megabytes.
  */
-export function trackBottlesLive(video: Blob, type: 'video/mp4' | 'video/quicktime', signal?: AbortSignal, live?: TrackHeard): Promise<TrackedBottles> {
+export function trackBottlesLive(video: Blob, type: 'video/mp4' | 'video/quicktime', signal?: AbortSignal, live?: TrackHeard, uploaded?: string | null): Promise<TrackedBottles> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/kit/track');
     xhr.setRequestHeader('content-type', type);
     xhr.setRequestHeader('accept', 'text/event-stream');
+    // Sent ahead piece by piece as it was recorded (sendAhead): named, not sent again.
+    if (uploaded) {
+      xhr.setRequestHeader('x-chapp-upload', uploaded);
+      live?.onUpload?.(1);
+    }
     xhr.upload.onprogress = e => {
       if (e.lengthComputable && e.total > 0) live?.onUpload?.(e.loaded / e.total);
     };
@@ -110,8 +115,31 @@ export function trackBottlesLive(video: Blob, type: 'video/mp4' | 'video/quickti
       xhr.abort();
       fail(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
     });
-    xhr.send(video);
+    xhr.send(uploaded ? null : video);
   });
+}
+
+/** What the server says when an upload sent ahead is not there (a restart): the video is sent itself then. */
+export const UPLOAD_GONE = /upload is gone/i;
+
+/**
+ * A video sent to the server piece by piece while it is still being recorded (a sweep: MediaRecorder hands over a
+ * piece a second), so that once it stops only its last piece is left to send: POST /api/kit/track/part, in order.
+ * `done` says the upload's id once every piece is there, or null when one failed (the video is then sent whole).
+ */
+export function sendAhead(): { send(piece: Blob): void; done(): Promise<string | null> } {
+  const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  let n = 0;
+  let sent: Promise<boolean> = Promise.resolve(true);
+  return {
+    send(piece) {
+      const k = n++;
+      sent = sent.then(ok =>
+        ok ? fetch(`/api/kit/track/part?upload=${id}&n=${k}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: piece }).then(r => r.ok, () => false) : false,
+      );
+    },
+    done: () => sent.then(ok => (ok && n > 0 ? id : null)),
+  };
 }
 
 /** A video followed, as its events come (TrackEvent): each to `live`, the sightings gathered from the frames. */

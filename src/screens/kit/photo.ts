@@ -92,6 +92,8 @@ export type Footage = {
   video: Blob | null;
   player?: HTMLVideoElement;
   tracked?: Promise<TrackedBottles>;
+  /** A sweep's video sent ahead as it was recorded (events.ts sendAhead): the upload's id once all of it is there. */
+  uploaded?: Promise<string | null>;
   release?: () => void;
   grab?: (frame: number) => Promise<{ shot: Shot; at: number } | null>;
 };
@@ -202,9 +204,10 @@ export const videoType = (file: Blob & { name?: string }): 'video/mp4' | 'video/
 
 /**
  * The camera's stream recorded while it sweeps, for SAM to follow the bottles through: an MP4 (H.264), which iPhones
- * record; null where the browser records only WebM, which SAM does not take (the sweep's frames are read then).
+ * record; null where the browser records only WebM, which SAM does not take (the sweep's frames are read then). Each
+ * piece goes to `onPiece` as it is recorded (a second's worth), to be sent ahead.
  */
-export function recordSweep(stream: MediaStream): { stop(): Promise<Blob | null> } | null {
+export function recordSweep(stream: MediaStream, onPiece?: (piece: Blob) => void): { stop(): Promise<Blob | null> } | null {
   const type = typeof MediaRecorder === 'undefined' ? undefined : ['video/mp4;codecs=avc1', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t));
   if (!type) return null;
   const parts: Blob[] = [];
@@ -212,7 +215,9 @@ export function recordSweep(stream: MediaStream): { stop(): Promise<Blob | null>
   try {
     recorder = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 2_500_000 });
     recorder.ondataavailable = e => {
-      if (e.data.size) parts.push(e.data);
+      if (!e.data.size) return;
+      parts.push(e.data);
+      onPiece?.(e.data);
     };
     recorder.start(1000);
   } catch {

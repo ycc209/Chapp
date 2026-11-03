@@ -9,6 +9,7 @@
  *     --protocol pierce-bca    the protocol whose bottles the labels are matched to
  *     --fresh                  ask again even if this photo was asked before (replies are kept by the photo's hash)
  *     --mock                   the mock provider: no network, no cost
+ *     --effort low             how hard Muse Spark thinks (minimal, the app's, unless set)
  *
  * macOS only: sips makes the photo the app's size (ANALYZE_MAX) and cuts the crops. Replies are kept under
  * data/smoke/kit/raw/ (git-ignored); the key and the photos are never printed.
@@ -37,7 +38,8 @@ const option = (name: string) => {
 };
 const only = new Set((option('only') ?? 'recognize,segment,labels').split(','));
 const protocolId = option('protocol') ?? 'pierce-bca';
-const valued = new Set([option('only'), option('protocol')].filter(Boolean));
+const effort = option('effort') as 'minimal' | 'low' | 'medium' | 'high' | undefined;
+const valued = new Set([option('only'), option('protocol'), option('effort')].filter(Boolean));
 const inputs = args.filter(a => !a.startsWith('--') && !valued.has(a));
 const images = (inputs.length ? inputs : [root]).flatMap(p =>
   statSync(p).isDirectory() ? readdirSync(p).filter(f => /\.(jpe?g|png|heic|webp)$/i.test(f)).sort().map(f => join(p, f)) : [resolve(p)]);
@@ -71,7 +73,7 @@ const recordingFetch: typeof fetch = async (url, init) => {
 const timings: string[] = [];
 const vision: KitVision = flag('mock')
   ? createMockKitVision()
-  : createKitVision({ apiKey: process.env.MODEL_API_KEY ?? '', fetch: recordingFetch, log: line => timings.push(line) });
+  : createKitVision({ apiKey: process.env.MODEL_API_KEY ?? '', fetch: recordingFetch, log: line => timings.push(line), ...(effort ? { effort } : {}) });
 
 const work = mkdtempSync(join(process.env.TMPDIR || tmpdir(), 'chapp-kit-'));
 const size = (file: string) => {
@@ -131,7 +133,7 @@ for (const file of images) {
       result.labels = read.labels;
       result.seconds.labels = s;
       console.log(`  labels    ${s.toFixed(1)} s  ${crops.length} crops`);
-      read.labels.forEach((l, i) => console.log(`    ${String(i + 1).padStart(2)} ${l.match.padEnd(5)} ${(l.componentId ?? '-').padEnd(10)} ${l.looks}${l.text ? ` · "${l.text}"` : ''}`));
+      read.labels.forEach((l, i) => console.log(`    ${String(i + 1).padStart(2)} ${l.match.padEnd(8)} ${(l.componentId ?? '-').padEnd(10)} ${l.confidence.toFixed(2)} ${l.looks}${l.text ? ` · "${l.text}"` : ''}${l.candidates ? ` · or ${l.candidates.slice(1).join(', ')}` : ''}`));
     }
   } catch (error) {
     console.log(`  failed: ${error instanceof Error ? error.message : error}`);
@@ -148,7 +150,7 @@ for (const file of images) {
     if (result.labels.length && t.components) {
       const objects = Object.values(t.components).reduce((a, b) => a + b, 0);
       result.score.push(`bottles ${result.boxes.length}/${objects}`);
-      for (const match of ['read', 'guess'] as const) {
+      for (const match of ['read', 'mismatch', 'guess'] as const) {
         const by: Record<string, number> = {};
         for (const l of result.labels) if (l.match === match && l.componentId) by[l.componentId] = (by[l.componentId] ?? 0) + 1;
         const right = Object.entries(by).reduce((n, [id, k]) => n + Math.min(k, t.components![id] ?? 0), 0);
@@ -166,7 +168,7 @@ console.log(`\n${calls} paid call${calls === 1 ? '' : 's'} (others from data/smo
 for (const line of timings) console.log(`  ${line}`);
 
 // The report: each photo with its boxes, coloured by how sure the label is, and what was read.
-const tone: Record<string, string> = { read: '#568dfa', guess: '#ffe863', other: '#a7a7ad', none: '#ffffff' };
+const tone: Record<string, string> = { read: '#568dfa', mismatch: '#ff9a3d', guess: '#ffe863', other: '#a7a7ad', none: '#ffffff' };
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 const report = `<!doctype html><meta charset="utf-8"><title>Kit photos</title>
 <style>body{font:14px -apple-system,system-ui,sans-serif;margin:24px;background:#f4f4f2;color:#111}section{margin:0 0 32px}

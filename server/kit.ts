@@ -14,6 +14,9 @@ import type { AIProvider, BottleCapRequest, CapSide, FindPackagingRequest, Label
  *   POST /api/kit/packaging   FindPackagingRequest  → KitPackaging       SAM 3.1 finds the kit's box or bag
  *   POST /api/kit/track       the video itself      → TrackedBottles     SAM 3.1 follows the bottles through it
  *                                                                          (as events, frame by frame: TrackEvent)
+ *   POST /api/kit/track/part  ?upload=…&n=…, a piece  → 204               a sweep's video, piece by piece as the phone
+ *                                                                          records it; /api/kit/track then names the
+ *                                                                          upload (x-chapp-upload) instead of sending it
  *   POST /api/kit/labels      ReadLabelsRequest     → ReadLabels         Muse Spark reads each bottle's crop
  *   POST /api/kit/cap         BottleCapRequest      → BottleCap          Muse Spark says which way its cap points
  *   POST /api/kit/whole       WholeBottleRequest    → WholeBottle        Muse Image draws the bottle whole
@@ -33,6 +36,9 @@ export const MAX_KIT_VIDEO = 150 * 1024 * 1024;
 /** The first box of an MP4 or a MOV (after its 4-byte size): what tells a video from anything else sent as one. */
 const VIDEO_BOXES = new Set(['ftyp', 'moov', 'mdat', 'wide', 'free', 'skip']);
 const MAX_CROPS = 24;
+/** Pieces of a video sent ahead are kept this long for the request that names them. */
+const UPLOAD_KEEP_MS = 10 * 60 * 1000;
+const UPLOAD_ID = /^[A-Za-z0-9-]{8,64}$/;
 
 const json = (res: ServerResponse, status: number, body: unknown) => {
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
@@ -104,6 +110,37 @@ function toPhoto(data: z.infer<typeof PhotoData>, what: string): Photo {
 /** The /api/kit/* routes on `provider`. Returns the handler server/app.ts calls for every path under /api/kit/. */
 export function createKitHandler(provider: AIProvider, wholes?: string) {
   const drawing = new Map<string, Promise<Photo>>();
+  /** Videos coming piece by piece (a sweep as it is recorded), by the phone's id for each, until a request names one. */
+  const uploads = new Map<string, { pieces: Map<number, Buffer>; size: number; at: number }>();
+  const forgetOld = () => {
+    for (const [id, u] of uploads) if (Date.now() - u.at > UPLOAD_KEEP_MS) uploads.delete(id);
+  };
+
+  /** POST /api/kit/track/part?upload=…&n=…: one piece of a video, kept until /api/kit/track names its upload. */
+  async function part(req: IncomingMessage, res: ServerResponse) {
+    forgetOld();
+    const q = new URL(req.url ?? '/', 'http://x').searchParams;
+    const id = q.get('upload') ?? '';
+    const n = Number(q.get('n'));
+    if (!UPLOAD_ID.test(id) || !Number.isInteger(n) || n < 0 || n > 10_000) return json(res, 400, { error: 'Name the upload and the piece: ?upload=…&n=…' });
+    const upload = uploads.get(id) ?? { pieces: new Map(), size: 0, at: Date.now() };
+    const body = await readBody(req, MAX_KIT_VIDEO - upload.size);
+    if (!body) return json(res, 413, { error: `Video too large (limit ${MAX_KIT_VIDEO / 1024 / 1024} MB)` });
+    upload.size += body.length - (upload.pieces.get(n)?.length ?? 0);
+    upload.pieces.set(n, body);
+    upload.at = Date.now();
+    uploads.set(id, upload);
+    res.writeHead(204).end();
+  }
+
+  /** The video an upload's pieces make, in order, and the upload forgotten; null when it is gone or a piece is missing. */
+  function takeUpload(id: string): Buffer | null {
+    const upload = uploads.get(id);
+    uploads.delete(id);
+    if (!upload?.pieces.size) return null;
+    const pieces = Array.from({ length: upload.pieces.size }, (_, n) => upload.pieces.get(n));
+    return pieces.every(Boolean) ? Buffer.concat(pieces as Buffer[]) : null;
+  }
   const keyOf = (photo: Photo) => createHash('sha256').update(photo.data).digest('hex').slice(0, 32);
 
   /** Which way the bottle's cap points: kept, or asked now (and kept). */
@@ -145,7 +182,12 @@ export function createKitHandler(provider: AIProvider, wholes?: string) {
   async function track(req: IncomingMessage, res: ServerResponse, type: string) {
     if (!provider.trackBottles) return json(res, 501, { error: 'This server cannot follow bottles through a video' });
     if (type !== 'video/mp4' && type !== 'video/quicktime') return json(res, 415, { error: 'Send an MP4 or MOV video (content-type: video/mp4 or video/quicktime)' });
-    const body = await readBody(req, MAX_KIT_VIDEO);
+    // The video sent ahead piece by piece (x-chapp-upload names it), else the body itself.
+    const named = req.headers['x-chapp-upload'];
+    const upload = typeof named === 'string' && UPLOAD_ID.test(named) ? named : null;
+    const sent = await readBody(req, upload ? 1024 : MAX_KIT_VIDEO);
+    const body = upload ? takeUpload(upload) : sent;
+    if (upload && !body) return json(res, 410, { error: 'That upload is gone: send the video itself' });
     if (!body) return json(res, 413, { error: `Video too large (limit ${MAX_KIT_VIDEO / 1024 / 1024} MB)` });
     if (!VIDEO_BOXES.has(body.subarray(4, 8).toString('latin1'))) return json(res, 400, { error: 'The body is not an MP4 or MOV video' });
     const video = { type, data: new Uint8Array(body) } as const;
@@ -156,13 +198,14 @@ export function createKitHandler(provider: AIProvider, wholes?: string) {
 
   return async function kit(req: IncomingMessage, res: ServerResponse, path: string) {
     const route = path.slice('/api/kit/'.length);
-    if (!['recognize', 'segment', 'packaging', 'track', 'labels', 'cap', 'whole'].includes(route)) return json(res, 404, { error: 'Not found' });
+    if (!['recognize', 'segment', 'packaging', 'track', 'track/part', 'labels', 'cap', 'whole'].includes(route)) return json(res, 404, { error: 'Not found' });
     if (req.method !== 'POST') {
       res.setHeader('allow', 'POST');
       return json(res, 405, { error: 'Use POST' });
     }
     const type = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
     if (route === 'track') return track(req, res, type);
+    if (route === 'track/part') return part(req, res);
     if (type !== 'application/json') return json(res, 415, { error: 'Send JSON (content-type: application/json)' });
     const body = await readBody(req, MAX_KIT_JSON);
     if (!body) return json(res, 413, { error: `Body too large (limit ${MAX_KIT_JSON / 1024 / 1024} MB)` });

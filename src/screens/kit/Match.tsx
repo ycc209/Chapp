@@ -13,8 +13,10 @@ import { SampleBadge } from '../protocol/Body.tsx';
 import { AskBadge, CheckBadge, ForwardIcon } from '../protocol/icons.tsx';
 import { analyzing, bottleAt, readFound } from './analysis.ts';
 import { targetOf } from './found.ts';
+import { MismatchQuestion } from './Ask.tsx';
 import {
   amounts,
+  asksAbout,
   cantLook,
   gotIt,
   heardAnswer,
@@ -29,6 +31,8 @@ import {
   opening,
   rowDetail,
   slotsOf,
+  subjectIs,
+  subjectNeed,
   subjectOf,
   takenOf,
   thingTitle,
@@ -115,7 +119,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
   const [tapped, setTapped] = useState(false);
   const retake = complete && !kit.sample ? (needs.find(n => kit.picks[n.id] && cuts[n.id] && !cuts[n.id]!.ok && !kept[n.id] && !keptAsIs(kit.picks[n.id]!.crop)) ?? null) : null;
   // The bottle a tap on a photo is for: the one asked about, else the first still open.
-  const target = subject && subject.kind !== 'unknown' ? subject.need : (left[0] ?? null);
+  const target = (subject && subjectNeed(subject)) ?? left[0] ?? null;
   /** Left to check once `need` is matched: "Diluent, got it. 1 more to check." */
   const leftAfter = (need: Need) => left.length - (left.includes(need) ? 1 : 0);
 
@@ -132,10 +136,12 @@ export function Match({ protocol, onCamera }: MatchProps) {
       ? [SHOW_ME, NOT_IN_PHOTOS]
       : kit.reassign
         ? // Any other bottle, matched ones too: the crop may be the right picture of a bottle matched by mistake.
-          [...needs.filter(n => subject.kind === 'unknown' || n.id !== subject.need.id).map(n => n.name), NOT_THIS_RUN]
+          [...needs.filter(n => !(subject.kind === 'guess' || subject.kind === 'pending') || n.id !== subject.need.id).map(n => n.name), NOT_THIS_RUN]
         : subject.kind === 'unknown'
           ? [...offered(needs, kit).map(n => n.name), NOT_THIS_RUN, SOMETHING_ELSE]
-          : [YES, NOT_THIS_RUN, SOMETHING_ELSE];
+          : subject.kind === 'mismatch' && subject.needs.length > 1
+            ? [...subject.needs.map(n => n.name), NOT_THIS_RUN, SOMETHING_ELSE]
+            : [YES, NOT_THIS_RUN, SOMETHING_ELSE];
 
   const choose = (choice: string) => {
     setReply(null);
@@ -157,14 +163,15 @@ export function Match({ protocol, onCamera }: MatchProps) {
       return;
     }
     if (choice === SOMETHING_ELSE) return kit.setReassign(true);
-    const named = choice === YES && subject.kind !== 'unknown' ? subject.need : needs.find(n => n.name === choice);
+    const named = choice === YES ? subjectNeed(subject) : needs.find(n => n.name === choice);
     if (subject.kind === 'pending') {
       if (choice === NOT_THIS_RUN) return kit.reject(`Okay, not that one.`);
       if (named) return kit.accept(named.id, gotIt(named.name, leftAfter(named)));
       return;
     }
     if (choice === NOT_THIS_RUN) return kit.answer(subject.thing.id, null, 'picked', `Okay, not that one.`);
-    if (named) kit.answer(subject.thing.id, named.id, choice === YES ? 'confirmed' : 'picked', gotIt(named.name, leftAfter(named)));
+    const confirmed = choice === YES || (subject.kind === 'mismatch' && subject.needs.includes(named!));
+    if (named) kit.answer(subject.thing.id, named.id, confirmed ? 'confirmed' : 'picked', gotIt(named.name, leftAfter(named)));
   };
 
   // A spoken or typed answer that is one of the answers on screen is that answer; anything else goes to Chapp.
@@ -202,7 +209,7 @@ export function Match({ protocol, onCamera }: MatchProps) {
     const all = (p: Pick) => p.boxes ?? [p.box];
     return [
       ...Object.values(kit.picks).filter(p => p.shot === shot).flatMap(p => all(p).map(box => mark(box, 'blue'))),
-      ...kit.things.filter(t => t.shot === shot).flatMap(t => all(t).map(box => mark(box, t.match === 'guess' ? 'yellow' : 'dashed'))),
+      ...kit.things.filter(t => t.shot === shot).flatMap(t => all(t).map(box => mark(box, t.match === 'none' ? 'dashed' : 'yellow'))),
       ...(kit.pending?.shot === shot ? [mark(kit.pending.box, 'yellow')] : []),
     ];
   };
@@ -277,8 +284,8 @@ export function Match({ protocol, onCamera }: MatchProps) {
             const pick = kit.picks[need.id];
             const pending = kit.pending?.component === need.id ? kit.pending : undefined;
             // Until it is matched, a row shows what the models found for it: a guess, or a bottle nobody could tell.
-            const thing = pick || pending ? undefined : (kit.things.find(t => t.match === 'guess' && t.component === need.id) ?? slots.get(need.id));
-            const asked = subject && (subject.kind === 'unknown' ? thing === subject.thing : subject.need.id === need.id);
+            const thing = pick || pending ? undefined : (kit.things.find(t => asksAbout(t, need.id)) ?? slots.get(need.id));
+            const asked = subject && (subject.kind === 'unknown' ? thing === subject.thing : subjectIs(subject, need.id));
             return (
               <Row
                 key={need.id}
@@ -340,6 +347,8 @@ export function Match({ protocol, onCamera }: MatchProps) {
                 <>
                   Is the {subject.thing.looks} the <b className="font-bold">{subject.need.name}</b>?
                 </>
+              ) : subject.kind === 'mismatch' ? (
+                <MismatchQuestion thing={subject.thing} needs={subject.needs} />
               ) : (
                 <>
                   What’s the <b className="font-bold">{subject.thing.looks}</b>?

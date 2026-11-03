@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { cn } from '../../lib/cn.ts';
 import { analyzing } from './analysis.ts';
-import { gotIt, needsOf, noPhoto, offered, open, subjectOf } from './matching.ts';
+import { gotIt, needsOf, noPhoto, offered, open, subjectNeed, subjectOf, type Need, type Thing } from './matching.ts';
 import { useKit } from './store.ts';
 
 const PILL = 'flex min-h-9 cursor-pointer items-center rounded-[18px] border-0 px-4 font-[inherit] text-[15px] leading-5 font-semibold outline-none focus-visible:ring-2 focus-visible:ring-blue';
@@ -38,8 +38,9 @@ export function KitAsk({ protocol }: { protocol: Protocol }) {
 
   const answers: string[] =
     subject.kind === 'where' ? [SHOW_ME, NOT_IN_PHOTOS]
-    : kit.reassign ? [...needs.filter(n => subject.kind === 'unknown' || n.id !== subject.need.id).map(n => n.name), NOT_THIS_RUN]
+    : kit.reassign ? [...needs.filter(n => !(subject.kind === 'guess' || subject.kind === 'pending') || n.id !== subject.need.id).map(n => n.name), NOT_THIS_RUN]
     : subject.kind === 'unknown' ? [...offered(needs, kit).map(n => n.name), NOT_THIS_RUN, SOMETHING_ELSE]
+    : subject.kind === 'mismatch' && subject.needs.length > 1 ? [...subject.needs.map(n => n.name), NOT_THIS_RUN, SOMETHING_ELSE]
     : [YES, NOT_THIS_RUN, SOMETHING_ELSE];
 
   const choose = (choice: string) => {
@@ -49,14 +50,15 @@ export function KitAsk({ protocol }: { protocol: Protocol }) {
       return;
     }
     if (choice === SOMETHING_ELSE) return kit.setReassign(true);
-    const named = choice === YES && subject.kind !== 'unknown' ? subject.need : needs.find(n => n.name === choice);
+    const named = choice === YES ? subjectNeed(subject) : needs.find(n => n.name === choice);
     if (subject.kind === 'pending') {
       if (choice === NOT_THIS_RUN) return kit.reject('Okay, not that one.');
       if (named) return kit.accept(named.id, gotIt(named.name, leftAfter(named.id)));
       return;
     }
     if (choice === NOT_THIS_RUN) return kit.answer(subject.thing.id, null, 'picked', 'Okay, not that one.');
-    if (named) kit.answer(subject.thing.id, named.id, choice === YES ? 'confirmed' : 'picked', gotIt(named.name, leftAfter(named.id)));
+    const confirmed = choice === YES || (subject.kind === 'mismatch' && subject.needs.includes(named!));
+    if (named) kit.answer(subject.thing.id, named.id, confirmed ? 'confirmed' : 'picked', gotIt(named.name, leftAfter(named.id)));
   };
 
   const crop = subject.kind === 'pending' ? kit.pending?.crop : subject.kind === 'where' ? undefined : subject.thing.crop;
@@ -79,6 +81,8 @@ export function KitAsk({ protocol }: { protocol: Protocol }) {
             <>
               Is the {subject.thing.looks} the <b className="font-bold">{subject.need.name}</b>?
             </>
+          ) : subject.kind === 'mismatch' ? (
+            <MismatchQuestion thing={subject.thing} needs={subject.needs} />
           ) : (
             <>
               What’s the <b className="font-bold">{subject.thing.looks}</b>?
@@ -94,5 +98,24 @@ export function KitAsk({ protocol }: { protocol: Protocol }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * A label whose evidence disagrees, asked: "Its label reads “Pierce BCA Protein Assay Reagent B”. Is the small bottle
+ * the BCA Reagent B or the BCA Reagent A?" (the likeliest first).
+ */
+export function MismatchQuestion({ thing, needs }: { thing: Thing; needs: Need[] }) {
+  return (
+    <>
+      {thing.text ? `Its label reads “${thing.text}”. ` : ''}Is the {thing.looks} the{' '}
+      {needs.map((n, i) => (
+        <span key={n.id}>
+          {i > 0 && (i === needs.length - 1 ? ' or the ' : ', the ')}
+          <b className="font-bold">{n.name}</b>
+        </span>
+      ))}
+      ?
+    </>
   );
 }

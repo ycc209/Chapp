@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import type { Box, CapSide, KitVision, LabelMatch, LabelTarget, Photo, Point, ReadLabels, RecognizedKit, SegmentedBottles, Sighting as Seen, TrackedBottles, Video } from '../../shared/ai.ts';
+import type { Box, CapSide, KitVision, LabelMatch, LabelTarget, Photo, Point, ReadLabel, ReadLabels, RecognizedKit, SegmentedBottles, Sighting as Seen, TrackedBottles, Video } from '../../shared/ai.ts';
 import { area, boxAt, overlap, sampleLayout } from '../../shared/kit.ts';
 import { finished, UpstreamError } from './provider.ts';
 import { bcaFacts, knownProtocols, localProtocolId } from './protocols.ts';
 import { samOutline, type SamMask } from './samMask.ts';
 import { costOf, meter, PER, usageLine } from './usage.ts';
 import { videoFrameTimes } from './videoFrames.ts';
+import { smallVideo } from './videoSmall.ts';
 
 /**
  * Kit photos behind KitVision (shared/ai.ts): Muse Spark reads a kit's box (recognizeKit) and each bottle's label
@@ -14,7 +15,8 @@ import { videoFrameTimes } from './videoFrames.ts';
  * Nothing here logs the key, a prompt or a photo: only timings.
  *
  * A label only counts as read when the words the model read name the component (namedBy): a match the model picked
- * without those words comes back as a guess, which the app asks the user to confirm.
+ * without those words comes back as a guess, and one the evidence disagrees on as a mismatch, which the app asks the
+ * user to confirm or settle. A video goes to SAM made small (videoSmall.ts): a third of the time.
  */
 
 export const VISION_MODEL = 'muse-spark-1.3';
@@ -235,8 +237,12 @@ const MIN_SURE = 0.5;
 const MAIN_VIEW = 0.8;
 /** …and well enough to be read too at this share. */
 const GOOD_VIEW = 0.4;
-/** How far a bottle's middle moves from frame to frame (in fractions of the frame) for its view to count half: a blur. */
+/**
+ * How far a bottle's middle moves from frame to frame (in fractions of the frame) for its view to count half: a blur.
+ * At 30 frames a second, a phone's own; a video SAM follows at fewer (videoSmall.ts) moves as much more a frame.
+ */
 const BLUR_STEP = 0.004;
+const BLUR_FPS = 30;
 
 /**
  * One object on one frame of a video SAM followed: the frame, SAM's id for the object (the same on every frame), its
@@ -272,15 +278,17 @@ const middle = (b: Box) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
  * How well each sighting of one bottle shows its label: its size; a tenth of it where it touches the frame's edge
  * (cut off there); less the faster it moves between the frames around it (the phone moving, a blur). Best first.
  */
-function viewsOf(track: Sighting[]): { s: Sighting; view: number }[] {
+function viewsOf(track: Sighting[], fps = BLUR_FPS): { s: Sighting; view: number }[] {
   const inOrder = [...track].sort((a, b) => a.frame - b.frame);
+  const blur = (BLUR_STEP * BLUR_FPS) / fps;
+  const close = Math.max(1, Math.round((3 * fps) / BLUR_FPS));
   return inOrder
     .map((s, i) => {
-      const near = [inOrder[i - 1], inOrder[i + 1]].filter((n): n is Sighting => !!n && Math.abs(n.frame - s.frame) <= 3);
+      const near = [inOrder[i - 1], inOrder[i + 1]].filter((n): n is Sighting => !!n && Math.abs(n.frame - s.frame) <= close);
       const at = middle(s.box);
       // With no frame close by its motion is unknown: as fast as a blur.
-      const step = near.length ? Math.max(...near.map(n => Math.hypot(middle(n.box).x - at.x, middle(n.box).y - at.y) / Math.max(1, Math.abs(n.frame - s.frame)))) : BLUR_STEP;
-      return { s, view: (area(s.box) * (touchesEdge(s.box) ? 0.1 : 1)) / (1 + step / BLUR_STEP) };
+      const step = near.length ? Math.max(...near.map(n => Math.hypot(middle(n.box).x - at.x, middle(n.box).y - at.y) / Math.max(1, Math.abs(n.frame - s.frame)))) : blur;
+      return { s, view: (area(s.box) * (touchesEdge(s.box) ? 0.1 : 1)) / (1 + step / blur) };
     })
     .sort((a, b) => b.view - a.view);
 }
@@ -302,17 +310,17 @@ function followedInside(a: Sighting[], b: Sighting[]): boolean {
  * (MAIN_VIEW), up to `max` frames, any still left where each shows best. Then up to VIEWS_PER_BOTTLE views of each in
  * all, from other moments (apart in time, so from other angles too), good enough to read (GOOD_VIEW), on frames already
  * taken where they can be, up to MAX_FRAMES. A view's worth is its size, cut off at the edge or blurred by motion less
- * (viewsOf). Flickers, specks, what SAM was never sure of and a cap followed apart from its bottle are no bottles.
- * Pure, so it is tested.
+ * (viewsOf), the motion by the video's frames a second (`fps`). Flickers, specks, what SAM was never sure of and a cap
+ * followed apart from its bottle are no bottles. Pure, so it is tested.
  */
-export function framesToRead(seen: Sighting[], max = MAX_PICKS, views = VIEWS_PER_BOTTLE): TrackedBottles['picks'] {
+export function framesToRead(seen: Sighting[], max = MAX_PICKS, views = VIEWS_PER_BOTTLE, fps = BLUR_FPS): TrackedBottles['picks'] {
   const tracks = new Map<number, Sighting[]>();
   for (const s of seen) if (area(s.box) >= MIN_AREA) tracks.set(s.id, [...(tracks.get(s.id) ?? []), s]);
   for (const [id, track] of [...tracks]) {
     if (track.length < MIN_SIGHTINGS || Math.max(...track.map(s => s.score ?? 1)) < MIN_SURE) tracks.delete(id);
   }
   for (const [id, track] of [...tracks]) if ([...tracks].some(([other, t]) => other !== id && followedInside(track, t))) tracks.delete(id);
-  const ranked = new Map([...tracks].map(([id, track]) => [id, viewsOf(track)]));
+  const ranked = new Map([...tracks].map(([id, track]) => [id, viewsOf(track, fps)]));
   const viewAt = (id: number, frame: number) => ranked.get(id)!.find(v => v.s.frame === frame);
 
   // Main pictures: few frames, each bottle nearly at its best.
@@ -458,6 +466,8 @@ For every ${each}, in order:
 - looks: what it is, in two or three plain lowercase words ("tall bottle", "small blue bottle", "glass ampule").
 - component: the id of the component below that the label you read names. "" when the label names none of them, or you could not read it.
 - guess: when you could not read the label, the component it most likely is from its shape, size, colour and the other ${grouped ? 'bottles' : 'pictures'}. "" when you cannot tell, or you read the label.
+- seen: ${grouped ? 'how many of its pictures show the words you put in name' : '1 when you read words on its label, else 0'}.
+- differs: words you read on ${grouped ? 'any of its pictures' : 'it'} that name a different product or bottle than name does, word for word. "" when nothing you read disagrees.
 Components of this run:
 ${list.join('\n')}`;
 }
@@ -479,7 +489,7 @@ export function labelsFormat(targets: LabelTarget[]) {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['crop', 'bottle', 'name', 'volume', 'looks', 'component', 'guess'],
+              required: ['crop', 'bottle', 'name', 'volume', 'looks', 'component', 'guess', 'seen', 'differs'],
               properties: {
                 crop: { type: 'integer' },
                 bottle: { type: 'boolean' },
@@ -488,6 +498,8 @@ export function labelsFormat(targets: LabelTarget[]) {
                 looks: { type: 'string' },
                 component: { type: 'string', enum: ids },
                 guess: { type: 'string', enum: ids },
+                seen: { type: 'integer' },
+                differs: { type: 'string' },
               },
             },
           },
@@ -499,7 +511,17 @@ export function labelsFormat(targets: LabelTarget[]) {
 
 const LabelsWire = z.object({
   items: z.array(
-    z.object({ crop: z.number().optional(), bottle: z.boolean().default(true), name: z.string().default(''), volume: z.string().default(''), looks: z.string().default(''), component: z.string().default(''), guess: z.string().default('') }),
+    z.object({
+      crop: z.number().optional(),
+      bottle: z.boolean().default(true),
+      name: z.string().default(''),
+      volume: z.string().default(''),
+      looks: z.string().default(''),
+      component: z.string().default(''),
+      guess: z.string().default(''),
+      seen: z.number().optional(),
+      differs: z.string().default(''),
+    }),
   ),
 });
 
@@ -566,8 +588,42 @@ export function volumeNames(volume: string, text: string, targets: LabelTarget[]
 /** "glass ampule": two or three plain words, never empty. */
 const looksOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9µ\- ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || 'bottle';
 
-/** Muse Spark's reading of `count` crops (or bottles, read from several crops each) → ReadLabels, each match checked against the words read. */
-export function parseLabels(content: unknown, targets: LabelTarget[], count: number): ReadLabels {
+/**
+ * How sure Chapp is of a label's match (0–1), by what backs it: a name read whole (0.9) or what shows of one, or its
+ * volume (0.75), each more picture that showed those words a little more; evidence that disagrees (0.4); a guess from
+ * shape and colour (0.25); nothing named (0). Pure, so it is tested.
+ */
+export function labelConfidence(match: LabelMatch, whole: boolean, seen: number): number {
+  if (match === 'read') return Math.min(0.98, (whole ? 0.9 : 0.75) + 0.05 * Math.max(0, seen - 1));
+  return match === 'mismatch' ? 0.4 : match === 'guess' ? 0.25 : 0;
+}
+
+/** Words that say nothing of which product it is: every kit's labels have them. */
+const LABEL_GENERIC = new Set(['protein', 'assay', 'assays', 'reagent', 'reagents', 'kit', 'buffer', 'solution', 'standard', 'standards', 'store', 'for', 'research', 'use', 'only', 'the', 'and', 'with']);
+
+/** Whether words read share a word that tells products apart with this run's bottles' names ("BCA"). */
+export function ofThisRun(text: string, targets: LabelTarget[]): boolean {
+  const words = (s: string) => plain(s.normalize('NFKC')).split(' ').filter(w => w.length >= 3 && !LABEL_GENERIC.has(w));
+  const theirs = new Set(targets.flatMap(t => [t.name, ...t.labels].flatMap(words)));
+  return words(text).some(w => theirs.has(w));
+}
+
+/** The components words name: by a name whole, else by what shows of one, when that fits one alone. */
+function wordsName(text: string, targets: LabelTarget[]): LabelTarget[] {
+  const named = namedBy(text, targets);
+  if (named.length) return named;
+  const partly = partlyNamedBy(text, targets);
+  return partly.length === 1 ? partly : [];
+}
+
+/**
+ * Muse Spark's reading of `count` crops (or bottles, read from several crops each: `views`) → ReadLabels, each match
+ * checked against the words read. What the label says wins over what the model picked; a pick the words don't back is
+ * a guess. Where the evidence disagrees (the words name one bottle and the model picked another, the words name two,
+ * or another of its pictures shows another's name) it is a mismatch, every bottle named a candidate, for the user to
+ * settle: never one of them made to fit.
+ */
+export function parseLabels(content: unknown, targets: LabelTarget[], count: number, views?: number[]): ReadLabels {
   let wire: z.infer<typeof LabelsWire>;
   try {
     wire = LabelsWire.parse(JSON.parse(String(content)));
@@ -575,30 +631,45 @@ export function parseLabels(content: unknown, targets: LabelTarget[], count: num
     throw new UpstreamError('Muse Spark answered about the labels in a shape Chapp does not know');
   }
   const byCrop = (i: number) => wire.items.find(it => it.crop === i + 1) ?? (wire.items.every(it => it.crop === undefined) ? wire.items[i] : undefined);
-  const labels = Array.from({ length: count }, (_, i): ReadLabels['labels'][number] => {
+  const labels = Array.from({ length: count }, (_, i): ReadLabel => {
+    const of = views?.[i] ?? 1;
     const item = byCrop(i);
-    if (!item) return { text: '', looks: 'bottle', componentId: null, match: 'none' };
+    if (!item) return { text: '', volume: '', looks: 'bottle', componentId: null, match: 'none', confidence: 0, views: { read: 0, of } };
     const text = item.name.replace(/\s+/g, ' ').trim();
+    const volume = item.volume.replace(/\s+/g, ' ').trim();
+    const seen = Math.max(0, Math.min(of, Math.round(item.seen ?? (text ? 1 : 0)), text ? of : 0));
     // Not a bottle at all: nothing to match, nothing to ask about.
-    if (!item.bottle) return { text, looks: looksOf(item.looks), componentId: null, match: 'other', bottle: false };
+    if (!item.bottle) return { text, volume, looks: looksOf(item.looks), componentId: null, match: 'other', bottle: false, confidence: 0, views: { read: seen, of } };
     const claimed = targets.find(t => t.id === item.component);
     const guessed = targets.find(t => t.id === item.guess);
     const named = text ? namedBy(text, targets) : [];
     // A label cut off by the photo: read when what shows fits one bottle of this run alone and the model picked it.
     const partly = !named.length && text ? partlyNamedBy(text, targets) : [];
     // …or when its volume is one bottle of this run's alone, the words read that bottle's too.
-    const sized = !named.length && text ? volumeNames(item.volume, text, targets) : [];
+    const sized = !named.length && text ? volumeNames(volume, text, targets) : [];
     const picked = claimed ?? guessed;
     let componentId: string | null = null;
     let match: LabelMatch = 'none';
-    // What the label says wins over what the model picked; a pick the words don't back is a guess.
-    if (named.length === 1) [componentId, match] = [named[0].id, 'read'];
-    else if (claimed && named.includes(claimed)) [componentId, match] = [claimed.id, 'read'];
+    let whole = false;
+    if (named.length === 1) [componentId, match, whole] = [named[0].id, 'read', true];
+    else if (claimed && named.includes(claimed)) [componentId, match, whole] = [claimed.id, 'read', true];
     else if (picked && partly.length === 1 && partly[0] === picked) [componentId, match] = [picked.id, 'read'];
     else if (sized.length === 1) [componentId, match] = [sized[0]!.id, 'read'];
     else if (picked) [componentId, match] = [picked.id, 'guess'];
-    else if (text) match = 'other';
-    return { text, looks: looksOf(item.looks), componentId, match };
+    // Words of this kit that say no one bottle ("Pierce BCA Protein Assay"): nobody can tell which; else another product.
+    else if (text) match = ofThisRun(text, targets) ? 'none' : 'other';
+    // What else the evidence names: the model's pick where the words name another, every bottle words naming two name,
+    // and what another of its pictures shows.
+    const also = new Set<string>();
+    if (match === 'read' && claimed) also.add(claimed.id);
+    if (named.length > 1) for (const t of named) also.add(t.id);
+    for (const t of item.differs.trim() ? wordsName(item.differs, targets) : []) also.add(t.id);
+    if (componentId) also.delete(componentId);
+    if (also.size) {
+      const candidates = [...(componentId ? [componentId] : []), ...also];
+      return { text, volume, looks: looksOf(item.looks), componentId: candidates[0]!, match: 'mismatch', candidates, confidence: labelConfidence('mismatch', whole, seen), views: { read: seen, of } };
+    }
+    return { text, volume, looks: looksOf(item.looks), componentId, match, confidence: labelConfidence(match, whole, seen), views: { read: seen, of } };
   });
   return { labels };
 }
@@ -615,7 +686,24 @@ export type VisionOptions = {
   timeouts?: { recognize?: number; segment?: number; labels?: number; whole?: number; cap?: number; track?: number };
   /** Videos bigger than this go through Meta's file store (INLINE_VIDEO_MAX). */
   inlineVideoMax?: number;
+  /** A video made small for SAM before it is sent (videoSmall.ts); null sends it as it is. */
+  smallVideo?: ((video: Video) => Promise<Video | null>) | null;
+  /** How hard Muse Spark thinks about photos (VISION_EFFORT unless set): scripts/kit-vision.ts --effort compares them. */
+  effort?: 'minimal' | 'low' | 'medium' | 'high';
 };
+
+/**
+ * How hard Muse Spark thinks about a kit's photos. On 2026-11-03, minimal read the 8 bottles of the user's BCA video
+ * as low did, in 6.2–7.0 s against 11.4–13.7 s, and the kit on 7 photos the same in 2.7–5.4 s against 4.9–15.5 s; on
+ * the tiniest print (an ampule's) it more often reads only part of a word, which leaves a guess to confirm.
+ */
+export const VISION_EFFORT = 'minimal';
+/**
+ * …but harder about which way a cap points, asked in the background for the step pictures (no one waits on it): on
+ * three of the video's bottles turned four ways, low answered 12 of 12, minimal 11 (one ampule upside down, which
+ * asking it turned over too caught).
+ */
+export const CAP_EFFORT = 'low';
 
 /** The upstream's own error message, short, with the key scrubbed in case it was echoed. */
 function upstreamMessage(text: string, apiKey: string): string {
@@ -631,13 +719,15 @@ function upstreamMessage(text: string, apiKey: string): string {
 
 const dataUrl = (photo: Photo) => `data:${photo.type};base64,${Buffer.from(photo.data).toString('base64')}`;
 
-/** Meta's models behind KitVision. Spark thinks at low effort here: the same answers on the test photos, in half the time. */
+/** Meta's models behind KitVision. Spark thinks at minimal effort here (VISION_EFFORT): the same answers, in half the time. */
 export function createKitVision(options: VisionOptions): KitVision {
   const { apiKey, baseUrl = 'https://api.meta.ai/v1', log = (line: string) => console.log(line) } = options;
   if (!apiKey) throw new Error('Kit photos need MODEL_API_KEY in .env (see .env.example).');
   const fetchFn = options.fetch ?? globalThis.fetch;
   const timeouts = { recognize: 30_000, segment: 20_000, labels: 45_000, whole: 90_000, cap: 20_000, track: 150_000, ...options.timeouts };
   const inlineVideo = options.inlineVideoMax ?? INLINE_VIDEO_MAX;
+  const shrink = options.smallVideo === undefined ? smallVideo : options.smallVideo;
+  const effort = options.effort ?? VISION_EFFORT;
 
   /**
    * One call to the Model API, metered. With `stream`, the reply is asked for as server-sent events, each handed to
@@ -715,10 +805,10 @@ export function createKitVision(options: VisionOptions): KitVision {
     return id;
   }
 
-  const spark = async (what: string, system: string, content: Json[], format: Json, timeoutMs: number) => {
+  const spark = async (what: string, system: string, content: Json[], format: Json, timeoutMs: number, level: string = effort) => {
     const body = await call(what, '/chat/completions', {
       model: VISION_MODEL,
-      reasoning_effort: 'low',
+      reasoning_effort: level,
       messages: [{ role: 'system', content: system }, { role: 'user', content }],
       response_format: format,
       prompt_cache_key: `chapp-${what}`,
@@ -759,7 +849,12 @@ export function createKitVision(options: VisionOptions): KitVision {
       return { bottles };
     },
 
-    async trackBottles(video, live) {
+    async trackBottles(original, live) {
+      // SAM follows the video made small (fewer, smaller frames: a third of the time), else the video as it came.
+      const shrinking = Date.now();
+      const small = shrink ? await shrink(original).catch(() => null) : null;
+      if (small) log(`[meta] small video ${((Date.now() - shrinking) / 1000).toFixed(1)} s · ${(original.data.length / 1e6).toFixed(1)} → ${(small.data.length / 1e6).toFixed(1)} MB`);
+      const video = small ?? original;
       // When each frame starts, read from the video itself before SAM is asked (a few milliseconds).
       const times = await videoFrameTimes(video);
       live?.onVideo?.(times ? { times } : {});
@@ -828,7 +923,7 @@ export function createKitVision(options: VisionOptions): KitVision {
       return {
         frames: times ? Math.max(times.length, last) : counted > 50 ? Math.max(counted, last) : last,
         ...(times ? { times } : {}),
-        picks: framesToRead(seen),
+        picks: framesToRead(seen, MAX_PICKS, VIEWS_PER_BOTTLE, times && times.length > 1 && times.at(-1)! > 0 ? (times.length - 1) / times.at(-1)! : BLUR_FPS),
         seen: seen.filter(sure).map(({ frame, id, box, outline }) => ({ frame, id, box, ...(outline ? { outline } : {}) })),
       };
     },
@@ -865,12 +960,12 @@ export function createKitVision(options: VisionOptions): KitVision {
         crops.forEach((crop, i) => content.push({ type: 'text', text: `Picture ${i + 1}:` }, image(crop)));
       }
       const answer = await spark('read-labels', labelsInstructions(components, !!views?.length), content, labelsFormat(components), timeouts.labels);
-      return parseLabels(answer, components, views?.length || crops.length);
+      return parseLabels(answer, components, views?.length || crops.length, views);
     },
 
     async capSide(photo) {
       const content = [{ type: 'text', text: 'Which way does its cap point?' }, { type: 'image_url', image_url: { url: dataUrl(photo) } }];
-      return parseCap(await spark('cap-side', capInstructions, content, capFormat, timeouts.cap));
+      return parseCap(await spark('cap-side', capInstructions, content, capFormat, timeouts.cap, options.effort ?? CAP_EFFORT));
     },
 
     async wholeBottle(photo) {
@@ -917,10 +1012,11 @@ export function createMockKitVision(): KitVision {
       return {
         labels: Array.from({ length: views?.length || crops.length }, (_, i): ReadLabels['labels'][number] => {
           const t = components[i];
-          if (!t) return { text: '', looks: 'bottle', componentId: null, match: 'none' };
-          if (t.role === 'standard') return { text: '', looks: 'small vial', componentId: t.id, match: 'guess' };
-          if (!t.kit || !t.labels.length) return { text: '', looks: 'tall bottle', componentId: null, match: 'none' };
-          return { text: t.labels[0], looks: 'bottle', componentId: t.id, match: 'read' };
+          const blank = { volume: '', looks: 'bottle', componentId: null, match: 'none' as const, confidence: 0 };
+          if (!t) return { ...blank, text: '' };
+          if (t.role === 'standard') return { ...blank, text: '', looks: 'small vial', componentId: t.id, match: 'guess', confidence: labelConfidence('guess', false, 0) };
+          if (!t.kit || !t.labels.length) return { ...blank, text: '', looks: 'tall bottle' };
+          return { ...blank, text: t.labels[0], componentId: t.id, match: 'read', confidence: labelConfidence('read', true, 1) };
         }),
       };
     },

@@ -7,9 +7,9 @@ import { existsSync } from 'node:fs';
 import { loadProtocol } from '../server/ai/protocols.ts';
 import { labelsInstructions } from '../server/ai/vision.ts';
 import { contentsTarget, contentsTargets, groupLabels, labelTargets, planFound, sameBottles, type Seen } from '../src/screens/kit/found.ts';
-import { cantLook, following, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectOf, takenOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
+import { asksAbout, cantLook, following, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectIs, subjectNeed, subjectOf, takenOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
 import { followable, frameClock, frameTimes, isVideo, VIDEO_FRAMES, videoType } from '../src/screens/kit/photo.ts';
-import { bestKitRead, labelCalls, tellKit } from '../src/screens/kit/analysis.ts';
+import { agreed, bestKitRead, kitVotes, labelCalls, otherKitRead, sameKit, tellAsTaken, tellKit } from '../src/screens/kit/analysis.ts';
 import { useSession } from '../src/state/session.ts';
 import { useRun } from '../src/state/run.ts';
 
@@ -26,7 +26,7 @@ const needs: Need[] = [
 ];
 
 const box = (x: number, width = 0.1, height = 0.3): Box => ({ x, y: 0.5, width, height });
-const label = (match: ReadLabels['labels'][number]['match'], componentId: string | null, looks = 'bottle', text = ''): ReadLabels['labels'][number] => ({ match, componentId, looks, text });
+const label = (match: ReadLabels['labels'][number]['match'], componentId: string | null, looks = 'bottle', text = '', candidates?: string[]): ReadLabels['labels'][number] => ({ match, componentId, looks, text, volume: '', confidence: 0, ...(candidates ? { candidates } : {}) });
 const ids = () => {
   let n = 0;
   return () => `t${n++}`;
@@ -50,13 +50,47 @@ describe('what the models found', () => {
       ['guess', 'b', 1],
     ]);
     expect(groups[1].box).toEqual(shot1[4].box);
-    // Bottles nobody could tell stay apart; labels of other products are left out.
+    // Bottles nobody could tell stay apart; a label of another product is one of them, never made to fit, its words kept.
     const odd = groupLabels([
       { shot: 's1', box: box(0.1), label: label('none', null) },
       { shot: 's1', box: box(0.3), label: label('none', null) },
       { shot: 's1', box: box(0.5), label: label('other', null, 'bottle', 'Coomassie Plus') },
     ]);
-    expect(odd.map(g => g.match)).toEqual(['none', 'none']);
+    expect(odd.map(g => [g.match, g.text, g.other ?? false])).toEqual([['none', '', false], ['none', '', false], ['none', 'Coomassie Plus', true]]);
+    // Labels whose evidence disagrees stay apart, each with its candidates.
+    const torn = groupLabels([
+      { shot: 's1', box: box(0.1), label: label('mismatch', 'b', 'small bottle', 'Reagent B', ['b', 'a']) },
+      { shot: 's1', box: box(0.3), label: label('mismatch', 'b', 'small bottle', 'Reagent B', ['b', 'a']) },
+    ]);
+    expect(torn.map(g => [g.match, g.candidates])).toEqual([['mismatch', ['b', 'a']], ['mismatch', ['b', 'a']]]);
+  });
+
+  it('asks the user to settle a label whose evidence disagrees, among the bottles not matched yet, once', () => {
+    const torn: Seen[] = [
+      { shot: 's1', box: box(0.1, 0.2, 0.4), label: label('mismatch', 'b', 'small bottle', 'Reagent B', ['b', 'a']) },
+      { shot: 's2', box: box(0.1, 0.1, 0.3), label: label('mismatch', 'b', 'small bottle', 'Reagent B', ['b', 'a']) },
+      { shot: 's2', box: box(0.5), label: label('guess', 'b', 'small bottle') },
+    ];
+    const plan = planFound(groupLabels(torn), needs, { picks: {}, things: [] }, ids());
+    // One question for both pictures (the biggest), and no guess at B while it is asked.
+    expect(plan.things.map(t => [t.match, t.component, t.candidates, t.shot])).toEqual([['mismatch', 'b', ['b', 'a'], 's1']]);
+    // Reagent A already read: the question is whether it is B.
+    const read = { shot: 's9', box: box(0), crop: '' };
+    expect(planFound(groupLabels(torn), needs, { picks: { a: read }, things: [] }, ids()).things.map(t => [t.match, t.candidates])).toEqual([['mismatch', ['b']]]);
+    // Both read: nothing to ask.
+    expect(planFound(groupLabels(torn), needs, { picks: { a: read, b: read }, things: [] }, ids()).things).toEqual([]);
+  });
+
+  it('asks about a label of another product only while bottles are left to find, after those nobody could tell', () => {
+    const seen: Seen[] = [
+      { shot: 's1', box: box(0.1, 0.3, 0.6), label: label('other', null, 'tall bottle', 'Coomassie Plus') },
+      { shot: 's1', box: box(0.5, 0.1, 0.2), label: label('none', null, 'small tube') },
+    ];
+    const read = { shot: 's9', box: box(0), crop: '' };
+    // Two bottles left: both asked, in photo order.
+    expect(planFound(groupLabels(seen), needs, { picks: { a: read, b: read }, things: [] }, ids()).things.map(t => [t.looks, t.text])).toEqual([['tall bottle', 'Coomassie Plus'], ['small tube', '']]);
+    // One left: the unread one, though smaller.
+    expect(planFound(groupLabels(seen), needs, { picks: { a: read, b: read, bsa: read }, things: [] }, ids()).things.map(t => t.looks)).toEqual(['small tube']);
   });
 
   it('matches what was read, asks about guesses once each, and names as many unknown bottles as are left', () => {
@@ -122,6 +156,20 @@ describe('the questions and rows', () => {
     expect(subjectOf(needs, { ...s, asking: 'vial' }, false)).toMatchObject({ kind: 'guess', thing: { id: 'vial' } });
   });
 
+  it('asks to settle a label whose evidence disagrees before a guess, naming every bottle it could be', () => {
+    const torn: Thing = { ...thing('torn', 'mismatch', 'b', 'small bottle'), text: 'Reagent B', candidates: ['b', 'a'] };
+    const s = { ...recognizedState, picks: {}, things: [recognizedState.things[0]!, torn] };
+    const subject = subjectOf(needs, s, false)!;
+    expect(subject).toMatchObject({ kind: 'mismatch', thing: { id: 'torn' } });
+    expect(subject.kind === 'mismatch' && subject.needs.map(x => x.id)).toEqual(['b', 'a']);
+    expect([subjectNeed(subject)?.id, subjectIs(subject, 'a'), subjectIs(subject, 'bsa')]).toEqual(['b', true, false]);
+    // Its bottles are being asked about: not offered first, not a row for a bottle nobody could tell.
+    expect(offered(needs, s).map(x => x.id)).toEqual(['dil', 'a', 'b', 'bsa']);
+    expect(asksAbout(torn, 'a')).toBe(true);
+    expect(rowDetail(needs[1], { thing: torn }, n)).toBe('Photo 2 · its label disagrees');
+    expect(recognized(4, 2, 2, 1, 1)).toBe('SAM 3.1 found the bottles in 2 photos. Muse Spark read 2 labels. I’m not sure about 1. 1 label names something not in this kit.');
+  });
+
   it("says what the designs say under each row's name", () => {
     expect(rowDetail(needs[0], { pick: read }, n)).toBe('Kit · photo 1');
     expect(rowDetail(needs[2], { pick: { ...read, shot: 's2', how: 'confirmed' } }, n)).toBe('Kit · photo 2 · you confirmed');
@@ -168,11 +216,33 @@ describe('which kit a video shows', () => {
   const bottle = { found: true, kit: { ...kit, name: 'Coomassie Plus Protein Assay Reagent', catalog: '' }, protocolId: null, query: 'Thermo Scientific Coomassie Plus Protein Assay Reagent' };
   const known = { found: true, kit: { vendor: 'Thermo Scientific', catalog: '23225', name: 'Pierce BCA Protein Assay Kit' }, protocolId: 'pierce-bca' };
 
-  it('is the best reading of its frames: a kit Chapp has, else one read on its box, else on a bottle', () => {
+  it('is the kit most frames vote for, a reading on its box counting twice; its best reading, on the box first', () => {
     expect(bestKitRead([null, bottle, box])).toBe(box);
-    expect(bestKitRead([bottle, box, known])).toBe(known);
+    // One frame read as a kit Chapp has does not outvote the box and a bottle of another.
+    expect(bestKitRead([bottle, box, known])).toBe(box);
+    expect(bestKitRead([known, known, box])).toBe(box);
+    expect(bestKitRead([known, known, bottle])).toBe(known);
     expect(bestKitRead([bottle])).toBe(bottle);
     expect(bestKitRead([null, { found: false }, { found: true, kit, protocolId: null }])).toBeNull();
+    expect(kitVotes([bottle, box, known]).map(v => [v.read, v.votes, v.reads])).toEqual([[box, 3, 2], [known, 1, 1]]);
+  });
+
+  it('tells one kit from another by its protocol, its catalog number, or the words that tell kits apart', () => {
+    expect(sameKit(box, bottle)).toBe(true);
+    expect(sameKit(known, { ...known, kit: { ...known.kit, catalog: '23227' } })).toBe(true);
+    expect(sameKit(box, { ...box, kit: { ...kit, catalog: '23263' } })).toBe(false);
+    expect(sameKit(bottle, { found: true, kit: { vendor: '', catalog: '', name: 'Pierce BCA Protein Assay Reagent A' }, protocolId: null, query: 'x' })).toBe(false);
+    expect(sameKit(known, { found: true, kit: { vendor: '', catalog: '', name: 'Pierce BCA Protein Assay Reagent A' }, protocolId: null, query: 'x' })).toBe(true);
+  });
+
+  it('asks which kit it is only when another is read just as surely', () => {
+    const otherBox = { ...box, kit: { ...kit, catalog: '23263', name: 'Pierce Rapid Gold BCA Kit' }, query: 'Pierce Rapid Gold BCA Kit 23263' };
+    expect(otherKitRead([box, otherBox])).toBe(otherBox);
+    expect(otherKitRead([box, otherBox, box])).toBeNull();
+    // A box against a bottle's label: the box, without asking.
+    expect(otherKitRead([box, known])).toBeNull();
+    expect(otherKitRead([box])).toBeNull();
+    expect([agreed([box, null]), agreed([box, bottle]), agreed([bottle, bottle]), agreed([box, bottle, otherBox])]).toEqual([false, true, false, false]);
   });
 
   it('opens the search for the manual of a kit Chapp does not have, and changes nothing when no frame says', () => {
@@ -199,6 +269,24 @@ describe('which kit a video shows', () => {
     useSession.setState({ exchange: { ask: 'Hi', say: 'Hello' } });
     tellKit([known]);
     expect(useSession.getState().exchange).toEqual({ ask: 'Hi', say: 'Hello' });
+  });
+
+  it('tells which kit a sweep shows while it is recorded, once two of its frames agree', async () => {
+    useRun.setState({ protocolId: null });
+    const answers = [known, null, known];
+    const read = vi.spyOn(api, 'recognizeKit').mockImplementation(async () => answers.shift() as never);
+    const shot = (id: string) => ({ id, src: 'data:image/jpeg;base64,AAAA', width: 1, height: 1, sweep: true });
+    const telling = tellAsTaken();
+    telling.add(shot('sweep-a'));
+    telling.add(shot('sweep-b'));
+    await new Promise(r => setTimeout(r, 0));
+    expect(useRun.getState().protocolId).toBeNull();
+    telling.add(shot('sweep-c'));
+    // Told before the sweep is over: the run's protocol is the kit's.
+    await vi.waitFor(() => expect(useRun.getState().protocolId).toBe('pierce-bca'));
+    expect(await telling.done()).toBe('known');
+    expect(read).toHaveBeenCalledTimes(3);
+    read.mockRestore();
   });
 
   it('reads the labels against what the manual says the kit holds as soon as it says, and makes its protocol the run’s once read', async () => {

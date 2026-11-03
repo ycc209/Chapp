@@ -21,8 +21,16 @@ export type How = 'read' | 'confirmed' | 'picked';
 /** A bottle's picture: which photo, where on it (fractions; every bottle of it when several), and the square cut out. */
 export type Pick = { shot: string; box: Box; crop: string; how?: How; boxes?: Box[] };
 
-/** Something the models found whose label was not read: a guess to confirm, or a bottle to name ("none"). */
-export type Thing = Pick & { id: string; looks: string; text: string; component: string | null; match: 'guess' | 'none' };
+/**
+ * Something the models found whose label was not read, or not for sure: a guess to confirm; a mismatch, its label's
+ * evidence naming more than one bottle (`candidates`, the likeliest first, `component` among them), to settle; or a
+ * bottle to name ("none", `text` the words read on it when they name nothing in the kit).
+ */
+export type Thing = Pick & { id: string; looks: string; text: string; component: string | null; match: 'guess' | 'mismatch' | 'none'; candidates?: string[] };
+
+/** Whether `thing` asks the user to confirm it is the bottle `id` (a guess at it, or a mismatch with it a candidate). */
+export const asksAbout = (thing: { match: Thing['match']; component: string | null; candidates?: string[] }, id: string) =>
+  (thing.match === 'guess' && thing.component === id) || (thing.match === 'mismatch' && (thing.candidates ?? [thing.component]).includes(id));
 
 /** A bottle the run needs, as the kit screens name it. */
 export type Need = { id: string; name: string; kit: boolean; role: string };
@@ -79,7 +87,7 @@ export function rowDetail(need: Need, state: { pick?: Pick; pending?: Pick; skip
     const where = n > 0 ? `${who} · photo ${n}` : `${who} · your photo`;
     return state.pick.how === 'confirmed' ? `${where} · you confirmed` : where;
   }
-  if (state.thing) return `Photo ${shotNumber(state.thing.shot)} · ${state.thing.match === 'guess' ? `maybe the ${need.name}` : 'I can’t tell'}`;
+  if (state.thing) return `Photo ${shotNumber(state.thing.shot)} · ${state.thing.match === 'guess' ? `maybe the ${need.name}` : state.thing.match === 'mismatch' ? 'its label disagrees' : 'I can’t tell'}`;
   if (state.skipped) return `${who} · no photo`;
   return `${who} · not matched yet`;
 }
@@ -117,9 +125,13 @@ export function reading(found: number): string {
   return `${SAM} found ${theBottles(found)}. ${SPARK} is reading ${found === 1 ? 'its label' : 'their labels'}…`;
 }
 
-/** Recognized.dc.html, by who did what: "SAM 3.1 found the bottles in 3 photos. Muse Spark read 2 labels. I’m not sure about 2." */
-export function recognized(found: number, shots: Taken, read: number, unsure: number): string {
-  return `${SAM} found ${theBottles(found)} in ${typeof shots === 'string' ? `your ${shots}` : nPhotos(shots)}.${read ? ` ${SPARK} read ${read} label${read === 1 ? '' : 's'}.` : ''}${unsure ? ` I’m not sure about ${unsure}.` : ''}`;
+/**
+ * Recognized.dc.html, by who did what: "SAM 3.1 found the bottles in 3 photos. Muse Spark read 2 labels. I’m not sure
+ * about 2." Labels read that name nothing in the kit (`others`) are said too, never matched to one of its bottles.
+ */
+export function recognized(found: number, shots: Taken, read: number, unsure: number, others = 0): string {
+  const other = others ? ` ${others === 1 ? '1 label names' : `${others} labels name`} something not in this kit.` : '';
+  return `${SAM} found ${theBottles(found)} in ${typeof shots === 'string' ? `your ${shots}` : nPhotos(shots)}.${read ? ` ${SPARK} read ${read} label${read === 1 ? '' : 's'}.` : ''}${unsure ? ` I’m not sure about ${unsure}.` : ''}${other}`;
 }
 
 /** The models could not look (offline, or they failed): over to the user's taps. */
@@ -194,24 +206,41 @@ export type Subject =
   | { kind: 'pending'; need: Need }
   /** A guess: "Is the small vial the Albumin Standard?" */
   | { kind: 'guess'; thing: Thing; need: Need }
+  /** A label whose evidence disagrees: "Is the small bottle the BCA Reagent B or the BCA Reagent A?" */
+  | { kind: 'mismatch'; thing: Thing; needs: Need[] }
   /** A bottle nobody could tell: "What’s the tall bottle?" */
   | { kind: 'unknown'; thing: Thing }
   /** A bottle still to show by hand: "Where’s the Diluent?" */
   | { kind: 'where'; need: Need };
+
+/** The one bottle a question is about (a mismatch's likeliest); null for a bottle nobody could tell. */
+export function subjectNeed(subject: Subject): Need | null {
+  return subject.kind === 'unknown' ? null : subject.kind === 'mismatch' ? (subject.needs[0] ?? null) : subject.need;
+}
+
+/** Whether a question is about the bottle `id`: its own, or one of a mismatch's. */
+export const subjectIs = (subject: Subject, id: string) => (subject.kind === 'mismatch' ? subject.needs.some(n => n.id === id) : subjectNeed(subject)?.id === id);
 
 type Session = Progress & { pending: (Pick & { component: string }) | null; things: Thing[]; asking: string | null };
 
 /**
  * The question on screen: the square the user just tapped; else what the models found but could not be sure of, the
  * bottles nobody could tell first (Recognized.dc.html asks about the tall bottle, then Kit.dc.html about the small
- * vial), or the one the user chose; else, once the models are done, where the next open bottle is.
+ * vial), then labels whose evidence disagrees, then guesses, or the one the user chose; else, once the models are done,
+ * where the next open bottle is.
  */
 export function subjectOf(needs: Need[], s: Session, looking: boolean): Subject | null {
   const tapped = s.pending && needs.find(n => n.id === s.pending!.component);
   if (tapped) return { kind: 'pending', need: tapped };
   const chosen = s.things.find(t => t.id === s.asking);
-  for (const thing of chosen ? [chosen] : [...s.things.filter(t => t.match === 'none'), ...s.things.filter(t => t.match === 'guess')]) {
+  const order = (['none', 'mismatch', 'guess'] as const).flatMap(m => s.things.filter(t => t.match === m));
+  for (const thing of chosen ? [chosen] : order) {
     if (thing.match === 'none') return { kind: 'unknown', thing };
+    if (thing.match === 'mismatch') {
+      const named = (thing.candidates ?? [thing.component]).flatMap(id => needs.filter(n => n.id === id));
+      if (named.length) return { kind: 'mismatch', thing, needs: named };
+      continue;
+    }
     const need = needs.find(n => n.id === thing.component);
     if (need) return { kind: 'guess', thing, need };
   }
@@ -225,7 +254,7 @@ export function subjectOf(needs: Need[], s: Session, looking: boolean): Subject 
  * guessed), in order, as Recognized.dc.html puts "Tall bottle · I can’t tell" where the Diluent's row is.
  */
 export function slotsOf(needs: Need[], s: Session): Map<string, Thing> {
-  const free = needs.filter(n => !s.picks[n.id] && !s.skipped[n.id] && s.pending?.component !== n.id && !s.things.some(t => t.match === 'guess' && t.component === n.id));
+  const free = needs.filter(n => !s.picks[n.id] && !s.skipped[n.id] && s.pending?.component !== n.id && !s.things.some(t => asksAbout(t, n.id)));
   const unknown = s.things.filter(t => t.match === 'none');
   return new Map(free.slice(0, unknown.length).map((n, i) => [n.id, unknown[i]]));
 }
@@ -233,6 +262,6 @@ export function slotsOf(needs: Need[], s: Session): Map<string, Thing> {
 /** The bottles to offer for a thing nobody could tell: those still open, the ones nobody guessed first (Recognized.dc.html: Diluent, Albumin Standard). */
 export function offered(needs: Need[], s: Session): Need[] {
   const left = open(needs, s);
-  const guessed = (n: Need) => s.things.some(t => t.match === 'guess' && t.component === n.id);
+  const guessed = (n: Need) => s.things.some(t => asksAbout(t, n.id));
   return [...left.filter(n => !guessed(n)), ...left.filter(guessed)];
 }

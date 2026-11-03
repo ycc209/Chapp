@@ -4,7 +4,7 @@ import type { Protocol } from '../../../shared/protocol.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { bottles } from '../protocol/content.ts';
-import { findBottles, followBottles, whichKit } from './analysis.ts';
+import { findBottles, followBottles, tellAsTaken, whichKit } from './analysis.ts';
 import { Camera } from './Camera.tsx';
 import { gotIt, needsOf, recognized, type Pick, type Thing } from './matching.ts';
 import { Match } from './Match.tsx';
@@ -44,6 +44,8 @@ export function KitScreen() {
   const [ready, setReady] = useState(false);
   const navigate = useNavigate();
   const identify = useRef(opened?.from === 'home' && !review);
+  /** A sweep's frames being read for which kit it is, while it is recorded (analysis.ts tellAsTaken). */
+  const sweepKit = useRef<ReturnType<typeof tellAsTaken> | null>(null);
 
   // A review fills the session with samples; a real visit drops a review's samples first.
   useEffect(() => {
@@ -83,6 +85,11 @@ export function KitScreen() {
       const kit = useKit.getState();
       if (kit.sample) kit.clear();
     };
+    // A sweep's first frames say which kit it is while it is still recorded, once two agree.
+    const sweepFrame = (shot: Shot) => {
+      if (!identify.current) return;
+      (sweepKit.current ??= tellAsTaken()).add(shot);
+    };
     return (
       <Camera
         shots={shots}
@@ -93,9 +100,15 @@ export function KitScreen() {
         }}
         onFootage={footage => {
           fresh();
-          identifyBy(footage.frames[0]);
+          const telling = sweepKit.current;
+          sweepKit.current = null;
+          if (telling && identify.current) {
+            identify.current = false;
+            void telling.done().then(told => told === 'search' && navigate('/protocol'));
+          } else identifyBy(footage.frames[0]);
           void followBottles(footage);
         }}
+        onSweepFrame={sweepFrame}
         onVideo={video => {
           fresh();
           setView({ watch: video, identify: identify.current });

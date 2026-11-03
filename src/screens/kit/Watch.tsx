@@ -10,7 +10,7 @@ import { useRun } from '../../state/run.ts';
 import { bottles, splitName } from '../protocol/content.ts';
 import { PlayIcon } from '../protocol/icons.tsx';
 import { ModelTag } from './ModelTag.tsx';
-import { bestKitRead, followBottles, KIT_READS, kitReads, photoData, readInBackground, readKitOf, settles, startFollowing, tellKit, type KitTold } from './analysis.ts';
+import { agreed, bestKitRead, followBottles, KIT_READS, kitReads, otherKitRead, photoData, readInBackground, readKitOf, startFollowing, tellKit, type KitTold } from './analysis.ts';
 import { gotIt } from './matching.ts';
 import { analysisSrc, cropAt, followable, frameAt, frameClock, frameTimes, frameToShot, parkVideo, type Shot } from './photo.ts';
 import { colourOf, foundBottles, kitProgress, labelGroups, trackMatches, type FoundBottle, type Model } from './progress.ts';
@@ -69,7 +69,7 @@ type Fit = { left: number; top: number; width: number; height: number };
  * The kit as read on a frame of the video, for the card over the video: the frame, the kit, and where it was read;
  * `from`, how far the middle of the video is from the card's place, which it arrives from.
  */
-type Card = { src: string; name: string; catalog: string; on: string | null; from: { x: number; y: number } };
+type Card = { src: string; name: string; catalog: string; on: string | null; from: { x: number; y: number }; other?: string };
 /** Where the video's picture lands inside its box (object-contain), in px of the box, and the frame on screen. */
 type View = { at: number; left: number; top: number; width: number; height: number };
 
@@ -167,6 +167,8 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
   /** SAM is following the bottles through the video and has not come back yet. */
   const [scanning, setScanning] = useState(false);
   const skip = useRef<() => void>(() => {});
+  /** The other kit the frames were read as just as surely (Card's `other`), told instead when the user taps it. */
+  const toOther = useRef<() => void>(() => {});
   const player = useRef<HTMLVideoElement | null>(null);
   const done = useRef(onEnd);
   done.current = onEnd;
@@ -242,6 +244,8 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
     const frames: Shot[] = [];
     let times: number[] = [];
     const reads: Promise<RecognizedKit | null>[] = [];
+    /** What each of those said, as it comes in. */
+    const heard: (RecognizedKit | null)[] = [];
     let decided: Promise<KitTold> | null = null;
     let told: KitTold | null = null;
     let asked: Promise<TrackedBottles> | undefined;
@@ -331,7 +335,7 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
         if (finishing) void seekWanted();
       });
 
-    /** Which kit: told as soon as a frame says it is one Chapp has, else once every frame read says. */
+    /** Which kit: told as soon as two frames agree on it (analysis.ts agreed), else once every frame read says. */
     const decide = () => {
       if (decided || !identify) return;
       if (!reads.length) {
@@ -346,12 +350,28 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
         told = tellKit(all);
         setKind(told);
         const best = bestKitRead(all);
+        // Another kit read just as surely: the card asks which (the user's tap tells that one instead).
+        const other = otherKitRead(all);
+        const cardOf = (r: RecognizedKit, from: Card['from'], alt?: RecognizedKit | null): Card => ({
+          src: (frames[all.indexOf(r)] ?? frames[0])!.src,
+          name: r.kit!.name || r.kit!.catalog,
+          catalog: r.kit!.catalog,
+          on: r.packaging ?? null,
+          from,
+          ...(alt?.kit ? { other: alt.kit.name || alt.kit.catalog } : {}),
+        });
         if (best?.kit) {
-          const i = all.indexOf(best);
           // The card (about 260 px wide, 60 tall, at 14, 66) comes from the middle of the picture.
           const b = box.current?.getBoundingClientRect();
           const from = b ? { x: b.width / 2 - (14 + Math.min(260, b.width - 28) / 2), y: b.height / 2 - 96 } : { x: 0, y: 0 };
-          setCard({ src: (frames[i] ?? frames[0])!.src, name: best.kit.name || best.kit.catalog, catalog: best.kit.catalog, on: best.packaging ?? null, from });
+          setCard(cardOf(best, from, other));
+          toOther.current = () => {
+            if (!other || left) return;
+            told = tellKit([other]);
+            setKind(told);
+            setCard(cardOf(other, { x: 0, y: 0 }));
+            if (background && told !== 'none') readInBackground();
+          };
         }
         // The bottles are read against the kit the video shows, never another.
         if (background && told !== 'none') readInBackground();
@@ -366,9 +386,13 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
         frames.push(shot);
         if (identify && !decided && reads.length < KIT_READS) {
           const read = readKitOf(shot);
-          reads.push(read);
-          // A frame read on the kit's box or bag (or a kit Chapp has) settles it now, and its manual's search starts.
-          void read.then(r => settles(r) && decide());
+          const at = reads.push(read) - 1;
+          // Two frames that agree on the kit (on its box or bag, or a kit Chapp has) settle it now, and its manual's
+          // search starts.
+          void read.then(r => {
+            heard[at] = r;
+            if (agreed(heard)) decide();
+          });
           if (reads.length === KIT_READS) decide();
         }
       }
@@ -870,7 +894,7 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
         return box !== undefined && [t.box, ...(t.boxes ?? [])].some(b => sameBox(b, box));
       })
     );
-  const guess = !readAs && thing?.match === 'guess' ? (thing.component ?? undefined) : undefined;
+  const guess = !readAs && (thing?.match === 'guess' || thing?.match === 'mismatch') ? (thing.component ?? undefined) : undefined;
   const first = readAs ?? guess;
   const choices = [
     ...components.filter(c => c.id === first),
@@ -1094,6 +1118,15 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
                       {card.on ? `Read on the ${card.on}` : 'Read on a bottle’s label'}
                       {card.catalog && card.catalog !== card.name ? ` · ${card.catalog}` : ''}
                     </span>
+                    {card.other && (
+                      <button
+                        type="button"
+                        onClick={() => toOther.current()}
+                        className="mt-1.5 self-start truncate rounded-full bg-white px-3 py-1 text-[13px] leading-[18px] font-semibold text-ink outline-none focus-visible:ring-2 focus-visible:ring-white"
+                      >
+                        Or the {card.other}?
+                      </button>
+                    )}
                   </span>
                 </div>
               )}
@@ -1233,7 +1266,13 @@ export function Watch({ video, identify, background, onEnd }: WatchProps) {
             {(first || thing?.text) && (
               <p className="m-0 mt-1.5 flex flex-wrap items-center gap-1.5 text-[13px] leading-[18px] font-medium text-white/70">
                 <ModelTag dark>Muse Spark</ModelTag>
-                {readAs ? `read it as the ${nameOf(readAs)}` : guess ? `thinks it may be the ${nameOf(guess)}` : `read “${thing!.text}” on it`}
+                {readAs ?
+                  `read it as the ${nameOf(readAs)}`
+                : thing?.match === 'mismatch' && (thing.candidates?.length ?? 0) > 1 ?
+                  `isn’t sure: the ${thing.candidates!.map(nameOf).filter(Boolean).join(' or the ')}`
+                : guess ?
+                  `thinks it may be the ${nameOf(guess)}`
+                : `read “${thing!.text}” on it`}
               </p>
             )}
             <div className="mt-3.5 flex flex-wrap gap-2">
