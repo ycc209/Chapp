@@ -1,8 +1,25 @@
 // Pieces of the bottom bar's look (Main.dc.html) that the home screen's own controls share with it.
 
-/** The bar's wash: a blue-teal glow rising from the bottom edge into white. */
-export const BAR_BACKGROUND =
-  'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
+/** The bar's glow: blue and teal rising from the bottom edge. */
+const GLOW = 'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%)';
+
+/**
+ * The bar's wash: the glow over white, so nothing on the page shows through behind the bar's buttons as it scrolls
+ * under. BAR_FADE fades the page out just above it.
+ */
+export const BAR_BACKGROUND = `${GLOW}, #fff`;
+
+/**
+ * Above the bar that paints its own wash: the page fading into the bar's white, short enough to clear what a screen
+ * keeps just above the bar (a run's Back, Skip and Next).
+ */
+export const BAR_FADE = 'pointer-events-none absolute inset-x-0 bottom-full h-4 bg-linear-to-b from-white/0 to-white';
+
+/**
+ * A screen's own wash under the bar and the pills over it (Protocol, Plan, Results, Chat), from the top of its 28 px
+ * padding: the page fades out there, then white with the bar's glow.
+ */
+export const SCREEN_WASH = `${GLOW}, linear-gradient(rgba(255, 255, 255, 0), #fff 28px)`;
 
 /** A 44 px round button of frosted glass: +, the keyboard, settings. */
 export const GLASS_BUTTON =

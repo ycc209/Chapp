@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { cn } from '../../lib/cn.ts';
-import { BAR_BACKGROUND, GLASS_BUTTON, GLASS_FIELD } from './bar.ts';
+import { BAR_BACKGROUND, BAR_FADE, GLASS_BUTTON, GLASS_FIELD } from './bar.ts';
 import { CloseIcon, PlusIcon, SendIcon } from './icons.tsx';
 
 type TypingBarProps = {
@@ -11,13 +11,15 @@ type TypingBarProps = {
   onSend: (text: string) => void;
   /** Back to Tap to speak. */
   onClose: () => void;
+  /** Paints the bar's wash (default); off where the screen paints one under the bar and its pills (BottomBar's `wash`). */
+  wash?: boolean;
 };
 
 /**
  * The bottom bar while typing (no artboard): the same bar, with a message box in place of Tap to speak and a close
  * button in place of the keyboard. Enter or the arrow sends; Escape or × goes back to speaking.
  */
-export function TypingBar({ plusOpen, plusRef, onPlus, onSend, onClose }: TypingBarProps) {
+export function TypingBar({ plusOpen, plusRef, onPlus, onSend, onClose, wash = true }: TypingBarProps) {
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const ready = text.trim().length > 0;
@@ -43,8 +45,9 @@ export function TypingBar({ plusOpen, plusRef, onPlus, onSend, onClose }: Typing
       }}
       // Bleeds out of the screen's content padding like the voice bar (20 px at the sides, the bottom inset below).
       className="relative -mx-5 -mt-2 mb-[calc(-1*var(--screen-bottom))] grid grid-cols-[44px_minmax(0,1fr)_44px] grid-rows-[64px] items-center gap-2.5 px-5 pt-2 pb-[var(--screen-bottom)]"
-      style={{ background: BAR_BACKGROUND }}
+      style={{ background: wash ? BAR_BACKGROUND : undefined }}
     >
+      {wash && <span aria-hidden="true" className={BAR_FADE} />}
       <button
         ref={plusRef}
         type="button"

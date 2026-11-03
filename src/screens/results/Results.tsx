@@ -14,6 +14,7 @@ import { speak } from '../../voice/speak.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { PlusMenu } from '../home/PlusMenu.tsx';
 import { TypingBar } from '../home/TypingBar.tsx';
+import { SCREEN_WASH } from '../home/bar.ts';
 import { useConverse } from '../home/useConverse.ts';
 import { shortName } from '../protocol/content.ts';
 import { useFace } from '../share/parts.tsx';
@@ -43,9 +44,6 @@ import {
 } from './analysis.ts';
 import { Pager } from './Pager.tsx';
 
-// The bar's wash and the pills over it, as on Results-Swipe.dc.html (and Overview).
-const BAR_WASH =
-  'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
 const PILL = 'flex min-h-10 cursor-pointer items-center rounded-[20px] px-[18px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const WHITE_PILL = cn(PILL, 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]');
 const INK_PILL = cn(PILL, 'gap-[7px] bg-ink text-white');
@@ -378,7 +376,7 @@ export function ResultsScreen() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: SCREEN_WASH }}>
         {voice !== 'talking' && protocol && (
           <div aria-label="Next" className="pointer-events-none relative flex shrink-0 justify-center gap-2 px-5 pt-2 [&>*]:pointer-events-auto">
             {analysis ? (
@@ -411,6 +409,7 @@ export function ResultsScreen() {
         <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
           {typing ? (
             <TypingBar
+              wash={false}
               plusOpen={plus}
               plusRef={plusRef}
               onPlus={() => setPlus(o => !o)}

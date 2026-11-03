@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 
 import { cn } from '../../lib/cn.ts';
 import { useSession } from '../../state/session.ts';
 import { primeSpeech } from '../../voice/speak.ts';
+import { BAR_BACKGROUND, BAR_FADE } from '../../screens/home/bar.ts';
 import { useVoice } from '../../voice/useVoice.ts';
 import { ListenWave, type GlowSize } from './ListenWave.tsx';
 import { Waveform } from './Waveform.tsx';
@@ -39,12 +40,11 @@ export const CANCEL_PX = 64;
 /** How far the wave and the hint rise as the press slides up to cancel. */
 const RISE_PX = 18;
 
-// Gradients from the design, Main and Listening.
-/** Idle: a soft blue and teal wash at the bottom edge, fading into white. */
-const IDLE_BG =
-  'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
-/** Listening, talking and holding: the blue glow rises behind the bar instead (ListenWave), over plain white. */
-const UNDER_WAVE = 'linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.9) 62%)';
+/**
+ * Listening, talking and holding: the blue glow rises behind the bar instead (ListenWave), over plain white. Idle, the
+ * bar's own wash (BAR_BACKGROUND). Both hide the page scrolling under the bar; BAR_FADE fades it out above.
+ */
+const UNDER_WAVE = '#fff';
 
 /**
  * The design's margin -8px -20px -34px and padding 8px 20px 34px: the screen pads its content 20 px at the sides and
@@ -141,6 +141,7 @@ export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTal
   if (voice === 'talking') {
     return (
       <div className={cn('relative grid grid-cols-3 items-center', BAR)} style={{ background: UNDER_WAVE }}>
+        {wash && <span aria-hidden="true" className={BAR_FADE} />}
         <ListenWave size="small" />
         <span />
         <button
@@ -175,8 +176,9 @@ export function BottomBar({ onPlus, onKeyboard, onUtterance, wash = true, tapTal
   return (
     <div
       className={cn('relative grid grid-cols-3 items-center', BAR)}
-      style={{ background: glow !== 'off' ? UNDER_WAVE : wash ? IDLE_BG : undefined, transition: 'background 0.2s' }}
+      style={{ background: glow !== 'off' ? UNDER_WAVE : wash ? BAR_BACKGROUND : undefined, transition: 'background 0.2s' }}
     >
+      {wash && <span aria-hidden="true" className={BAR_FADE} />}
       <ListenWave size={glow} caution={holding && cancelling && !sending} />
       {bubble && <HoldBubble heard={heard} interim={interim} cancelling={cancelling && !sending} sending={sending} />}
       <button type="button" aria-label="Camera, QR code or upload" onClick={onPlus} className={cn(ROUND, 'justify-self-start')}>

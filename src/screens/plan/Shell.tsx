@@ -14,12 +14,10 @@ import { useSession } from '../../state/session.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { PlusMenu } from '../home/PlusMenu.tsx';
 import { TypingBar } from '../home/TypingBar.tsx';
+import { SCREEN_WASH } from '../home/bar.ts';
 import type { Turn } from '../home/useConverse.ts';
 import { PlayIcon } from '../protocol/icons.tsx';
 
-// The bar's wash (Plan.dc.html, Run-Choose.dc.html): the bar and the Next pills float over the page as it scrolls under.
-const BAR_WASH =
-  'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
 export const PILL = 'flex min-h-10 items-center rounded-[20px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
 export const WHITE_PILL = 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
 
@@ -54,7 +52,7 @@ export function Shell({ subtitle, next, onUtterance, scroller, className, childr
         {children}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: SCREEN_WASH }}>
         {voice !== 'talking' && (
           <div aria-label="Next" className="pointer-events-none relative flex shrink-0 justify-center gap-2 px-5 pt-2 [&>*]:pointer-events-auto">
             {next}
@@ -63,6 +61,7 @@ export function Shell({ subtitle, next, onUtterance, scroller, className, childr
         <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
           {typing ? (
             <TypingBar
+              wash={false}
               plusOpen={plus}
               plusRef={plusRef}
               onPlus={() => setPlus(o => !o)}

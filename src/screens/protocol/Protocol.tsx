@@ -27,6 +27,7 @@ import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { PlusMenu } from '../home/PlusMenu.tsx';
 import { Sidebar } from '../home/Sidebar.tsx';
 import { TypingBar } from '../home/TypingBar.tsx';
+import { SCREEN_WASH } from '../home/bar.ts';
 import { converseContext, useConverse } from '../home/useConverse.ts';
 import { claimCover } from '../kit/cover.ts';
 import { samplePhotos } from '../kit/sample.ts';
@@ -40,9 +41,6 @@ import { BookmarkIcon, CheckIcon, DocumentIcon, PlayIcon } from './icons.tsx';
 import { useFinding, wasShown, type Stage } from './useFinding.ts';
 import { useImporting } from './useImporting.ts';
 
-// The bar's wash (Overview.dc.html): the bar and the Plan / Start pills float over the page as it scrolls under.
-const BAR_WASH =
-  'radial-gradient(56% 64% at 50% 100%, rgba(121, 185, 243, 0.3) 0%, rgba(111, 211, 198, 0.1) 55%, rgba(255, 255, 255, 0) 80%), linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.86) 38%, rgba(255, 255, 255, 0.94))';
 const PILL = 'flex min-h-9 items-center rounded-[18px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const WHITE_PILL = 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]';
 // Where Protocol-Kit.dc.html draws the top of "In the kit", and the content's top padding there.
@@ -361,10 +359,11 @@ function CurrentProtocolScreen() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: SCREEN_WASH }}>
         <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
           {typing ? (
             <TypingBar
+              wash={false}
               plusOpen={plus}
               plusRef={plusRef}
               onPlus={() => setPlus(o => !o)}
@@ -537,9 +536,9 @@ function ProtocolPreviewScreen({ id }: { id: string }) {
           </div>}
         </div>
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: BAR_WASH }}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] flex flex-col pt-7" style={{ background: SCREEN_WASH }}>
         <div className="pointer-events-auto px-5 pt-2 pb-[var(--screen-bottom)]">
-          {typing ? <TypingBar plusOpen={plus} plusRef={plusRef} onPlus={() => setPlus(value => !value)} onSend={send} onClose={() => { setTyping(false); setPlus(false); }} /> : <BottomBar wash={false} onPlus={() => setPlus(value => !value)} onKeyboard={() => setTyping(true)} onUtterance={send} />}
+          {typing ? <TypingBar wash={false} plusOpen={plus} plusRef={plusRef} onPlus={() => setPlus(value => !value)} onSend={send} onClose={() => { setTyping(false); setPlus(false); }} /> : <BottomBar wash={false} onPlus={() => setPlus(value => !value)} onKeyboard={() => setTyping(true)} onUtterance={send} />}
         </div>
       </div>
       <PlusMenu open={plus} onClose={() => setPlus(false)} coverPlus={!typing} plusRef={plusRef} />
