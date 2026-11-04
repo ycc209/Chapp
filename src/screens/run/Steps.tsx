@@ -2,7 +2,7 @@ import { ReplyText, ReplySources } from '../../components/chapp/ReplyText.tsx';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Confirm } from '../../components/chapp/Confirm.tsx';
-import { AmountCard, DoneAt, DotLabel, MarkChips, NumberedList, PlateMap, ReagentParts, SampleDataTag, StepList, Timer, VialRack, amountText, lengthText, stepDetail, type BenchStep, type StepItem, standardsOf } from '../../components/lab/index.ts';
+import { AmountCard, DoneAt, DotLabel, MarkChips, NumberedList, PlateMap, ReagentParts, SampleDataTag, StandardsTable, StepList, Timer, amountText, lengthText, stepDetail, type BenchStep, type StepItem, standardsOf } from '../../components/lab/index.ts';
 import { cn } from '../../lib/cn.ts';
 import { ERROR_LINE } from '../home/HomeCenter.tsx';
 import { splitName } from '../protocol/content.ts';
@@ -87,7 +87,10 @@ export const nextPhrase = (s: BenchStep | undefined) => (!s ? '' : s.stage === '
 
 // ─── 1 Standards ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Run-Standards: Chapp says the vial to make; the rack ticks vial by vial (tap one, or say "C is OK"). */
+/**
+ * Run-Standards: Chapp says the vial to make; under it the dilution table gloves on shows too (Gloves-Standards), the
+ * vial now the yellow row, ticked as each is made (tap its row, or say "A is ready", "B to E are done").
+ */
 export function StandardsStep({ v }: { v: View }) {
   const { series, ready, steps } = v.bench;
   const next = nextPhrase(steps[v.at + 1]);
@@ -115,11 +118,11 @@ export function StandardsStep({ v }: { v: View }) {
           done. Next is <B>{line.vial.id}</B>: <B>{line.say[0]}</B> and <B>{line.say[1]}</B>.
         </Answer>
       )}
-      <VialRack
-        unit={series.unit} vials={series.vials}
-        done={ready ? undefined : v.done}
+      <StandardsTable
+        unit={series.unit}
+        vials={series.vials}
+        done={ready ? Object.fromEntries(series.vials.map(x => [x.id, true])) : v.done}
         onVial={ready ? undefined : v.tickVial}
-        ready={ready ? { need: series.need } : undefined}
         className="shrink-0"
       />
       <Bottles v={v} stage="standards" className="mt-7" />
