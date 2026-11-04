@@ -80,7 +80,11 @@ export function GlovesMix({ v }: { v: View }) {
   );
 }
 
-/** Gloves-Load: the tube now, where it goes in big type, and the plate filling up. */
+/**
+ * Gloves-Load: the tube now, where it goes and how much in big type, and the plate filling up. The volume has a line
+ * of its own, the width of the screen, so it reads from arm's length like the tube and its wells (2026-11-04: as the
+ * small line over them it was missed).
+ */
 export function GlovesLoad({ v }: { v: View }) {
   const { plate, load } = v.bench;
   const k = currentTube(plate, v.done);
@@ -91,7 +95,7 @@ export function GlovesLoad({ v }: { v: View }) {
         {t ? (
           <div className="flex flex-col px-1">
             <Over>
-              Tube {k + 1} of {plate.tubes.length} · {load} µL in each
+              Tube {k + 1} of {plate.tubes.length}
             </Over>
             <BenchLine size="lg">{t.name}</BenchLine>
             <BenchLine size="xl" className="mt-0.5">
@@ -102,6 +106,11 @@ export function GlovesLoad({ v }: { v: View }) {
           <BenchLine size="lg" className="px-1">All {plate.wells} wells are loaded.</BenchLine>
         )}
       </Beside>
+      {t && (
+        <BenchLine size="lg" className="mt-2 px-1">
+          {load}&nbsp;µL <span className="font-semibold text-text">in each well</span>
+        </BenchLine>
+      )}
       <PlateMap plan={plate} now={k} dense aria-label={t ? `${t.name} goes into ${t.wells.join(' and ')}` : `All ${plate.wells} wells loaded`} className="mt-[22px]" />
     </div>
   );
