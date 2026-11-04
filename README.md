@@ -7,7 +7,22 @@ and walks you through the run with the right bottle, the right volume and the ri
 The name is *chaperone* + *app*. Molecular chaperones such as heat shock proteins help other proteins fold and stay
 stable under stress without doing their work for them; Chapp does the same for the person at the bench.
 
-**[▶ Demo video](#)** · **[Try it](#)**
+Chapp is one of them. Its body is Hsp16.5, the small heat shock protein of *Methanococcus jannaschii*, a
+hyperthermophilic archaeon from deep-sea hydrothermal vents, as its crystal structure has it
+([PDB 1SHS](https://www.rcsb.org/structure/1SHS); Kim, Kim & Kim, *Nature* 1998,
+[doi:10.1038/29106](https://doi.org/10.1038/29106)): 24 identical subunits closed into a hollow ball 12 nm across,
+with eight triangular and six square windows. Each subunit is 16 round lumps of gel at its own place in the cage,
+rebuilt from the PDB file's atoms by `scripts/chapp-model/body.ts`, and the face goes on top. Every subunit is a whole
+piece of its own, so three quick taps on the big Chapp take it apart into its 24 subunits for a moment (left,
+`scripts/chapp-model/apart.ts`). The app icon is the same cage without the face, seen straight down one of its
+four-fold axes into a square window (right).
+
+<p align="center">
+  <img src="docs/img/chapp-apart.gif" width="180" alt="Chapp coming apart into the 24 subunits of Hsp16.5 and back together">
+  <img src="public/chapp/icon-512.png" width="120" alt="The app icon: the same Hsp16.5 cage without the face, seen down a four-fold axis into a square window">
+</p>
+
+**[▶ Demo video](#)** · **[Run it yourself](#run-it)**
 
 ![Chapp on a phone: the kit's bottles outlined by SAM 3.1 and named, step 4 at the bench, and the standard curve from sample readings](docs/img/screens.png)
 
@@ -18,6 +33,13 @@ Everything in this repository was written during the hackathon, starting October
 - **Oct 29–30**: the conversation, voice, SAM on the kit photos, and the step pictures
 - **Oct 31 – Nov 1**: the conversation as one thread with tools, and the benchmark of eleven models
 - **Nov 2–4**: the kit video, the front assistant and its specialists, bottles made whole, and the demo video
+
+## Why Chapp
+
+AI is moving faster every year, and so are lab automation and robots. Yet most biology experiments are still done by
+people, by hand, and the way they are done has barely changed in decades: a paper protocol on the bench, a pen, a
+notebook. Chapp keeps the person at the bench and takes away the paper. The vendor's manual becomes steps on screen,
+the bottles in them are the ones in front of you, and what you say is written into the run.
 
 ## What it does
 
@@ -149,26 +171,38 @@ Every number, how it was measured, and the rest of Chapp's workings: [How Chapp 
 
 Requires Node.js 22.18 or newer (Chapp's server and scripts are TypeScript that Node runs directly).
 
+**With no key**, Chapp runs on its own, with no network and no cost:
+
 ```sh
 npm install
+npm run build           # type check and production build
+npm start               # the API and the built app on http://127.0.0.1:3003
+npm test                # every check
+```
+
+The server answers from fixed BCA data, and a clean checkout starts with a demo copy of the Pierce BCA protocol
+(`server/demo/pierce-bca.json`): the steps, volumes, concentrations and timers of the hand-made one, without the
+manual's words, each citation naming its page instead. Open the app in a phone-sized window and type "Find the
+protocol for Pierce BCA", then Start; at the Read step, **+ → Use the sample export** opens Results and Share on
+example readings, marked Sample data.
+
+**With a Meta Model API key**, Chapp finds and reads any kit's manual itself:
+
+```sh
 cp .env.example .env    # then put your Meta Model API key in MODEL_API_KEY
 npm start               # API on http://127.0.0.1:3003
 npm run dev             # app on http://localhost:5175 (forwards /api to the server)
 npm run dev:phone       # the same over HTTPS: phones open the microphone and camera only on HTTPS
-npm test                # the checks, with no network and no cost
-npm run build           # type check and production build
 npm run smoke           # one real call to each Meta model
 ```
-
-Without a key, or with `AI_PROVIDER=mock` in `.env`, the server answers from fixed BCA data: no network and no cost.
-That mock, and about a dozen of the test files, read the hand-made BCA protocol (`data/protocols/pierce-bca.json`),
-which quotes the manual and so is not in this repository (below); without it they fail.
 
 ## Data and rights
 
 Vendor manuals are copyrighted. Chapp fetches them from the vendor's own site at runtime and keeps them, their extracted
 text and anything derived from them in `data/`, which is never committed. Every fact in a protocol cites the page it came
-from, and the tests check that every quoted sentence appears word for word on that page.
+from, and the tests check that every quoted sentence appears word for word on that page. The demo copy in
+`server/demo/` keeps none of the manual's sentences (`scripts/demo-protocol.ts` drops them and checks that no others
+are left).
 
 ## Built with
 
@@ -187,11 +221,12 @@ from, and the tests check that every quoted sentence appears word for word on th
   the cards Chapp may draw (`a2ui.ts`) and what a QR code carries (`share.ts`)
 - `server/ai/`: the Meta models (`meta.ts`), the front assistant and its specialists (`agents.ts`,
   `conversation.ts`), the embedding fast path (`router.ts`), the checks against the user's words (`authorize.ts`),
-  the confirmations (`confirm.ts`) and the mock (`mock.ts`)
+  the confirmations (`confirm.ts`) and the mock (`mock.ts`); `server/demo/`: the demo BCA protocol a clean checkout
+  starts with
 - `src/screens/`: one folder per screen; `src/state/`: the run and the changes Chapp makes to it; `src/voice/`:
   listening
 - `src/components/bench/`: the step pictures, and the user's bottles cut out, upright and whole
-- `public/chapp/`: the Chapp character, the 24 subunits of Hsp16.5 (PDB 1SHS) as round lumps of gel in blue, teal and
-  lavender, rebuilt by `scripts/chapp-model/`
+- `public/chapp/`: the Chapp character (`chapp.glb`, its stills and the app icons), rebuilt from PDB 1SHS by
+  `scripts/chapp-model/`
 - `scripts/bench/`: the model benchmarks; `tests/`: the protocol format, the numbers, model replies (recorded, replayed
   without a network), voice, the cards and the screens

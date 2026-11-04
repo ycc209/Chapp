@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ConverseContext, ConverseReply } from '../shared/ai.ts';
 import { createMockProvider, MOCK_TRANSCRIPT } from '../server/ai/mock.ts';
@@ -9,7 +9,10 @@ import { BCA, bcaFacts, localProtocolId, protocolBrief, loadProtocol } from '../
 
 // The mock must behave the same with or without the local BCA document (data/ is git-ignored), so every check here
 // holds on a clean checkout; the ones that need the document's numbers say so.
-const local = existsSync(new URL('../data/protocols/pierce-bca.json', import.meta.url));
+// The hand-made protocol, with the manual's own words in its citations; a clean checkout has only the demo copy
+// without them (server/demo/), on which these checks of quotes do not apply.
+const bcaFile = new URL('../data/protocols/pierce-bca.json', import.meta.url);
+const local = existsSync(bcaFile) && readFileSync(bcaFile, 'utf8').includes('"quote"');
 const mock = createMockProvider();
 const home: ConverseContext = { screen: 'home', protocolId: null };
 const run: ConverseContext = { screen: 'run', protocolId: 'pierce-bca', step: 1, samples: 12, replicates: 2 };
@@ -28,7 +31,7 @@ describe('mock provider: converse', () => {
     const reply = await ask(MOCK_TRANSCRIPT);
     expect(reply.say).toBe('');
     expect(reply.continuationToken).toBeTruthy();
-    expect(requested(reply)).toEqual([{ type: 'navigate', to: '/protocol' }]);
+    expect(requested(reply)).toEqual([{ type: 'openProtocol', protocolId: 'pierce-bca' }, { type: 'navigate', to: '/protocol' }]);
     expect(reply.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title }]);
   });
 
@@ -170,7 +173,7 @@ describe('mock provider: findProtocol and transcribe', () => {
     expect(found.sources).toEqual([{ url: BCA.source.url, title: BCA.source.title }]);
     expect((await mock.findProtocol('BCA kit')).kit?.catalog).toBe('23225');
     // The guide is a protocol on this machine: the app opens that one.
-    expect(found.protocolId).toBe(local ? 'pierce-bca' : undefined);
+    expect(found.protocolId).toBe(existsSync(bcaFile) ? 'pierce-bca' : undefined);
   });
 
   it.skipIf(!local)('knows a found manual as the protocol on this machine, by its document or its kit', () => {

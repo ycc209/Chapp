@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { unitOf } from '../../../shared/calc.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
-import { analysisOf } from '../../../shared/protocol.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { MarkChips, ResultRows, SampleDataTag, SectionHead, StandardCurve, benchSteps, curveLabels } from '../../components/lab/index.ts';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
@@ -137,7 +136,7 @@ export function ResultsScreen() {
   // again for the new wells, so the analysis always reads the plate the plan lays out.
   useEffect(() => {
     if (protocol && plate && from === 'sample' && hasReadings && !sameWells(readings, plate.roles)) {
-      setReadings(sampleReadings(plate.roles, analysisOf(protocol).fit), 'sample');
+      setReadings(sampleReadings(plate.roles), 'sample');
     }
   }, [protocol, plate, from, readings, hasReadings, setReadings]);
 
@@ -158,7 +157,7 @@ export function ResultsScreen() {
 
   const loadSample = () => {
     if (!protocol || !plate) return;
-    setReadings(sampleReadings(plate.roles, analysisOf(protocol).fit), 'sample');
+    setReadings(sampleReadings(plate.roles), 'sample');
     setTalked(false);
     setNote(null);
   };

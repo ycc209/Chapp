@@ -5,11 +5,15 @@ import { chooseProvider } from './ai/provider.ts';
 import { createRouter } from './ai/router.ts';
 import { createLiveVoice } from './live.ts';
 import { meter } from './ai/usage.ts';
+import { seedDemo } from './ai/protocols.ts';
 import { fileURLToPath } from 'node:url';
 
 // The API and the built app. Routes live in app.ts; AI_PROVIDER (mock | meta) picks who answers (server/ai/provider.ts).
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3003);
+
+// A clean checkout starts with the demo BCA protocol (server/demo/), so it runs with no key and no network.
+if (seedDemo()) console.log('No data/protocols/ yet: started it with the demo Pierce BCA protocol (server/demo/).');
 
 // CHAPP_DAILY_USD caps a day's spending on Meta's models (server/ai/usage.ts); today's total survives a restart.
 meter.setCap(Number(process.env.CHAPP_DAILY_USD));

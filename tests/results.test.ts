@@ -32,12 +32,14 @@ const story: RunPlan = { procedure: 'microplate', samples: 12, replicates: 2, st
 
 function analyzed(run: RunPlan) {
   const { plan, roles } = runPlate(bca, run);
-  const readings = sampleReadings(roles, bca.analysis!.fit);
+  // The built-in example, its samples placed on the straight line Results reads them with.
+  const readings = sampleReadings(roles);
   return { plan, roles, readings, a: analyzeRun(bca, roles, readings)! };
 }
 
 // The artboard's own example data and arithmetic (Results-Swipe.dc.html baseVals), to compare row by row.
 const DESIGN: [number | null, number | null][] = [[1240, 3], [860, 5], [1510, 2], [420, 7], [980, 4], [1130, 3], [null, null], [650, 6], [1370, 2], [740, 4], [1050, 3], [590, 8]];
+const designList = () => DESIGN.map(([c, v]) => (c === null ? ['> 2,000', '—'] : [c.toLocaleString('en-US'), `${v} %`]));
 
 describe('the storyboard run with the sample plate', () => {
   const { a, plan } = analyzed(story);
@@ -47,33 +49,28 @@ describe('the storyboard run with the sample plate', () => {
     expect(plan.tubes.find(t => t.name === 'Sample 1')!.wells).toEqual(['B3', 'B4']);
   });
 
-  it('the example readings are the design’s own on the kit’s four-parameter curve (Results-Swipe baseVals)', () => {
+  it('the example readings follow the demo sheet’s BCA curve, which the kit’s four-parameter fit fits too', () => {
     const { roles, readings } = analyzed(story);
     const kit = analyzePlate(roles, readings, bca.analysis!.fit);
     expect(kit.fit.kind).toBe('4pl');
-    expect(r2Text(kit.fit.r2)).toBe('0.998');
-    expect(concentrationList(kit).map(r => [r.value, r.side])).toEqual(
-      DESIGN.map(([c, v]) => (c === null ? ['> 2,000', '—'] : [c.toLocaleString('en-US'), `${v} %`])),
-    );
+    expect(r2Text(kit.fit.r2)).toBe('0.999');
   });
 
   it('page µg/mL: every sample read off the straight regression line, x = (y − intercept) / slope', () => {
     if (a.fit.kind !== 'linear') throw new Error(`expected the straight line, not ${a.fit.kind}`);
     const { slope, intercept } = a.fit;
     for (const s of a.samples.filter(s => s.flag === 'ok')) expect(s.concentration!).toBeCloseTo((s.mean! - intercept) / slope, 9);
-    expect(concentrationList(a).map(r => [r.value, r.side])).toEqual([
-      ['1,350', '2 %'], ['1,030', '4 %'], ['1,530', '1 %'], ['533', '7 %'], ['1,140', '3 %'], ['1,260', '2 %'],
-      ['> 2,000', '—'], ['811', '5 %'], ['1,440', '1 %'], ['908', '3 %'], ['1,200', '2 %'], ['744', '7 %'],
-    ]);
+    // The design's own values and CVs (Results-Swipe baseVals), read back exactly.
+    expect(concentrationList(a).map(r => [r.value, r.side])).toEqual(designList());
     expect(sayText(concentrationSay(a))).toBe('11 of 12 samples are in range. Sample 7 is above the top standard: dilute it 1:5 and run it again.');
     expect(concentrationSay(a)).toContainEqual({ b: '1:5' });
     expect(rerunLabel(a)).toBe('Rerun Sample 7');
     expect(reruns(a)).toEqual([{ ref: '7', dilution: 5 }]);
   });
 
-  it('the curve page: the example plate bends away from a straight line (R² 0.961); the curve tab first', () => {
-    expect(r2Text(a.fit.r2)).toBe('0.961');
-    expect(sayText(curveSay(a))).toBe('The curve fits loosely. Sample 7 sits above the top standard, 2,000 µg/mL. Check the standards’ wells before trusting the numbers.');
+  it('the curve page: the straight line fits the example plate (R² 0.994); the curve tab first', () => {
+    expect(r2Text(a.fit.r2)).toBe('0.994');
+    expect(sayText(curveSay(a))).toBe('The curve fits well. Sample 7 sits above the top standard, 2,000 µg/mL.');
     expect(PAGES).toEqual(['curve', 'conc']);
     expect(tabLabels()).toEqual(['Curve', 'µg/mL']);
     expect(tabLabels('nmol/well')).toEqual(['Curve', 'nmol/well']);
@@ -90,7 +87,7 @@ describe('the analysis follows the plan', () => {
     expect(a.standards.every(s => s.wells.length === 1)).toBe(true);
     expect(a.samples.every(s => s.wells.length === 3)).toBe(true);
     expect(a.range).toEqual({ min: 250, max: 2000 });
-    expect(concentrationList(a).map(r => r.value)).toEqual(['1,370', '1,020', '1,570', '516', '1,140', '1,270', '> 2,000', '799', '1,470', '899', '1,200', '730']);
+    expect(concentrationList(a).map(r => r.value)).toEqual(designList().map(([value]) => value));
     expect(sayText(concentrationSay(a))).toBe('11 of 12 samples are in range. Sample 7 is above the top standard: dilute it 1:5 and run it again.');
   });
 
@@ -110,7 +107,7 @@ describe('the analysis follows the plan', () => {
   it('says it plainly when nothing is out of range, or several are', () => {
     const { a } = analyzed({ ...story, samples: 6 });
     expect(sayText(concentrationSay(a))).toBe('All 6 samples are in range.');
-    expect(sayText(curveSay(a))).toBe('The curve fits loosely. Check the standards’ wells before trusting the numbers.');
+    expect(sayText(curveSay(a))).toBe('The curve fits well.');
     expect(rerunLabel(a)).toBeNull();
     const many = analyzed({ ...story, samples: 19 }).a;
     expect(many.samples.filter(s => s.flag === 'above').map(s => [s.ref, s.dilution])).toEqual([['7', 5], ['19', 5]]);

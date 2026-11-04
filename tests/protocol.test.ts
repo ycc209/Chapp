@@ -7,7 +7,9 @@ import { formatVolume, plateLayout, standardSeries, workingReagent } from '../sh
 // git-ignored). These checks run wherever that local copy exists.
 const file = new URL('../data/protocols/pierce-bca.json', import.meta.url);
 const pages = (n: number) => new URL(`../data/sources/pierce-bca/page-${n}.txt`, import.meta.url);
-const local = existsSync(file);
+// The hand-made protocol, with the manual's own words in its citations; a clean checkout has only the demo copy
+// without them (server/demo/), on which these checks of quotes do not apply.
+const local = existsSync(file) && readFileSync(file, 'utf8').includes('"quote"');
 
 // pdftotext keeps the layout, so a sentence can wrap across lines; compare with runs of spaces collapsed.
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim();

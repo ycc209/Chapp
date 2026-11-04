@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { manualTextBlock, type Adapter, type CallOutcome, type CallRequest, type Manual } from '../core.ts';
 import { claudeSchema } from '../schema.ts';
@@ -8,7 +8,8 @@ import { cleanEnv, parseLine, runCli } from './cli.ts';
 
 type Json = Record<string, any>;
 
-export const CLAUDE_BIN = '/Users/someone/.local/bin/claude';
+/** The Claude Code CLI: CLAUDE_BIN, else where its installer puts it. */
+export const CLAUDE_BIN = process.env.CLAUDE_BIN ?? join(homedir(), '.local/bin/claude');
 
 /** Whether Claude Code can log in from here (its keychain login, or CLAUDE_CODE_OAUTH_TOKEN from .env). */
 export function claudeLoggedIn(bin = CLAUDE_BIN): boolean {

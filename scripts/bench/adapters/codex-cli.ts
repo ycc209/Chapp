@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { manualTextBlock, pageImages, type Adapter, type CallOutcome, type CallRequest, type Manual } from '../core.ts';
 import { codexSchema } from '../schema.ts';
@@ -7,7 +7,8 @@ import { cleanEnv, parseLine, runCli } from './cli.ts';
 
 type Json = Record<string, any>;
 
-export const CODEX_BIN = '/Users/someone/.local/bin/codex';
+/** The Codex CLI: CODEX_BIN, else ~/.local/bin/codex. */
+export const CODEX_BIN = process.env.CODEX_BIN ?? join(homedir(), '.local/bin/codex');
 
 /**
  * OpenAI's models through the Codex CLI on the user's ChatGPT subscription (`codex exec`), one call per run.

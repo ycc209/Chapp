@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 .DS_Store
+# Claude Code's own settings for this machine (dev-server launch configs with local paths).
+.claude/
 # Vendor manuals, extracted text and anything derived from them stay local (see README → Data).
 data/
 # Private planning notes stay local; only the README's details page and its pictures are shared.

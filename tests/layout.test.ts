@@ -6,7 +6,7 @@ import { sampleReadings } from '../shared/fit.ts';
 import { Protocol } from '../shared/protocol.ts';
 import { runSetup, wellRoles, type RunPlan, type StandardsWay } from '../src/components/lab/model.ts';
 import { planFor } from '../src/screens/plan/plan.ts';
-import { runPlate } from '../src/screens/results/analysis.ts';
+import { analyzeRun, r2Text, runPlate } from '../src/screens/results/analysis.ts';
 import { benchFor } from '../src/screens/run/model.ts';
 import { TravelList } from '../src/screens/share/parts.tsx';
 import { buildShare, sharedRunPlan, sharePlate, standardR2, travels } from '../src/screens/share/setup.ts';
@@ -67,12 +67,15 @@ describe('the four screens lay out the same plate', () => {
 });
 
 describe('Share reads the sample plate as Results does', () => {
-  it('says "12 samples, R² 0.998"', () => {
-    const readings = sampleReadings(runSetup(bca, story).roles, bca.analysis!.fit);
+  it('says "12 samples, R² 0.994", the R² the curve page shows', () => {
+    const { roles } = runSetup(bca, story);
+    const readings = sampleReadings(roles);
     const run = { ...story, protocolId: 'pierce-bca', photos: {}, readings };
     const t = travels(buildShare('all', run, bca, { r2: standardR2(bca, run), sampleData: true }), bca);
     const text = renderToStaticMarkup(createElement(TravelList, { travels: t })).replace(/<[^>]+>/g, '');
+    const results = r2Text(analyzeRun(bca, roles, readings)!.fit.r2);
+    expect(results).toBe('0.994');
     expect(text).toContain('The plan: 9 standards ×2, 12 samples ×2');
-    expect(text).toContain('The results: 12 samples, R² 0.998');
+    expect(text).toContain(`The results: 12 samples, R² ${results}`);
   });
 });

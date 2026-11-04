@@ -400,9 +400,10 @@ export function commonConcentration(samples: SampleResult[], final = 100) {
   };
 }
 
-// The built-in example: a blank near 0.1 and a curve 2.1 above it at 2,000 µg/mL, bending like the one drawn in the
-// design (Results-Swipe-Curve.dc.html; a 4PL through its points).
-const EXAMPLE_CURVE = { a: 0, b: 1.07, c: 1520, d: 3.67 };
+// The built-in example: the BCA curve at 562 nm of the plate-reader sheet photographed in the demo
+// (video/scripts/plate-sheet.ts), a blank near 0.1 and the reading rising nearly straight, bending a little at the top
+// (1.74 above the blank at 2,000 µg/mL), so the straight regression line Results reads it with fits it as it fits a
+// real plate. (Until 2026-11-04 it was a four-parameter curve after the design's artboard, which that line fits poorly.)
 const EXAMPLE_BLANK = 0.098;
 /** The example samples, µg/mL, and the CV % of their replicates (Results-Swipe.dc.html). Sample 7 is above the top standard. */
 const EXAMPLE_SAMPLES: [number, number][] = [
@@ -412,7 +413,7 @@ const EXAMPLE_SAMPLES: [number, number][] = [
 const STANDARD_ERROR = [0.026, -0.04, 0.02, -0.031, 0.035, -0.022, 0.029, -0.035, 0.024];
 const STANDARD_SPREAD = 0.012;
 
-const exampleNet = (c: number) => EXAMPLE_CURVE.d + (EXAMPLE_CURVE.a - EXAMPLE_CURVE.d) / (1 + Math.pow(c / EXAMPLE_CURVE.c, EXAMPLE_CURVE.b));
+const exampleNet = (c: number) => 1.12e-3 * c - 1.25e-7 * c * c;
 const round4 = (x: number) => Math.round(x * 10000) / 10000;
 
 /** Replicate offsets spaced evenly from −1 to 1, scaled so their sample standard deviation is 1. */
@@ -427,11 +428,12 @@ function spread(n: number): number[] {
  * Chapp's built-in example readings (absorbance, 4 decimals as plate readers export them, which keeps every number
  * the results pages work out to the Results artboards' own arithmetic) for a plate laid out as `wells`: what the mock
  * plate reader returns, and what every screen showing them must label "Sample data". Deterministic, so the same plan
- * always gives the same plate. The standards scatter 2–4 % around a BCA-shaped curve (R² near 0.998); the samples are
- * then placed on the curve fitted to those standards, so the example reads back as designed: 1,240, 860, 1,510 …
- * µg/mL with their CVs, and Sample 7 above the top standard.
+ * always gives the same plate. The standards scatter 2–4 % around the demo sheet's BCA curve (the straight line's R²
+ * 0.994 on the kit's nine standards, 0.997 on five); the samples are then placed on the straight regression line fitted
+ * to those standards, as Results reads them (or on `plan`'s fit), so the example reads back as designed: 1,240, 860,
+ * 1,510 … µg/mL with their CVs, and Sample 7 above the top standard.
  */
-export function sampleReadings(wells: WellRole[], plan: FitPlan = { preferred: ['4pl', 'best-fit'], avoid: ['linear'] }): Record<string, number> {
+export function sampleReadings(wells: WellRole[], plan: FitPlan = { preferred: [], avoid: [] }): Record<string, number> {
   const out: Record<string, number> = {};
   const standards = group(wells, 'standard');
   let i = 0;

@@ -20,7 +20,10 @@ import { useSession } from '../src/state/session.ts';
 // checkReply fixtures below only protect the legacy replay reader. All provider calls use fake fetch.
 
 const KEY = 'test-key-never-shown';
-const local = existsSync(new URL('../data/protocols/pierce-bca.json', import.meta.url));
+// The hand-made protocol, with the manual's own words in its citations; a clean checkout has only the demo copy
+// without them (server/demo/), on which these checks of quotes do not apply.
+const bcaFile = new URL('../data/protocols/pierce-bca.json', import.meta.url);
+const local = existsSync(bcaFile) && readFileSync(bcaFile, 'utf8').includes('"quote"');
 const bca = local ? loadProtocol('pierce-bca') : null;
 
 /** A fetch that answers each call with the next Response, recording what was asked. */

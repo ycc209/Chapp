@@ -1,0 +1,1121 @@
+{
+  "format": "chapp.protocol/1",
+  "id": "pierce-bca",
+  "title": "Pierce BCA Protein Assay",
+  "summary": "Colorimetric total-protein assay: standards and samples react with a green working reagent and turn purple; read at 562 nm. Working range 20–2,000 µg/mL.",
+  "source": {
+    "title": "Pierce BCA Protein Assay Kit User Guide",
+    "publisher": "Thermo Fisher Scientific",
+    "docId": "MAN0011430",
+    "revision": "D",
+    "date": "2026-06-18",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LSG/manuals/MAN0011430_Pierce_BCA_Protein_Asy_UG.pdf",
+    "sha256": "349774e9e05c3c972ab79369c061c0faff57c215aa2352dd9da5ac4748a51acf",
+    "pages": 5,
+    "fetchedAt": "2026-10-27T08:28:00+08:00"
+  },
+  "kit": {
+    "name": "Pierce BCA Protein Assay Kit",
+    "vendor": "Thermo Scientific",
+    "variants": [
+      {
+        "catalog": "23225",
+        "scale": "500 tubes or 5,000 microplate assays",
+        "contents": [
+          {
+            "component": "reagent-a",
+            "count": 2,
+            "amount": {
+              "value": 500,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "reagent-b",
+            "amount": {
+              "value": 25,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "bsa",
+            "amount": {
+              "value": 10,
+              "unit": "mL"
+            }
+          }
+        ]
+      },
+      {
+        "catalog": "23227",
+        "scale": "250 tubes or 2,500 microplate assays",
+        "contents": [
+          {
+            "component": "reagent-a",
+            "amount": {
+              "value": 500,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "reagent-b",
+            "amount": {
+              "value": 25,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "bsa",
+            "amount": {
+              "value": 10,
+              "unit": "mL"
+            }
+          }
+        ]
+      },
+      {
+        "catalog": "A65453",
+        "scale": "50 tubes or 500 microplate assays",
+        "contents": [
+          {
+            "component": "reagent-a",
+            "amount": {
+              "value": 100,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "reagent-b",
+            "amount": {
+              "value": 2.5,
+              "unit": "mL"
+            }
+          },
+          {
+            "component": "bsa",
+            "amount": {
+              "value": 2,
+              "unit": "mL"
+            }
+          }
+        ]
+      }
+    ],
+    "cite": {
+      "page": 1,
+      "table": "Contents and storage"
+    }
+  },
+  "overview": {
+    "procedure": "microplate",
+    "steps": [
+      "Mix Reagents A and B 50:1 to create Working Reagent",
+      "25 µL sample or standards + 200 µL of Working Reagent",
+      "Incubate for 30 mins. at 37°C",
+      "Read at 562 nm"
+    ],
+    "cite": {
+      "page": 1,
+      "figure": "Fig. 1 Procedure summary (microplate procedure, standard protocol)"
+    }
+  },
+  "components": [
+    {
+      "id": "reagent-a",
+      "name": "BCA Reagent A",
+      "role": "reagent",
+      "suppliedBy": "kit",
+      "storage": {
+        "value": 15,
+        "max": 30,
+        "unit": "°C"
+      },
+      "label": [
+        "BCA Reagent A",
+        "Reagent A"
+      ],
+      "cite": {
+        "page": 1,
+        "table": "Contents and storage"
+      }
+    },
+    {
+      "id": "reagent-b",
+      "name": "BCA Reagent B",
+      "role": "reagent",
+      "suppliedBy": "kit",
+      "storage": {
+        "value": 15,
+        "max": 30,
+        "unit": "°C"
+      },
+      "label": [
+        "BCA Reagent B",
+        "Reagent B"
+      ],
+      "cite": {
+        "page": 1,
+        "table": "Contents and storage"
+      }
+    },
+    {
+      "id": "bsa",
+      "name": "Albumin Standard (BSA)",
+      "role": "standard",
+      "suppliedBy": "kit",
+      "concentration": {
+        "value": 2,
+        "unit": "mg/mL"
+      },
+      "storage": {
+        "value": 15,
+        "max": 30,
+        "unit": "°C"
+      },
+      "label": [
+        "Albumin Standard",
+        "BSA",
+        "Bovine Serum Albumin"
+      ],
+      "notes": [
+        {
+          "kind": "info",
+          "text": "The stock is 2 mg/mL: vial A in the dilution table is undiluted stock at 2,000 µg/mL.",
+          "cite": {
+            "page": 2,
+            "table": "Table 1"
+          }
+        },
+        {
+          "kind": "info",
+          "text": "1 mL of stock makes one full set of standards.",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        }
+      ],
+      "cite": {
+        "page": 1,
+        "table": "Contents and storage"
+      }
+    },
+    {
+      "id": "diluent",
+      "name": "Diluent (same buffer as your samples)",
+      "role": "diluent",
+      "suppliedBy": "user",
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    }
+  ],
+  "equipment": [
+    {
+      "id": "pipette",
+      "name": "Pipette",
+      "icon": "pipette",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "plate",
+      "name": "96-well plate",
+      "icon": "well-plate-96",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "plate-shaker",
+      "name": "Plate shaker",
+      "icon": "plate-shaker",
+      "setting": "30 s",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "incubator",
+      "name": "Incubator",
+      "icon": "incubator",
+      "setting": "37 °C",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "plate-reader",
+      "name": "Plate reader",
+      "icon": "plate-reader",
+      "setting": "562 nm",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "test-tubes",
+      "name": "Test tubes",
+      "icon": "test-tube",
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    },
+    {
+      "id": "water-bath",
+      "name": "Water bath",
+      "icon": "water-bath",
+      "setting": "37 °C or 60 °C",
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    },
+    {
+      "id": "spectrophotometer",
+      "name": "Spectrophotometer and cuvettes",
+      "icon": "spectrophotometer",
+      "setting": "562 nm",
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    }
+  ],
+  "mixes": [
+    {
+      "id": "wr",
+      "name": "Working Reagent",
+      "short": "WR",
+      "parts": [
+        {
+          "component": "reagent-a",
+          "parts": 50
+        },
+        {
+          "component": "reagent-b",
+          "parts": 1
+        }
+      ],
+      "notes": [
+        {
+          "kind": "expected",
+          "text": "It turns cloudy when B goes in, then clears to green as you mix. That is normal.",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "kind": "tip",
+          "text": "Make only as much as this run needs.",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "kind": "info",
+          "text": "Keeps for several days at room temperature in a closed container.",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        }
+      ],
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    }
+  ],
+  "standardCurves": [
+    {
+      "id": "standard",
+      "name": "Standard range",
+      "stock": "bsa",
+      "diluent": "diluent",
+      "range": {
+        "min": 20,
+        "max": 2000,
+        "unit": "µg/mL"
+      },
+      "points": [
+        {
+          "id": "A",
+          "diluent": {
+            "value": 0,
+            "unit": "µL"
+          },
+          "from": "stock",
+          "take": {
+            "value": 300,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 2000,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "B",
+          "diluent": {
+            "value": 125,
+            "unit": "µL"
+          },
+          "from": "stock",
+          "take": {
+            "value": 375,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 1500,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "C",
+          "diluent": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "from": "stock",
+          "take": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 1000,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "D",
+          "diluent": {
+            "value": 175,
+            "unit": "µL"
+          },
+          "from": "B",
+          "take": {
+            "value": 175,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 750,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "E",
+          "diluent": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "from": "C",
+          "take": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 500,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "F",
+          "diluent": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "from": "E",
+          "take": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 250,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "G",
+          "diluent": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "from": "F",
+          "take": {
+            "value": 325,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 125,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "H",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": "G",
+          "take": {
+            "value": 100,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 25,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "I",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": null,
+          "take": {
+            "value": 0,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 0,
+            "unit": "µg/mL"
+          },
+          "blank": true
+        }
+      ],
+      "cite": {
+        "page": 2,
+        "table": "Table 1"
+      }
+    },
+    {
+      "id": "enhanced",
+      "name": "Enhanced range",
+      "stock": "bsa",
+      "diluent": "diluent",
+      "range": {
+        "min": 5,
+        "max": 250,
+        "unit": "µg/mL"
+      },
+      "points": [
+        {
+          "id": "A",
+          "diluent": {
+            "value": 700,
+            "unit": "µL"
+          },
+          "from": "stock",
+          "take": {
+            "value": 100,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 250,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "B",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": "A",
+          "take": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 125,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "C",
+          "diluent": {
+            "value": 450,
+            "unit": "µL"
+          },
+          "from": "B",
+          "take": {
+            "value": 300,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 50,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "D",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": "C",
+          "take": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 25,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "E",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": "D",
+          "take": {
+            "value": 100,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 5,
+            "unit": "µg/mL"
+          }
+        },
+        {
+          "id": "F",
+          "diluent": {
+            "value": 400,
+            "unit": "µL"
+          },
+          "from": null,
+          "take": {
+            "value": 0,
+            "unit": "µL"
+          },
+          "concentration": {
+            "value": 0,
+            "unit": "µg/mL"
+          },
+          "blank": true
+        }
+      ],
+      "cite": {
+        "page": 2,
+        "table": "Table 2"
+      }
+    }
+  ],
+  "procedures": [
+    {
+      "id": "microplate",
+      "name": "Microplate",
+      "format": "microplate",
+      "ratio": "1:8",
+      "sample": {
+        "value": 25,
+        "unit": "µL"
+      },
+      "mixPerSample": {
+        "value": 200,
+        "unit": "µL"
+      },
+      "mix": "wr",
+      "standardCurve": "standard",
+      "range": {
+        "min": 20,
+        "max": 2000,
+        "unit": "µg/mL"
+      },
+      "steps": [
+        {
+          "id": "m-standards",
+          "stage": "standards",
+          "title": "Prepare the BSA standards",
+          "key": "Make BSA standards A–I from the 2 mg/mL stock (Table 1)",
+          "standardCurve": "standard",
+          "equipment": [
+            "pipette"
+          ],
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "m-mix",
+          "stage": "mix",
+          "title": "Prepare the working reagent",
+          "key": "Mix the working reagent: Reagent A + Reagent B, 50 : 1",
+          "mix": "wr",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "m-load",
+          "stage": "load",
+          "title": "Add standards and samples",
+          "key": "25 µL of each standard and sample into the plate",
+          "add": [
+            {
+              "what": "standards-and-samples",
+              "volume": {
+                "value": 25,
+                "unit": "µL"
+              },
+              "per": "well"
+            }
+          ],
+          "equipment": [
+            "pipette",
+            "plate"
+          ],
+          "notes": [
+            {
+              "kind": "tip",
+              "text": "Short on sample? 10 µL works, but the range narrows to 125–2,000 µg/mL.",
+              "cite": {
+                "page": 3,
+                "figure": "page 3"
+              }
+            }
+          ],
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        },
+        {
+          "id": "m-add-wr",
+          "stage": "load",
+          "title": "Add working reagent and mix",
+          "key": "Add 200 µL working reagent to every well, shake 30 s",
+          "add": [
+            {
+              "what": "mix",
+              "ref": "wr",
+              "volume": {
+                "value": 200,
+                "unit": "µL"
+              },
+              "per": "well"
+            }
+          ],
+          "timer": {
+            "label": "Shake",
+            "duration": {
+              "value": 30,
+              "unit": "s"
+            }
+          },
+          "equipment": [
+            "pipette",
+            "plate-shaker"
+          ],
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        },
+        {
+          "id": "m-incubate",
+          "stage": "incubate",
+          "title": "Incubate",
+          "key": "Cover and incubate at 37 °C for 30 min",
+          "timer": {
+            "label": "Incubate",
+            "duration": {
+              "value": 30,
+              "unit": "min"
+            },
+            "temperature": {
+              "value": 37,
+              "unit": "°C"
+            },
+            "covered": true,
+            "alternatives": [
+              {
+                "label": "Stronger signal",
+                "duration": {
+                  "value": 2,
+                  "unit": "h"
+                },
+                "temperature": {
+                  "value": 37,
+                  "unit": "°C"
+                },
+                "cite": {
+                  "page": 3,
+                  "figure": "page 3"
+                }
+              }
+            ]
+          },
+          "equipment": [
+            "incubator"
+          ],
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        },
+        {
+          "id": "m-read",
+          "stage": "read",
+          "title": "Cool, then read",
+          "key": "Cool to room temperature, then read at 562 nm",
+          "equipment": [
+            "plate-reader"
+          ],
+          "notes": [
+            {
+              "kind": "info",
+              "text": "Any wavelength from 540 to 590 nm works.",
+              "cite": {
+                "page": 3,
+                "figure": "page 3"
+              }
+            }
+          ],
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        },
+        {
+          "id": "m-analyze",
+          "stage": "analyze",
+          "title": "Blank-correct and plot",
+          "key": "Subtract the blank, then fit the standard curve",
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        }
+      ],
+      "cite": {
+        "page": 3,
+        "figure": "page 3"
+      }
+    },
+    {
+      "id": "test-tube",
+      "name": "Test tube",
+      "format": "tube",
+      "ratio": "1:20",
+      "sample": {
+        "value": 0.1,
+        "unit": "mL"
+      },
+      "mixPerSample": {
+        "value": 2,
+        "unit": "mL"
+      },
+      "mix": "wr",
+      "standardCurve": "standard",
+      "range": {
+        "min": 20,
+        "max": 2000,
+        "unit": "µg/mL"
+      },
+      "steps": [
+        {
+          "id": "t-standards",
+          "stage": "standards",
+          "title": "Prepare the BSA standards",
+          "key": "Make BSA standards A–I from the 2 mg/mL stock (Table 1)",
+          "standardCurve": "standard",
+          "equipment": [
+            "pipette"
+          ],
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-mix",
+          "stage": "mix",
+          "title": "Prepare the working reagent",
+          "key": "Mix the working reagent: Reagent A + Reagent B, 50 : 1",
+          "mix": "wr",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-load",
+          "stage": "load",
+          "title": "Add standards and samples",
+          "key": "0.1 mL of each standard and sample into its tube",
+          "add": [
+            {
+              "what": "standards-and-samples",
+              "volume": {
+                "value": 0.1,
+                "unit": "mL"
+              },
+              "per": "tube"
+            }
+          ],
+          "equipment": [
+            "pipette",
+            "test-tubes"
+          ],
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-add-wr",
+          "stage": "load",
+          "title": "Add working reagent",
+          "key": "Add 2.0 mL working reagent to every tube, mix well",
+          "add": [
+            {
+              "what": "mix",
+              "ref": "wr",
+              "volume": {
+                "value": 2,
+                "unit": "mL"
+              },
+              "per": "tube"
+            }
+          ],
+          "equipment": [
+            "pipette"
+          ],
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-incubate",
+          "stage": "incubate",
+          "title": "Incubate",
+          "key": "Cover and incubate at 37 °C for 30 min",
+          "timer": {
+            "label": "Incubate",
+            "duration": {
+              "value": 30,
+              "unit": "min"
+            },
+            "temperature": {
+              "value": 37,
+              "unit": "°C"
+            },
+            "covered": true,
+            "alternatives": [
+              {
+                "label": "Room temperature",
+                "duration": {
+                  "value": 2,
+                  "unit": "h"
+                },
+                "temperature": {
+                  "value": 15,
+                  "max": 30,
+                  "unit": "°C"
+                },
+                "range": {
+                  "min": 20,
+                  "max": 2000,
+                  "unit": "µg/mL"
+                },
+                "cite": {
+                  "page": 2,
+                  "figure": "page 2"
+                }
+              },
+              {
+                "label": "Enhanced",
+                "duration": {
+                  "value": 30,
+                  "unit": "min"
+                },
+                "temperature": {
+                  "value": 60,
+                  "unit": "°C"
+                },
+                "range": {
+                  "min": 5,
+                  "max": 250,
+                  "unit": "µg/mL"
+                },
+                "standardCurve": "enhanced",
+                "cite": {
+                  "page": 2,
+                  "figure": "page 2"
+                }
+              }
+            ]
+          },
+          "equipment": [
+            "water-bath"
+          ],
+          "notes": [
+            {
+              "kind": "caution",
+              "text": "Use a water bath, not a forced-air incubator: uneven heating skews the color.",
+              "cite": {
+                "page": 2,
+                "figure": "page 2"
+              }
+            }
+          ],
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-cool",
+          "stage": "read",
+          "title": "Cool to room temperature",
+          "key": "Let the tubes cool to room temperature",
+          "cite": {
+            "page": 2,
+            "figure": "page 2"
+          }
+        },
+        {
+          "id": "t-read",
+          "stage": "read",
+          "title": "Read",
+          "key": "Zero on water, then read every tube at 562 nm within 10 min",
+          "equipment": [
+            "spectrophotometer"
+          ],
+          "notes": [
+            {
+              "kind": "info",
+              "text": "The color keeps developing slowly, so read all tubes within 10 minutes of each other.",
+              "cite": {
+                "page": 3,
+                "figure": "page 3"
+              }
+            }
+          ],
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        },
+        {
+          "id": "t-analyze",
+          "stage": "analyze",
+          "title": "Blank-correct and plot",
+          "key": "Subtract the blank, then fit the standard curve",
+          "cite": {
+            "page": 3,
+            "figure": "page 3"
+          }
+        }
+      ],
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    }
+  ],
+  "analysis": {
+    "readout": {
+      "value": 562,
+      "unit": "nm"
+    },
+    "acceptable": {
+      "value": 540,
+      "max": 590,
+      "unit": "nm"
+    },
+    "fit": {
+      "preferred": [
+        "4pl",
+        "best-fit"
+      ],
+      "byHand": "point-to-point",
+      "avoid": [
+        "linear"
+      ]
+    },
+    "notes": [
+      {
+        "kind": "tip",
+        "text": "Fit a four-parameter or best-fit curve; a straight line is less accurate.",
+        "cite": {
+          "page": 3,
+          "figure": "page 3"
+        }
+      },
+      {
+        "kind": "info",
+        "text": "Plot each standard's average blank-corrected reading against its concentration, then read samples off the curve.",
+        "cite": {
+          "page": 3,
+          "figure": "page 3"
+        }
+      }
+    ],
+    "cite": {
+      "page": 3,
+      "figure": "page 3"
+    }
+  },
+  "defaults": {
+    "procedure": "microplate",
+    "samples": 3,
+    "replicates": 2,
+    "cite": {
+      "page": 2,
+      "figure": "page 2"
+    }
+  },
+  "notes": [
+    {
+      "kind": "info",
+      "text": "For research use only, not for diagnostic procedures.",
+      "cite": {
+        "page": 1,
+        "figure": "page 1"
+      }
+    },
+    {
+      "kind": "caution",
+      "text": "Samples with reducing or metal-chelating substances need a different kit.",
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    },
+    {
+      "kind": "tip",
+      "text": "Reusing glassware? Clean it, then rinse with ultrapure water.",
+      "cite": {
+        "page": 2,
+        "figure": "page 2"
+      }
+    },
+    {
+      "kind": "info",
+      "text": "The color keeps developing after incubation, slowly enough to run many samples together.",
+      "cite": {
+        "page": 1,
+        "figure": "page 1"
+      }
+    }
+  ]
+}

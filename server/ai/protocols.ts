@@ -15,6 +15,21 @@ import { slug, withId } from './import.ts';
 
 /** Where protocol documents live: hand-made ones and those read from a manual (server/ai/import.ts) alike. */
 export const PROTOCOLS_DIR = fileURLToPath(new URL('../../data/protocols/', import.meta.url));
+
+/** The protocols a clean checkout starts with: the hand-made BCA without the manual's words (scripts/demo-protocol.ts). */
+export const DEMO_DIR = fileURLToPath(new URL('../demo/', import.meta.url));
+
+/**
+ * On a clean checkout, where data/protocols/ does not exist yet, puts the demo protocols there, so the app, the mock
+ * and the tests run with no key and no network. A data/protocols/ that exists is left as it is, even without BCA in
+ * it (a kit taken out to be read afresh stays out). True when it seeded.
+ */
+export function seedDemo(dir = PROTOCOLS_DIR, demo = DEMO_DIR): boolean {
+  if (existsSync(dir) || !existsSync(demo)) return false;
+  mkdirSync(dir, { recursive: true });
+  for (const f of readdirSync(demo).filter(f => f.endsWith('.json'))) writeFileSync(join(dir, f), readFileSync(join(demo, f)));
+  return true;
+}
 /** Where the manuals Chapp read itself are kept: data/sources/<id>/manual.pdf. */
 export const MANUALS_DIR = fileURLToPath(new URL('../../data/sources/', import.meta.url));
 const cache = new Map<string, Protocol | null>();

@@ -68,13 +68,19 @@ describe('routes with the mock provider', () => {
     const reply = await res.json();
     expect(reply.actions).toEqual([]);
     expect(reply.say).toBe('');
-    expect(reply.pendingTools).toEqual([expect.objectContaining({ action: { type: 'navigate', to: '/protocol' } })]);
+    // The kit is opened as this conversation's experiment, then shown.
+    expect(reply.pendingTools).toEqual([
+      expect.objectContaining({ action: { type: 'openProtocol', protocolId: 'pierce-bca' } }),
+      expect.objectContaining({ action: { type: 'navigate', to: '/protocol' } }),
+    ]);
     const completed = await postJson(mock, '/api/converse', {
       text: MOCK_TRANSCRIPT, context: { screen: 'protocol', protocolId: 'pierce-bca' }, continuationToken: reply.continuationToken,
-      toolResults: [{ callId: reply.pendingTools[0].callId, ok: true, message: 'Opened the protocol.' }],
+      toolResults: reply.pendingTools.map((t: { callId: string }, i: number) => ({ callId: t.callId, ok: true, message: i ? 'Opened /protocol.' : 'Opened the protocol.' })),
     });
     expect(completed.status).toBe(200);
-    expect(await completed.json()).toMatchObject({ say: 'Opened the protocol.', actions: [] });
+    const done = await completed.json();
+    expect(done).toMatchObject({ actions: [] });
+    expect(done.say).toContain('Opened the protocol.');
   });
 
   it('POST /api/find-protocol answers with a FoundProtocol', async () => {

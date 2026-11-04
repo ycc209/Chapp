@@ -5,7 +5,7 @@ import type { Sized } from '../../../shared/benchScenes.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
 import { decodeText, fitToPlan, parsePlateText } from '../../../shared/plate.ts';
 import { api } from '../../api/client.ts';
-import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
+import type { Protocol } from '../../../shared/protocol.ts';
 import { isPlannable } from '../../../shared/calc.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
 import { DotLabel, StepPill, amountText, clockText, countdownText, lengthText, useNow, wellRoles } from '../../components/lab/index.ts';
@@ -321,7 +321,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
   /** Chapp's example readings for this plate (labeled Sample data wherever they show); real ones are kept unless asked. */
   const sampleIn = (force: boolean) => {
     const r = useRun.getState();
-    if (force || r.readingsFrom !== 'plate' || !Object.keys(r.readings).length) r.setReadings(sampleReadings(wellRoles(plate), analysisOf(p).fit), 'sample');
+    if (force || r.readingsFrom !== 'plate' || !Object.keys(r.readings).length) r.setReadings(sampleReadings(wellRoles(plate)), 'sample');
   };
   const takeSample = () => {
     useBench.getState().setCheck(null);

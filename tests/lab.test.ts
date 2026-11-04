@@ -161,7 +161,7 @@ describe.skipIf(!local)('the BCA run, as the artboards show it', () => {
     const roles = wellRoles(plan);
     const a = analyzePlate(roles, sampleReadings(roles, p.analysis!.fit), p.analysis!.fit);
     expect(a.fit.kind).toBe('4pl');
-    expect(a.fit.r2.toFixed(3)).toBe('0.998');
+    expect(a.fit.r2.toFixed(3)).toBe('0.999');
     expect(concentrationRows(a).map(r => `${r.value} ${r.side}`)).toEqual([
       '1,240 3 %', '860 5 %', '1,510 2 %', '420 7 %', '980 4 %', '1,130 3 %',
       '> 2,000 —', '650 6 %', '1,370 2 %', '740 4 %', '1,050 3 %', '590 8 %',

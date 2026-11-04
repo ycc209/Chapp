@@ -14,7 +14,7 @@ const bca = Protocol.parse(JSON.parse(readFileSync(new URL('../data/protocols/pi
 /** The storyboard's run, the kit's 9 and 12 samples in duplicate, with Chapp's sample plate as its readings. */
 function storyRun(): RunSnapshot {
   const plan = { procedure: 'microplate', samples: 12, replicates: 2, standardReplicates: 2, standards: 'kit' } as const;
-  const readings = sampleReadings(runSetup(bca, plan).roles, bca.analysis!.fit);
+  const readings = sampleReadings(runSetup(bca, plan).roles);
   return { protocolId: 'pierce-bca', ...plan, photos: { bsa: 'data:image/jpeg;base64,AAAA' }, readings };
 }
 
@@ -90,8 +90,9 @@ describe('what a share carries', () => {
 
   it('fits the sample plate as the results screens do: the straight regression line’s R²', () => {
     const r2 = standardR2(bca, storyRun())!;
-    // The example plate bends away from a straight line across 25–2,000 µg/mL (the curve page writes "R² = 0.961").
-    expect(r2).toBeCloseTo(0.9614, 3);
+    // The example plate is the demo sheet's BCA curve, nearly straight across 25–2,000 µg/mL (the curve page writes
+    // "R² = 0.994").
+    expect(r2).toBeCloseTo(0.9944, 3);
     expect(standardR2(bca, { ...storyRun(), readings: {} })).toBeUndefined();
   });
 

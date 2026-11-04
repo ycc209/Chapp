@@ -58,7 +58,9 @@ describe.skipIf(!protocols.length)('bench scenes', () => {
     expect(mixing.mix!.liquid).toBe('#3aa76d');
     expect(mixing.mix!.open).toBe(true);
     const arrows = Object.values(mixing).filter(i => i.kind === 'arrow');
-    expect(arrows.some(i => i.label === '50 parts')).toBe(true);
+    // "50 parts" where the manual's own words count in parts; the demo copy, without them, gives the bare shares.
+    const inParts = /\bparts?\b/i.test(bca.mixes.find(m => m.id === 'wr')?.cite.quote ?? '');
+    expect(arrows.some(i => i.label === (inParts ? '50 parts' : '50'))).toBe(true);
     expect(Math.abs(arrows[0]!.to![1] - arrows[1]!.to![1])).toBeGreaterThanOrEqual(20);
 
     // Loading the standards and samples: from their vials, behind the plate; the pipette's tip ends just over a well.

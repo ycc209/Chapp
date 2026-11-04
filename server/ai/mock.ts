@@ -100,7 +100,8 @@ function converse(text: string, context: ConverseContext): ConverseReply {
   if (/\bbca\b|\bpierce\b|protein assay|蛋白質?定量/i.test(text)) {
     return reply(
       zh ? '我找到 Thermo Fisher 的 Pierce BCA 說明書了，我們來看步驟。' : "I found Thermo Fisher's user guide for the Pierce BCA kit. Let's look at the protocol.",
-      { expression: 'happy', actions: [{ type: 'navigate', to: '/protocol' }, ...plan], sources: [manual] },
+      // Opened as this conversation's experiment, as Meta's models do, so Start, Results and Share know which kit it is.
+      { expression: 'happy', actions: [{ type: 'openProtocol', protocolId: bca.id }, { type: 'navigate', to: '/protocol' }, ...plan], sources: [manual] },
     );
   }
 
