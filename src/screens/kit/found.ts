@@ -1,5 +1,5 @@
 import type { Box, LabelMatch, LabelTarget, ProtocolIntro, ReadLabels } from '../../../shared/ai.ts';
-import { area } from '../../../shared/kit.ts';
+import { area, LABEL_GENERIC } from '../../../shared/kit.ts';
 import type { Protocol } from '../../../shared/protocol.ts';
 import { bottles } from '../protocol/content.ts';
 import { asksAbout, contentsId, needsOf, type Need, type Pick as KitPick, type Thing } from './matching.ts';
@@ -31,10 +31,37 @@ export const targetOf = (p: Protocol): ReadTarget => ({ needs: needsOf(p), compo
  * the volume the bottle comes in only when it is one ("10 × 1 mL" is not).
  */
 export function contentsTargets(contents: ProtocolIntro['contents']): LabelTarget[] {
-  return contents
-    .map(c => ({ name: c.name.trim(), amount: c.amount.trim() }))
-    .filter(c => c.name)
-    .map((c, i) => ({ id: contentsId(i), name: c.name, role: 'kit component', kit: true, labels: [c.name], ...(/^\d+(\.\d+)?\s*(µl|ul|ml|l)$/i.test(c.amount) ? { volumes: [c.amount] } : {}) }));
+  const named = contents.map(c => ({ name: c.name.trim(), amount: c.amount.trim() })).filter(c => c.name);
+  return named.map((c, i) => ({
+    id: contentsId(i),
+    name: c.name,
+    role: 'kit component',
+    kit: true,
+    labels: [...new Set([c.name, ...ownWords(c.name, named.filter((_, j) => j !== i).map(o => o.name))])],
+    ...(/^\d+(\.\d+)?\s*(µl|ul|ml|l)$/i.test(c.amount) ? { volumes: [c.amount] } : {}),
+  }));
+}
+
+const UNITS = new Set(['x', 'l', 'ml', 'µl', 'ul', 'mg', 'g', 'µg', 'ug', 'mm', 'µm', 'um', 'nm', 'm']);
+
+/**
+ * What a label may print of one of a kit's contents besides the manual's whole name, which a label seldom prints in one
+ * piece ("Pierce BCA Protein Assay Reagent A" for the manual's "BCA Reagent A"): the name up to a comma or bracket
+ * ("Albumin Standard Ampules, 2 mg/mL"), and each run of two or more of its words that none of the kit's other contents
+ * has, with a word that tells products apart ("Reagent A"; never "BCA Reagent", which B has too, nor "mg mL").
+ */
+function ownWords(name: string, others: string[]): string[] {
+  const words = (s: string) => s.split(/[,(]/)[0]!.normalize('NFKC').split(/[^\p{L}\p{N}µ]+/u).filter(Boolean);
+  const theirs = others.map(o => ` ${words(o).join(' ').toLowerCase()} `);
+  const base = words(name);
+  const telling = (w: string) => !LABEL_GENERIC.has(w.toLowerCase()) && !UNITS.has(w.toLowerCase()) && !/^\d/.test(w);
+  const runs: string[] = [];
+  for (let n = base.length; n >= 2; n--)
+    for (let at = 0; at + n <= base.length; at++) {
+      const run = base.slice(at, at + n);
+      if (run.some(telling) && !theirs.some(t => t.includes(` ${run.join(' ').toLowerCase()} `))) runs.push(run.join(' '));
+    }
+  return runs;
 }
 
 /** The kit's contents as the kit screens name them. */

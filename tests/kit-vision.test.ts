@@ -13,7 +13,7 @@ import { createMockProvider } from '../server/ai/mock.ts';
 import { UpstreamError } from '../server/ai/provider.ts';
 import { loadProtocol } from '../server/ai/protocols.ts';
 import { boxesAt, createKitVision, createMockKitVision, framesToRead, imageSize, labelConfidence, millilitres, namedBy, samBoxPrompt, packagingOf, packagingPrompt, parseSamVideo, parseLabels, parseRecognized, parseSam, parseSamRecords, samPointPrompt, tidyBottles, tidyBoxes } from '../server/ai/vision.ts';
-import { labelTargets } from '../src/screens/kit/found.ts';
+import { contentsTargets, labelTargets } from '../src/screens/kit/found.ts';
 
 // Kit photos on the server: SAM 3.1's and Muse Spark's real replies (copied from data/smoke/kit/raw/, masks cut
 // short), the checks on what a label says, the calls against a fake fetch, and the /api/kit/* routes. No network.
@@ -225,6 +225,21 @@ describe('labels', () => {
     // A crop the model skipped is one nobody could tell.
     expect(parseLabels(JSON.stringify({ items: [item({ crop: 2, name: 'Reagent A', component: 'reagent-a' })] }), targets, 2).labels[0].match).toBe('none');
     expect(() => parseLabels('not json', targets, 1)).toThrow(UpstreamError);
+  });
+
+  it('reads the labels of a kit new to Chapp against what its manual lists, as the labels print it', () => {
+    // 2026-11-04, a phone's sweep of the BCA kit before its manual was read: "Reagent B" and the ampules came out "Not
+    // sure" and "Not seen" while the manual's names were only "BCA Reagent B" and "Albumin Standard Ampules".
+    const contents = contentsTargets([
+      { name: 'BCA Reagent A', amount: '1000 mL' },
+      { name: 'BCA Reagent B', amount: '25 mL' },
+      { name: 'Albumin Standard Ampules, 2 mg/mL', amount: '10 x 1 mL' },
+    ]);
+    const one = (over: object) => parseLabels(JSON.stringify({ items: [{ crop: 1, name: '', looks: 'bottle', component: '', guess: '', ...over }] }), contents, 1).labels[0];
+    expect(one({ name: 'Pierce BCA Protein Assay Reagent A', volume: '500 mL', component: 'contents:0' })).toMatchObject({ componentId: 'contents:0', match: 'read' });
+    expect(one({ name: 'Pierce BCA Protein Assay Reagent B', component: 'contents:1' })).toMatchObject({ componentId: 'contents:1', match: 'read' });
+    expect(one({ name: 'Albumin Standard 2 mg/mL', component: 'contents:2' })).toMatchObject({ componentId: 'contents:2', match: 'read' });
+    expect(one({ name: 'Pierce BCA Protein Assay' })).toMatchObject({ componentId: null, match: 'none' });
   });
 
   it('reads a label the photo cuts off when what shows fits one bottle alone and the model picked it', () => {

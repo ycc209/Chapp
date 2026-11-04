@@ -35,6 +35,14 @@ describe('durationsSaid', () => {
 });
 
 describe('authorize', () => {
+  it('changes the standards when the user names them, and ticks a range of vials they say are done', () => {
+    expect(verdict({ type: 'setStandards', standards: 'five' }, 'Five standards, four samples, in duplicate.')).toBe('apply');
+    expect(verdict({ type: 'setStandards', standards: 'five' }, '五個標準品，四個樣本')).toBe('apply');
+    expect(verdict({ type: 'setStandards', standards: 'five' }, 'four samples in duplicate')).toBe('confirm');
+    expect(verdict({ type: 'markDone', id: 'A-C' }, 'A to C are done')).toBe('apply');
+    expect(verdict({ type: 'markDone', id: 'A-G' }, 'A to G are done')).toBe('drop');
+  });
+
   it('moves the run when the user asks for it, in so many words', () => {
     expect(verdict(next, 'next step')).toBe('apply');
     expect(verdict(next, '好，下一步')).toBe('apply');

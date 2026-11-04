@@ -17,6 +17,12 @@ export type PlateMapProps = {
   onTube?: (tube: number) => void;
   /** 3 px between wells instead of 4 (Gloves-Load). */
   dense?: boolean;
+  /**
+   * Making the standards (Run-Standards, Step 1): every standard where it will go on the plate, the ones made in their
+   * blue, the one being made now yellow with an ink ring, the rest an outline; the samples' wells faint and untappable.
+   * `done` and `now` are tube indices.
+   */
+  made?: { done: ReadonlySet<number>; now: number | null };
   'aria-label'?: string;
   className?: string;
 };
@@ -33,11 +39,19 @@ function wellStyle(t: Tube, now: boolean): CSSProperties {
   return { background: shadeColor(t.level, 'well'), color: shadeInk(t.level, 'well') };
 }
 
+/** A well while the standards are made: its standard made, being made now, still to make; or a sample's, faint. */
+function madeStyle(t: Tube, made: NonNullable<PlateMapProps['made']>, now: boolean): CSSProperties {
+  if (t.kind !== 'standard') return { ...wellStyle(t, false), opacity: 0.35 };
+  if (now) return wellStyle(t, true);
+  if (made.done.has(t.index)) return wellStyle(t, false);
+  return { background: 'var(--sunken)', color: 'var(--ink)', boxShadow: `inset 0 0 0 1.5px ${t.blank ? 'var(--std-2)' : shadeColor(t.level, 'well')}` };
+}
+
 /**
  * The 96-well plate, rows A–H by columns 1–12: standards in their blues with the vial letter, the blank pale, samples
  * yellow with their number, empty wells grey. Fills the width it is given (wells stay round).
  */
-export function PlateMap({ plan, now, skipped = [], onTube, dense, className, ...rest }: PlateMapProps) {
+export function PlateMap({ plan, now, skipped = [], onTube, dense, made, className, ...rest }: PlateMapProps) {
   const byWell = new Map(plan.cells.map(c => [`${c.row}:${c.col}`, c]));
   const loading = now !== undefined && now !== null;
   const label = 'text-center text-[9px] leading-3 font-semibold text-text';
@@ -58,10 +72,10 @@ export function PlateMap({ plan, now, skipped = [], onTube, dense, className, ..
         ...Array.from({ length: plan.cols }, (_, c) => {
           const cell = byWell.get(`${r}:${c}`);
           const tube = cell && plan.tubes[cell.tube];
-          const shown = tube && !skipped.includes(tube.index) && (!loading || tube.index <= now);
-          const isNow = !!shown && loading && tube.index === now;
+          const shown = tube && !skipped.includes(tube.index) && (made || !loading || tube.index <= now);
+          const isNow = !!shown && (made ? tube.index === made.now : loading && tube.index === now);
           const bad = !cell && plan.bad.includes(name(r, c));
-          const style = shown ? wellStyle(tube, isNow) : bad ? BAD : EMPTY;
+          const style = shown ? (made ? madeStyle(tube, made, isNow) : wellStyle(tube, isNow)) : bad ? BAD : EMPTY;
           const text = shown ? tube.ref : bad ? '×' : '';
           const aria = shown ? `${tube.name}${tube.label ? ` (${tube.label})` : ''} in ${name(r, c)}${isNow ? ', now' : loading ? ', loaded' : ''}` : bad ? `${name(r, c)}, went wrong, not read` : `${name(r, c)}, empty`;
           if (onTube) {
@@ -70,7 +84,7 @@ export function PlateMap({ plan, now, skipped = [], onTube, dense, className, ..
                 key={`${r}:${c}`}
                 type="button"
                 aria-label={aria}
-                disabled={!shown}
+                disabled={!shown || (!!made && tube.kind !== 'standard')}
                 onClick={() => tube && onTube(tube.index)}
                 className={cn(WELL, 'border-0 font-[inherit] text-[9px] leading-[normal] font-bold outline-none focus-visible:outline-2 focus-visible:outline-blue disabled:cursor-default')}
                 style={style}

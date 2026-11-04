@@ -13,6 +13,24 @@ export type { StandardVial };
 /** The vials that are standards on the plate: every one but a working dilution (intermediate). */
 export const standardsOf = <T extends { intermediate?: boolean }>(vials: readonly T[]): T[] => vials.filter(v => !v.intermediate);
 
+/**
+ * Vials named together, in the series' order: "B-E", "B–E", "B to E", "B through E", "B..E", "B~E", "B到E", "B 至 E"
+ * (both ends and everything between) or a list, "B, C and D". Null when it is one vial or names one the run lacks.
+ */
+export function vialRange(said: string, vials: readonly { id: string }[]): string[] | null {
+  const ids = vials.map(v => v.id.toUpperCase());
+  const s = said.trim().toUpperCase();
+  const span = /^([A-Z])\s*(?:-|–|—|~|\.\.|TO|THROUGH|THRU|到|至)\s*([A-Z])$/.exec(s);
+  if (span) {
+    const a = ids.indexOf(span[1]!), b = ids.indexOf(span[2]!);
+    if (a < 0 || b < 0) return null;
+    return vials.slice(Math.min(a, b), Math.max(a, b) + 1).map(v => v.id);
+  }
+  const list = s.split(/\s*(?:,|、|\bAND\b|和|跟|\s)\s*/).filter(Boolean);
+  if (list.length < 2 || !list.every(x => ids.includes(x))) return null;
+  return vials.filter(v => list.includes(v.id.toUpperCase())).map(v => v.id);
+}
+
 export type Series = { vials: StandardVial[]; stock: number; diluent: number; need: number; minLeft: number; /** The concentrations' unit ("µg/mL", "nmol/well"). */ unit: string };
 
 // ─── Shades ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -287,14 +305,17 @@ export function wellRoles(plan: PlatePlan): WellRole[] {
 
 // ─── Working reagent ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Amounts worth making (mL): the need plus 10 % for what stays in the tips and the tube, rounded up to one of these. */
-const NICE_ML = [3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100];
+/**
+ * What is made beyond the need, for what stays in the tips and the tube: 20 %, to the nearest 0.1 mL. (It was 10 %
+ * rounded up to 3, 4, 5, 6, 8, 10… mL, which could make a quarter more than the plate takes.)
+ */
+export const REAGENT_SPARE = 1.2;
 
 /**
- * The working reagent to make for `wells` wells (or tubes): the protocol's volume per well, 10 % spare, rounded up to
- * an amount worth measuring, then split by the mix's parts. The main part rounds to 0.1 mL and the small parts follow
- * it at the exact ratio, to the µL: 42 wells × 200 µL = 8.4 mL → make 10 mL = 9.8 mL A + 196 µL B (the manual's 50:1;
- * Run-Mix draws 200 µL, which would be 49:1).
+ * The working reagent to make for `wells` wells (or tubes): the protocol's volume per well and 20 % spare, to the
+ * nearest 0.1 mL, then split by the mix's parts. The main part rounds to 0.1 mL and the small parts follow it at the
+ * exact ratio, to the µL: 18 wells × 200 µL = 3.6 mL → make 4.3 mL = 4.2 mL A + 84 µL B; 42 wells = 8.4 mL → 10.1 mL =
+ * 9.9 mL A + 198 µL B (the manual's 50:1).
  */
 export function reagentPlan(p: Protocol, procedureId: string, wells: number) {
   const found = p.procedures.find(x => x.id === procedureId);
@@ -303,8 +324,7 @@ export function reagentPlan(p: Protocol, procedureId: string, wells: number) {
   if (!proc || !mix) throw new Error(`procedure "${procedureId}" has no mix`);
   const perWell = toMicroliters(proc.mixPerSample);
   const need = wells * perWell;
-  const ml = (need * 1.1) / 1000;
-  const make = (NICE_ML.find(v => v >= ml - 1e-9) ?? Math.ceil(ml / 10) * 10) * 1000;
+  const make = Math.max(100, Math.round((need * REAGENT_SPARE) / 100) * 100);
   const total = mix.parts.reduce((s, x) => s + x.parts, 0);
   const main = mix.parts.reduce((a, b) => (b.parts > a.parts ? b : a));
   const mainVolume = Math.round((make * main.parts) / total / 100) * 100;

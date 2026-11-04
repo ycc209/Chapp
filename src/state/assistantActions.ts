@@ -1,9 +1,10 @@
 import { START_CARD, type Action, type ConverseContext } from '../../shared/ai.ts';
 import { isPlannable } from '../../shared/calc.ts';
 import { Protocol, isAssay, type Protocol as ProtocolDocument } from '../../shared/protocol.ts';
-import { benchSteps, freeWells, runSetup, standardsOf, type PlatePlan } from '../components/lab/model.ts';
+import { benchSteps, freeWells, runSetup, standardsOf, vialRange, type PlatePlan } from '../components/lab/model.ts';
 import { useBench } from '../screens/run/bench.ts';
 import { tubeKey } from '../screens/run/model.ts';
+import { usePlanView } from '../screens/plan/view.ts';
 import { changeStepTime } from './actions.ts';
 import { procedureFor } from '../screens/protocol/content.ts';
 import { asAssistant } from './applying.ts';
@@ -191,7 +192,7 @@ async function perform(action: AssistantAction, options: AssistantActionOptions)
   const steps = benchSteps(p, procedure.id);
   const byId = (id: string) => steps.find(s => s.id === id);
   const timed = 'id' in action ? byId(action.id)?.step.timer : undefined;
-  const plateActions = ['setSamples', 'setReplicates', 'moveWell', 'addWell', 'addCondition', 'redo'];
+  const plateActions = ['setSamples', 'setReplicates', 'setStandards', 'moveWell', 'addWell', 'addCondition', 'redo'];
   if (plateActions.includes(action.type) && !isAssay(procedure)) return failure('This procedure does not have an assay plate layout to change.');
   if ((action.type === 'nextStep' || action.type === 'previousStep') && (run.step < 0 || run.step >= steps.length)) return failure('The current step is not part of this procedure.');
   if (['startTimer', 'stopTimer', 'resumeTimer', 'setStepTime'].includes(action.type) && !timed) return failure('That step has no timer in this protocol.');
@@ -214,6 +215,15 @@ async function perform(action: AssistantAction, options: AssistantActionOptions)
       run.setPlan(plan);
       return success(action.type === 'setSamples' ? `The run now has ${value} samples.` : `Samples now use ${value} replicates; standards use ${useRun.getState().standardReplicates} replicates.`);
     }
+    case 'setStandards': {
+      // "Five standards": the way that makes them, as the plan's own choices (Plan's Standards panel) set it.
+      if (!['kit', 'halve', 'five', 'ready'].includes(action.standards)) return failure('That is not a way of making the standards.');
+      if (!validLayout(p, { ...run, standards: action.standards })) return failure('Those standards do not fit the plate with this plan.');
+      run.setPlan({ standards: action.standards });
+      usePlanView.getState().setPicked(true);
+      const n = standardsOf(runSetup(p, useRun.getState()).series.vials).length;
+      return success(`The standards are now ${action.standards === 'ready' ? 'already made' : action.standards === 'kit' ? 'the kit’s own' : action.standards === 'five' ? 'five standards' : 'halved from the top'}: ${n} vials.`);
+    }
     case 'nextStep': {
       if (run.step + 1 >= steps.length) return failure('This is already the last step.');
       run.next();
@@ -229,6 +239,12 @@ async function perform(action: AssistantAction, options: AssistantActionOptions)
       if (!byId(id)) {
         if (!isAssay(procedure)) return failure('That item is not a step in this procedure.');
         const setup = runSetup(p, run);
+        // "B to E are done": every vial from B to E, ticked at once.
+        const span = vialRange(id, setup.series.vials);
+        if (span) {
+          for (const v of span) run.setDone(v);
+          return success(`Marked ${span.join(', ')} complete.`);
+        }
         const vial = setup.series.vials.find(v => v.id.toUpperCase() === id.toUpperCase());
         const tube = setup.plate.tubes.find(t => t.kind === 'sample' && t.ref === id);
         if (!vial && !tube) return failure('That vial, sample or step does not exist in this run.');

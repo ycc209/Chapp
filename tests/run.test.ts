@@ -30,11 +30,11 @@ describe.runIf(bca)('the bench, from the protocol and the plan', () => {
     expect(b.steps.map(s => s.title)).toEqual(['Standards', 'Working reagent', 'Load the plate', 'Add the reagent', 'Incubate', 'Read']);
   });
 
-  it('sizes everything as drawn: 9 vials, 21 tubes, 42 wells, 10 mL of reagent, 25 µL in each well', () => {
+  it('sizes everything as drawn: 9 vials, 21 tubes, 42 wells, 10.1 mL of reagent, 25 µL in each well', () => {
     expect(b.series.vials.map(v => v.id).join('')).toBe('ABCDEFGHI');
     expect(b.plate.tubes).toHaveLength(21);
     expect(b.plate.wells).toBe(42);
-    expect(b.reagent.make).toBe(10000);
+    expect(b.reagent.make).toBe(10100);
     expect(b.load).toBe(25);
     expect(b.add).toEqual({ volume: 200, shake: '30 s' });
     expect(b.readout).toMatchObject({ value: 562, unit: 'nm' });

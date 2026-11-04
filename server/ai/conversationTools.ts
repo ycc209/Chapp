@@ -8,6 +8,7 @@ import { dataModel } from '../../src/components/a2ui/data.ts';
 import { runSetup, standardsOf } from '../../src/components/lab/model.ts';
 import { analyzeRun } from '../../src/screens/results/analysis.ts';
 import { procedureFor } from '../../src/screens/protocol/content.ts';
+import { wayCounts } from '../../src/screens/plan/plan.ts';
 import { ActionSchema, MAX_REPLICATES, MAX_SAMPLES } from './schema.ts';
 import { knownProtocols, loadProtocol, manualSources, protocolBrief } from './protocols.ts';
 
@@ -20,12 +21,12 @@ export const tool = (name: string, description: string, properties: Json = {}, r
 });
 
 export const ACTION_TYPES = [
-  'navigate', 'setSamples', 'setReplicates', 'nextStep', 'previousStep', 'markDone', 'startTimer', 'setStepTime',
+  'navigate', 'setSamples', 'setReplicates', 'setStandards', 'nextStep', 'previousStep', 'markDone', 'startTimer', 'setStepTime',
   'redo', 'moveWell', 'addWell', 'addCondition', 'stopTimer', 'resumeTimer', 'takePhoto', 'useSample', 'answer', 'undo', 'openProtocol', 'startRun',
 ] as const;
 const actionProperties = {
   type: { type: 'string', enum: ACTION_TYPES, description: 'The operation (required); the other fields describe it.' },
-  target: { ...str, description: 'Step/vial/sample ID, source well, or protocolId. Use the exact ID from tools.' },
+  target: { ...str, description: 'Step/vial/sample ID, source well, or protocolId. Use the exact ID from tools. For setStandards, how the standards are made: "five" (five standards, halving from the top), "kit" (the kit\'s own dilution table), "halve" (halving across the kit\'s range) or "ready" (already made).' },
   value: { ...number, description: 'Sample/replicate count, or timer duration in seconds. Get calculations from tools.' },
   standardReplicates: { type: 'integer', minimum: 1, maximum: MAX_REPLICATES, description: 'For setReplicates only: change standards to this repeat count if requested. Omit to preserve their current count; value changes sample replicates only.' },
   to: { ...str, description: 'Destination well for moveWell, or app route for navigate.' },
@@ -75,6 +76,15 @@ export function actionFromArguments(raw: unknown, context: ConverseContext): Act
   switch (a.type) {
     case 'setSamples': action = { type: a.type, samples: a.value }; break;
     case 'setReplicates': action = { type: a.type, replicates: a.value, ...(a.standardReplicates !== undefined ? { standardReplicates: a.standardReplicates } : {}) }; break;
+    case 'setStandards': {
+      // A way by name, or "five standards" as a count: the way that makes that many vials for this protocol.
+      const named = ['kit', 'halve', 'five', 'ready'].find(w => w === a.target?.trim().toLowerCase());
+      const p = !named && a.value !== undefined && context.protocolId ? loadProtocol(context.protocolId) : null;
+      const counts = p && context.procedure ? wayCounts(p, context.procedure) : null;
+      const counted = counts ? (['five', 'halve', 'kit'] as const).find(w => counts[w] === a.value) : undefined;
+      action = { type: a.type, standards: named ?? counted };
+      break;
+    }
     case 'moveWell': action = { type: a.type, from: a.target, ...(a.to ? { to: a.to } : {}) }; break;
     case 'addWell': action = { type: a.type, what: a.text, ...(a.to ? { well: a.to } : {}) }; break;
     case 'addCondition': action = { type: a.type, name: a.text }; break;

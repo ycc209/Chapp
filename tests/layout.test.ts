@@ -58,11 +58,11 @@ describe('the four screens lay out the same plate', () => {
     expect(s.share).toEqual(s.plan);
   });
 
-  it('agrees on the working reagent: Plan, Run and Share make 10 mL for the storyboard plate', () => {
+  it('agrees on the working reagent: Plan, Run and Share make 10.1 mL for the storyboard plate', () => {
     const { procedure, ...numbers } = story;
-    expect(planFor(bca, procedure, numbers).reagent.make).toBe(10000);
+    expect(planFor(bca, procedure, numbers).reagent.make).toBe(10100);
     expect(benchFor(bca, story).reagent).toEqual(runSetup(bca, story).reagent);
-    expect(travels({ procedure, plan: { samples: 12, replicates: 2 } }, bca).plan!.reagentMl).toBe(10);
+    expect(travels({ procedure, plan: { samples: 12, replicates: 2 } }, bca).plan!.reagentMl).toBe(10.1);
   });
 });
 

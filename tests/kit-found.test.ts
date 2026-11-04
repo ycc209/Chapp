@@ -8,7 +8,7 @@ import { loadProtocol } from '../server/ai/protocols.ts';
 import { labelsInstructions } from '../server/ai/vision.ts';
 import { contentsTarget, contentsTargets, groupLabels, labelTargets, planFound, sameBottles, type Seen } from '../src/screens/kit/found.ts';
 import { asksAbout, cantLook, following, looking, noneFound, offered, reading, recognized, rowDetail, slotsOf, subjectIs, subjectNeed, subjectOf, takenOf, thingTitle, type Need, type Pick, type Thing } from '../src/screens/kit/matching.ts';
-import { followable, frameClock, frameTimes, isVideo, VIDEO_FRAMES, videoType } from '../src/screens/kit/photo.ts';
+import { followable, frameClock, frameTimes, isVideo, seekShown, VIDEO_FRAMES, videoType } from '../src/screens/kit/photo.ts';
 import { agreed, bestKitRead, kitVotes, labelCalls, otherKitRead, sameKit, tellAsTaken, tellKit } from '../src/screens/kit/analysis.ts';
 import { useSession } from '../src/state/session.ts';
 import { useRun } from '../src/state/run.ts';
@@ -321,9 +321,26 @@ describe('a new kit’s contents', () => {
     ]);
     expect(contents).toEqual([
       { id: 'contents:0', name: 'Insulin', role: 'kit component', kit: true, labels: ['Insulin'], volumes: ['1 mL'] },
-      { id: 'contents:1', name: '1000X Differentiation Cocktail', role: 'kit component', kit: true, labels: ['1000X Differentiation Cocktail'] },
+      { id: 'contents:1', name: '1000X Differentiation Cocktail', role: 'kit component', kit: true, labels: ['1000X Differentiation Cocktail', '1000X Differentiation', 'Differentiation Cocktail'] },
     ]);
     expect(contentsTarget(contents).needs.map(n => [n.id, n.name, n.kit])).toEqual([['contents:0', 'Insulin', true], ['contents:1', '1000X Differentiation Cocktail', true]]);
+  });
+
+  it('are named on a label by the words only each has, as a label prints them', () => {
+    // The Pierce BCA manual's contents (2026-11-04, a phone's sweep): its labels print "Pierce BCA Protein Assay
+    // Reagent B", never "BCA Reagent B" whole.
+    const contents = contentsTargets([
+      { name: 'BCA Reagent A', amount: '1000 mL' },
+      { name: 'BCA Reagent B', amount: '25 mL' },
+      { name: 'Albumin Standard Ampules, 2 mg/mL', amount: '10 x 1 mL' },
+    ]);
+    expect(contents.map(c => c.labels)).toEqual([
+      ['BCA Reagent A', 'Reagent A'],
+      ['BCA Reagent B', 'Reagent B'],
+      ['Albumin Standard Ampules, 2 mg/mL', 'Albumin Standard Ampules', 'Albumin Standard', 'Standard Ampules'],
+    ]);
+    // Words two of them share, or that tell nothing apart, are no one's.
+    expect(contentsTargets([{ name: 'Buffer A', amount: '' }, { name: 'Buffer B', amount: '' }]).map(c => c.labels)).toEqual([['Buffer A'], ['Buffer B']]);
   });
 
   it('become the protocol’s bottles named alike, each once, and nothing for a bottle only half like them', () => {
@@ -395,6 +412,44 @@ describe('frames from a video', () => {
     const guessed = frameClock(10);
     expect([guessed.frameAt(1), guessed.frameAt(20)]).toEqual([30, 299]);
     expect(frameClock(Number.NaN).frameAt(3)).toBe(0);
+  });
+
+  it('are taken once the frame sought is on screen, not when an iPhone says the seek is done', async () => {
+    // An iPhone's player: 'seeked' at once, the frame sought drawn 40 ms later (the frame before it on screen till then).
+    const phone = () => {
+      const video = new EventTarget() as EventTarget & { currentTime: number; onScreen: number; requestVideoFrameCallback: unknown; cancelVideoFrameCallback: unknown };
+      const asked = new Map<number, VideoFrameRequestCallback>();
+      let n = 0;
+      let at = 0;
+      video.onScreen = 0;
+      Object.defineProperty(video, 'currentTime', {
+        get: () => at,
+        set: (t: number) => {
+          at = t;
+          setTimeout(() => video.dispatchEvent(new Event('seeked')), 0);
+          setTimeout(() => {
+            video.onScreen = t;
+            const now = [...asked.values()];
+            asked.clear();
+            now.forEach(f => f(0, { mediaTime: t - 0.02 } as VideoFrameCallbackMetadata));
+          }, 40);
+        },
+      });
+      video.requestVideoFrameCallback = (f: VideoFrameRequestCallback) => (asked.set(++n, f), n);
+      video.cancelVideoFrameCallback = (h: number) => asked.delete(h);
+      return video as unknown as HTMLVideoElement & { onScreen: number };
+    };
+    const video = phone();
+    const started = Date.now();
+    await seekShown(video, 7.55);
+    expect(video.onScreen).toBe(7.55);
+    expect(Date.now() - started).toBeLessThan(400);
+    // A player that never says what it shows: taken a while after the seek.
+    const quiet = Object.assign(new EventTarget(), { currentTime: 0 }) as unknown as HTMLVideoElement;
+    Object.defineProperty(quiet, 'currentTime', { set: () => setTimeout(() => quiet.dispatchEvent(new Event('seeked')), 0) });
+    const waited = Date.now();
+    await seekShown(quiet, 3, 60);
+    expect(Date.now() - waited).toBeGreaterThanOrEqual(55);
   });
 
   it('come from a video by its type, or a phone’s .mov without one', () => {

@@ -180,9 +180,45 @@ export function closeVideo(video: HTMLVideoElement) {
 
 /** The video's frame at `t` seconds, as a Shot carrying `mark`; null when there is no picture there. */
 export async function frameAt(video: HTMLVideoElement, t: number, mark: Pick<Shot, 'sweep' | 'video'>): Promise<Shot | null> {
-  video.currentTime = Math.max(0, Math.min(t, Number.isFinite(video.duration) ? video.duration : t));
-  await mediaEvent(video, 'seeked');
+  await seekShown(video, Math.max(0, Math.min(t, Number.isFinite(video.duration) ? video.duration : t)));
   return video.videoWidth ? { ...frameToShot(video), ...mark } : null;
+}
+
+/** After a seek, how long the frame sought may take to be on screen before it is taken anyway. */
+const SHOWN_WAIT_MS = 500;
+/** The frame on screen is the one sought when it starts this close to the time sought (a phone's frame lasts 1/30 s). */
+const SHOWN_NEAR_S = 0.06;
+
+/**
+ * Seeks `video` to `t`, done once the frame there is on screen. An iPhone says a seek is done ('seeked') before it has
+ * drawn the frame sought, so a frame taken then is the one sought before (2026-11-04, a phone's video of the BCA kit:
+ * its ampules outlined on the 25 mL reagent's frame, sought just before theirs, and that reagent's own frame on an
+ * earlier one, so it went unread). The frame is taken once the browser says it has put a frame starting at about `t` on
+ * screen (requestVideoFrameCallback), or SHOWN_WAIT_MS after the seek where it does not say. Exported for the tests.
+ */
+export async function seekShown(video: HTMLVideoElement, t: number, wait = SHOWN_WAIT_MS): Promise<void> {
+  let handle: number | null = null;
+  let shown = () => {};
+  const onScreen = new Promise<void>(resolve => (shown = resolve));
+  if ('requestVideoFrameCallback' in video) {
+    const near: VideoFrameRequestCallback = (_now, meta) => {
+      if (Math.abs(meta.mediaTime - t) <= SHOWN_NEAR_S) {
+        handle = null;
+        shown();
+      } else handle = video.requestVideoFrameCallback(near);
+    };
+    // Asked before the seek: the frame sought may be on screen before the seek is said to be done.
+    handle = video.requestVideoFrameCallback(near);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    video.currentTime = t;
+    await mediaEvent(video, 'seeked');
+    await Promise.race([onScreen, new Promise<void>(resolve => (timer = setTimeout(resolve, wait)))]);
+  } finally {
+    clearTimeout(timer);
+    if (handle !== null) video.cancelVideoFrameCallback(handle);
+  }
 }
 
 /**

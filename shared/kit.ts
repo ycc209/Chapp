@@ -25,6 +25,9 @@ export function labelCrop(box: Box, width: number, height: number) {
   return { sx, sy, sw, sh, width: Math.max(1, Math.round(sw * scale)), height: Math.max(1, Math.round(sh * scale)) };
 }
 
+/** Words that say nothing of which product it is: every kit's labels have them. */
+export const LABEL_GENERIC = new Set(['protein', 'assay', 'assays', 'reagent', 'reagents', 'kit', 'buffer', 'solution', 'standard', 'standards', 'store', 'for', 'research', 'use', 'only', 'the', 'and', 'with']);
+
 export const area = (b: Box) => b.width * b.height;
 
 export const contains = (b: Box, p: Point) => p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height;

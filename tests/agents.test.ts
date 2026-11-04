@@ -126,4 +126,10 @@ describe('the front assistant and its specialists', () => {
     expect(actionFromArguments({ target: 'nextStep' }, context)).toEqual({ type: 'nextStep' });
     expect(actionFromArguments({ type: 'markDone', target: 'vial-a' }, context)).toEqual({ type: 'markDone', id: 'vial-a' });
   });
+
+  it('sets how the standards are made by name ("five standards" is the five-vial way)', () => {
+    expect(actionFromArguments({ type: 'setStandards', target: 'five' }, context)).toEqual({ type: 'setStandards', standards: 'five' });
+    expect(actionFromArguments({ type: 'setStandards', target: 'Kit' }, context)).toEqual({ type: 'setStandards', standards: 'kit' });
+    expect(() => actionFromArguments({ type: 'setStandards', target: 'seven' }, context)).toThrow();
+  });
 });

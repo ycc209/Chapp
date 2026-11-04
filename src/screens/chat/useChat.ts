@@ -29,6 +29,7 @@ export function doneLine(action: Action, protocol: Protocol | null): string | nu
   const run = useRun.getState();
   switch (action.type) {
     case 'setSamples': return `Samples: ${action.samples}`;
+    case 'setStandards': return `Standards: ${{ kit: 'the kit’s own', halve: 'halved from the top', five: 'five', ready: 'already made' }[action.standards]}`;
     case 'setReplicates': return `Samples: ×${action.replicates}; ${action.standardReplicates === undefined ? 'standards unchanged' : `standards ×${action.standardReplicates}`}`;
     case 'nextStep':
     case 'previousStep': {

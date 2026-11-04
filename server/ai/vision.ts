@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Box, CapSide, KitVision, LabelMatch, LabelTarget, Photo, Point, ReadLabel, ReadLabels, RecognizedKit, SegmentedBottles, Sighting as Seen, TrackedBottles, Video } from '../../shared/ai.ts';
-import { area, boxAt, overlap, sampleLayout } from '../../shared/kit.ts';
+import { area, boxAt, LABEL_GENERIC, overlap, sampleLayout } from '../../shared/kit.ts';
 import { finished, UpstreamError } from './provider.ts';
 import { bcaFacts, knownProtocols, localProtocolId } from './protocols.ts';
 import { samOutline, type SamMask } from './samMask.ts';
@@ -598,9 +598,6 @@ export function labelConfidence(match: LabelMatch, whole: boolean, seen: number)
   return match === 'mismatch' ? 0.4 : match === 'guess' ? 0.25 : 0;
 }
 
-/** Words that say nothing of which product it is: every kit's labels have them. */
-const LABEL_GENERIC = new Set(['protein', 'assay', 'assays', 'reagent', 'reagents', 'kit', 'buffer', 'solution', 'standard', 'standards', 'store', 'for', 'research', 'use', 'only', 'the', 'and', 'with']);
-
 /** Whether words read share a word that tells products apart with this run's bottles' names ("BCA"). */
 export function ofThisRun(text: string, targets: LabelTarget[]): boolean {
   const words = (s: string) => plain(s.normalize('NFKC')).split(' ').filter(w => w.length >= 3 && !LABEL_GENERIC.has(w));
@@ -960,7 +957,11 @@ export function createKitVision(options: VisionOptions): KitVision {
         crops.forEach((crop, i) => content.push({ type: 'text', text: `Picture ${i + 1}:` }, image(crop)));
       }
       const answer = await spark('read-labels', labelsInstructions(components, !!views?.length), content, labelsFormat(components), timeouts.labels);
-      return parseLabels(answer, components, views?.length || crops.length, views);
+      const read = parseLabels(answer, components, views?.length || crops.length, views);
+      // What each label said and what it was taken for, so a bottle the user sees unmatched can be traced.
+      const nameOf = (id: string | null) => components.find(c => c.id === id)?.name ?? '–';
+      read.labels.forEach((l, i) => log(`[labels] ${i + 1}: "${l.text}"${l.volume ? ` · ${l.volume}` : ''} → ${nameOf(l.componentId)} (${l.match}${l.candidates?.length ? `: ${l.candidates.map(nameOf).join(' / ')}` : ''})`));
+      return read;
     },
 
     async capSide(photo) {

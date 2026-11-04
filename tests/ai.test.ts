@@ -197,7 +197,7 @@ describe('BCA facts', () => {
   it.skipIf(!local)('give the model a compact brief with this run’s computed numbers', () => {
     const brief = protocolBrief(loadProtocol('pierce-bca')!, { screen: 'run', protocolId: 'pierce-bca', step: 0, samples: 12, replicates: 2 });
     expect(brief).toContain('0: m-standards, Prepare the BSA standards');
-    expect(brief).toContain('42 wells; working reagent 10 mL (BCA Reagent A 9.8 mL + BCA Reagent B 196 µL)');
+    expect(brief).toContain('42 wells; working reagent 10.1 mL (BCA Reagent A 9.9 mL + BCA Reagent B 198 µL)');
     expect(brief).toContain('400 µL BSA stock');
     expect(brief.length).toBeLessThan(5000);
   });

@@ -72,30 +72,30 @@ describe.skipIf(!local)('the storyboard run (Pierce BCA)', () => {
     expect(halvingTop(doc, 'microplate')).toBe(2000);
   });
 
-  it('12 samples in duplicate: 42 wells, 10 mL, the kit’s 9 sized as Plan-Full', () => {
+  it('12 samples in duplicate: 42 wells, 10.1 mL, the kit’s 9 sized as Plan-Full', () => {
     const v = plan({});
     expect(v.plate.wells).toBe(42);
-    expect(v.reagent.make).toBe(10000);
+    expect(v.reagent.make).toBe(10100);
     expect(v.wayName).toBe('Kit’s 9');
     expect([v.series.stock, v.series.diluent, v.series.minLeft, v.series.need]).toEqual([400, 960, 120, 50]);
     expect(v.range).toBe('20 to 2,000 µg/mL');
     expect(v.firstSample).toBe('B3 · B4');
     expect(v.max).toBe(39);
-    expect(planLine(v, { picked: true, heard: false, still: false })).toBe('12 samples and 9 standards, all in duplicate: 42 wells, 10 mL of working reagent.');
+    expect(planLine(v, { picked: true, heard: false, still: false })).toBe('12 samples and 9 standards, all in duplicate: 42 wells, 10.1 mL of working reagent.');
   });
 
-  it('make it triplicates: 63 wells, 15 mL', () => {
+  it('make it triplicates: 63 wells, 15.1 mL', () => {
     const v = plan({ replicates: 3, standardReplicates: 3 });
     expect(v.plate.wells).toBe(63);
-    expect(v.reagent.make).toBe(15000);
+    expect(v.reagent.make).toBe(15100);
   });
 
-  it('five standards once, samples ×3: 41 wells, still 10 mL (Plan-Heard)', () => {
+  it('five standards once, samples ×3: 41 wells, 9.8 mL (Plan-Heard)', () => {
     const v = plan({ standards: 'five', standardReplicates: 1, replicates: 3 });
     expect(v.plate.wells).toBe(41);
     expect(v.wayName).toBe('5 vials');
     expect([v.series.stock, v.series.diluent, v.series.minLeft, v.series.need]).toEqual([100, 200, 50, 25]);
-    expect(planLine(v, { picked: true, heard: true, still: true })).toBe('5 standards once and 12 samples in triplicate: 41 wells, still 10 mL of working reagent.');
+    expect(planLine(v, { picked: true, heard: true, still: true })).toBe('5 standards once and 12 samples in triplicate: 41 wells, still 9.8 mL of working reagent.');
   });
 
   it('halving from 2,000 makes 8 vials; already made draws the kit’s 9 with nothing to make', () => {

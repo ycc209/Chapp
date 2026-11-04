@@ -157,7 +157,7 @@ export function travels(share: Shareable, protocol: Protocol): Travels {
       standardReplicates: run.standardReplicates,
       samples: run.samples,
       replicates: run.replicates,
-      // The working reagent Plan says to make (reagentPlan: the need plus 10 %, up to a round number of mL).
+      // The working reagent Plan says to make (reagentPlan: the need plus 20 %, to 0.1 mL).
       reagentMl: plate ? plate.reagent.make / 1000 : 0,
     };
   }

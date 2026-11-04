@@ -56,9 +56,9 @@ describe('protocol screen wording', () => {
     });
 
     it('sizes each bottle as Plan and Run do: 12 samples in duplicate, as Kit-Filled shows', () => {
-      expect(amounts(doc, 'microplate', 12, 2)).toEqual({ 'reagent-a': '9.8 mL', 'reagent-b': '196 µL', bsa: '400 µL', diluent: '960 µL' });
+      expect(amounts(doc, 'microplate', 12, 2)).toEqual({ 'reagent-a': '9.9 mL', 'reagent-b': '198 µL', bsa: '400 µL', diluent: '960 µL' });
       // Standards already made take no stock or diluent.
-      expect(amounts(doc, 'microplate', 12, 2, 2, 'ready')).toEqual({ 'reagent-a': '9.8 mL', 'reagent-b': '196 µL' });
+      expect(amounts(doc, 'microplate', 12, 2, 2, 'ready')).toEqual({ 'reagent-a': '9.9 mL', 'reagent-b': '198 µL' });
     });
   });
 });

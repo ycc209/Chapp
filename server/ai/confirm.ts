@@ -28,6 +28,7 @@ function line(action: Action, zh: boolean, receipt: string): string {
     case 'resumeTimer': return zh ? '計時繼續。' : 'Timer resumed.';
     case 'setSamples': return zh ? `${action.samples} 個樣本。` : `${action.samples} sample${action.samples === 1 ? '' : 's'}.`;
     case 'setReplicates': return zh ? ZH_REPLICATES[action.replicates] ?? `${action.replicates} 重複。` : `${action.replicates} replicate${action.replicates === 1 ? '' : 's'}.`;
+    case 'setStandards': return zh ? (action.standards === 'five' ? '五個標準品。' : '標準品改好了。') : action.standards === 'five' ? 'Five standards.' : 'Standards changed.';
     case 'setStepTime': return zh ? '這次改好了。' : 'Changed for this run.';
     case 'redo': return zh ? `${action.id} 再做一次。` : `${action.id} again.`;
     case 'moveWell': return zh ? `${action.from} 換好了。` : `${action.from} moved.`;

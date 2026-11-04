@@ -71,6 +71,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('navigate'), to: z.enum(routes) }),
   z.object({ type: z.literal('setSamples'), samples: z.int().min(1).max(MAX_SAMPLES) }),
   z.object({ type: z.literal('setReplicates'), replicates: z.int().min(1).max(MAX_REPLICATES), standardReplicates: z.int().min(1).max(MAX_REPLICATES).optional() }),
+  z.object({ type: z.literal('setStandards'), standards: z.enum(['kit', 'halve', 'five', 'ready']) }),
   z.object({ type: z.literal('nextStep') }),
   z.object({ type: z.literal('previousStep') }),
   z.object({ type: z.literal('markDone'), id: Id }),

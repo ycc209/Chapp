@@ -19,6 +19,7 @@ import {
   stepLabel,
   vialLabel,
   vialRecipe,
+  vialRange,
   vialSay,
   wellRoles,
 } from '../src/components/lab/model.ts';
@@ -69,6 +70,23 @@ describe('vials', () => {
       ['E', 0, null, 0, 50],
     ]);
     expect([s.stock, s.diluent, s.minLeft, s.need]).toEqual([100, 200, 50, 25]);
+  });
+});
+
+describe('vials named together', () => {
+  const five = 'ABCDE'.split('').map(id => ({ id }));
+  it('ticks a range, both ends included, however it is said', () => {
+    for (const said of ['B-E', 'B–E', 'b to e', 'B through E', 'B..E', 'B到E', 'B 至 E']) expect(vialRange(said, five)).toEqual(['B', 'C', 'D', 'E']);
+    expect(vialRange('E-B', five)).toEqual(['B', 'C', 'D', 'E']);
+  });
+  it('ticks a list, in the series order', () => {
+    expect(vialRange('D, B and C', five)).toEqual(['B', 'C', 'D']);
+    expect(vialRange('A、C', five)).toEqual(['A', 'C']);
+  });
+  it('leaves one vial, and a vial the run lacks, to the usual check', () => {
+    expect(vialRange('A', five)).toBeNull();
+    expect(vialRange('B-G', five)).toBeNull();
+    expect(vialRange('S1', five)).toBeNull();
   });
 });
 
@@ -134,13 +152,14 @@ describe.skipIf(!local)('the BCA run, as the artboards show it', () => {
     expect([s.stock, s.diluent]).toEqual([400, 960]);
   });
 
-  it('makes 10 mL of working reagent for 42 wells at exactly 50:1, as the manual says: 9.8 mL A and 196 µL B', () => {
+  it('makes 10.1 mL of working reagent for 42 wells (20 % spare) at exactly 50:1, as the manual says: 9.9 mL A and 198 µL B', () => {
     const r = reagentPlan(p, 'microplate', 42);
-    expect([r.need, r.make, r.ratio]).toEqual([8400, 10000, '50 : 1']);
-    expect(r.parts.map(x => [x.name, x.volume])).toEqual([['Reagent A', 9800], ['Reagent B', 196]]);
-    // Plan-Heard: 41 wells is "still 10 mL"; triplicates (63 wells) need 15 mL.
-    expect(reagentPlan(p, 'microplate', 41).make).toBe(10000);
-    expect(reagentPlan(p, 'microplate', 63).make).toBe(15000);
+    expect([r.need, r.make, r.ratio]).toEqual([8400, 10100, '50 : 1']);
+    expect(r.parts.map(x => [x.name, x.volume])).toEqual([['Reagent A', 9900], ['Reagent B', 198]]);
+    // 20 % over the need, to 0.1 mL: 41 wells 9.8 mL, triplicates (63 wells) 15.1 mL, the five-standard plan (18) 4.3 mL.
+    expect(reagentPlan(p, 'microplate', 41).make).toBe(9800);
+    expect(reagentPlan(p, 'microplate', 63).make).toBe(15100);
+    expect(reagentPlan(p, 'microplate', 18).parts.map(x => x.volume)).toEqual([4200, 84]);
   });
 
   it('lists the six bench steps with Run-List’s details', () => {

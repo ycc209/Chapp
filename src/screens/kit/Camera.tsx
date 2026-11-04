@@ -3,17 +3,16 @@ import { Link } from 'react-router';
 import { toast } from '../../components/ui/Toaster.tsx';
 import { cn } from '../../lib/cn.ts';
 import { ForwardIcon, PhotosIcon } from '../protocol/icons.tsx';
-import { sendAhead } from '../../api/events.ts';
 import { fileToShot, frameToShot, isVideo, recordSweep, type Footage, type Shot } from './photo.ts';
 
 type CameraProps = {
   shots: Shot[];
   onShots: (shots: Shot[]) => void;
-  /** A sweep (analysis.ts followBottles); onDone follows. */
+  /** A sweep the browser could not record, as its frames (analysis.ts followBottles); onDone follows. */
   onFootage: (footage: Footage) => void;
-  /** Each frame a sweep keeps, as it keeps it: the first say which kit it is while the sweep goes on. */
+  /** Each frame such a sweep keeps, as it keeps it: the first say which kit it is while the sweep goes on. */
   onSweepFrame?: (shot: Shot) => void;
-  /** A video chosen from the library, to play on screen while the models look at it (Watch.tsx). */
+  /** A video chosen from the library, or a sweep's recording, to play on screen while the models look at it (Watch.tsx). */
   onVideo: (video: File) => void;
   /** Done: on to matching the bottles. */
   onDone: () => void;
@@ -41,10 +40,10 @@ const ROUND = 'flex size-11 shrink-0 items-center justify-center rounded-full bg
  * shutter open the photo library instead, as the button at the top left always does.
  *
  * Sweep: the camera passed slowly over the bottles for up to SWEEP_SECONDS, a ring filling around the button. It is
- * recorded (an MP4, where the browser can) for SAM to follow the bottles through, each second of it sent to the server
- * as it is recorded, frames kept along the way in case it cannot (the first read for which kit it is meanwhile), and
- * the sweep goes straight on to matching, so the next screen is what was found. A video chosen from the
- * library plays on screen while SAM follows the bottles through it (Watch.tsx), then matching.
+ * recorded (an MP4, where the browser can) and then plays on screen as a video chosen from the library does
+ * (Watch.tsx): Chapp watches it for which kit it is, SAM follows the bottles through it, and their labels are named on
+ * it. Where the browser cannot record one, frames are kept along the way (the first read for which kit it is
+ * meanwhile) and the sweep goes straight on to matching, so the next screen is what was found.
  */
 export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDone }: CameraProps) {
   const video = useRef<HTMLVideoElement>(null);
@@ -57,7 +56,6 @@ export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDon
   const frames = useRef<Shot[]>([]);
   const sweeping = useRef(false);
   const recording = useRef<ReturnType<typeof recordSweep>>(null);
-  const ahead = useRef<ReturnType<typeof sendAhead> | null>(null);
   const onKept = useRef(onSweepFrame);
   onKept.current = onSweepFrame;
 
@@ -100,7 +98,8 @@ export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDon
     if (!v?.videoWidth) return;
     const shot: Shot = { ...frameToShot(v), sweep: true };
     frames.current.push(shot);
-    onKept.current?.(shot);
+    // A recorded sweep is read for which kit it is as it plays (Watch.tsx), not from these frames.
+    if (!recording.current) onKept.current?.(shot);
   };
 
   const startSweep = () => {
@@ -110,9 +109,7 @@ export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDon
     }
     frames.current = [];
     sweeping.current = true;
-    const up = sendAhead();
-    recording.current = recordSweep(video.current.srcObject as MediaStream, piece => up.send(piece));
-    ahead.current = recording.current ? up : null;
+    recording.current = recordSweep(video.current.srcObject as MediaStream);
     keepFrame();
     const started = Date.now();
     setNow(started);
@@ -127,14 +124,13 @@ export function Camera({ shots, onShots, onFootage, onSweepFrame, onVideo, onDon
     const kept = frames.current;
     frames.current = [];
     const recorder = recording.current;
-    const up = ahead.current;
     recording.current = null;
-    ahead.current = null;
     setSweep(null);
     if (!kept.length) return void recorder?.stop();
     void (recorder?.stop() ?? Promise.resolve(null)).then(clip => {
-      // Its last piece came before the recording stopped: every piece is on its way.
-      onFootage({ kind: 'sweep', frames: kept, video: clip, ...(clip && up ? { uploaded: up.done() } : {}) });
+      // Recorded, the sweep plays as a video chosen from the library does; else its frames are the photos.
+      if (clip) return onVideo(new File([clip], 'sweep.mp4', { type: 'video/mp4' }));
+      onFootage({ kind: 'sweep', frames: kept, video: null });
       onDone();
     });
   };

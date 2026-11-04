@@ -4,7 +4,7 @@ import type { Protocol } from '../../../shared/protocol.ts';
 import { useProtocol } from '../../state/protocol.ts';
 import { useRun } from '../../state/run.ts';
 import { bottles } from '../protocol/content.ts';
-import { findBottles, followBottles, tellAsTaken, whichKit } from './analysis.ts';
+import { findBottles, followBottles, readInBackground, tellAsTaken, whichKit } from './analysis.ts';
 import { Camera } from './Camera.tsx';
 import { gotIt, needsOf, recognized, type Pick, type Thing } from './matching.ts';
 import { Match } from './Match.tsx';
@@ -104,7 +104,12 @@ export function KitScreen() {
           sweepKit.current = null;
           if (telling && identify.current) {
             identify.current = false;
-            void telling.done().then(told => told === 'search' && navigate('/protocol'));
+            // Told which kit it is, the protocol opens with the bottles read behind it, as after a video (Watch).
+            void telling.done().then(told => {
+              if (told === 'none') return;
+              readInBackground();
+              navigate('/protocol');
+            });
           } else identifyBy(footage.frames[0]);
           void followBottles(footage);
         }}

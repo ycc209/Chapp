@@ -169,7 +169,7 @@ describe.skipIf(!bca)('the renderer', () => {
   it('fills the data model from the run’s plan, as the plan screen works it out', () => {
     const model = dataModel(bca!, { procedure: 'microplate', samples: 12, replicates: 2, standardReplicates: 2, standards: 'kit' });
     expect(model.plan.wells).toBe('42');
-    expect(model.reagent).toMatchObject({ make: '10 mL', partA: '9.8 mL', partB: '196 µL', ratio: '50 : 1' });
+    expect(model.reagent).toMatchObject({ make: '10.1 mL', partA: '9.9 mL', partB: '198 µL', ratio: '50 : 1' });
     expect(model.steps['m-incubate']).toMatchObject({ time: '30 min', temp: '37 °C' });
     expect(volumeIn('15 mL')).toBe(15000);
     expect(volumeIn('about 200µl')).toBe(200);
@@ -190,7 +190,7 @@ describe.skipIf(!bca)('the renderer', () => {
       />,
     );
     expect(html).toContain('Working reagent');
-    expect(html).toContain('10 mL');
+    expect(html).toContain('10.1 mL');
   });
 
   it('works Chapp’s cards out for the samples asked about, and judges a Compare', () => {
@@ -204,10 +204,10 @@ describe.skipIf(!bca)('the renderer', () => {
         ]) as A2uiMessage[]}
       />,
     );
-    // 30 samples × 2 and 9 standards × 2 = 78 wells × 200 µL, 10 % spare → 20 mL to make.
-    expect(html).toContain('Working reagent · 20 mL');
+    // 30 samples × 2 and 9 standards × 2 = 78 wells × 200 µL = 15.6 mL, 20 % spare → 18.7 mL to make.
+    expect(html).toContain('Working reagent · 18.7 mL');
     expect(html).toContain('30 samples × 2');
-    expect(html).toContain('Short by 5 mL');
+    expect(html).toContain('Short by 3.7 mL');
   });
 
   it('draws nothing without a root', () => {

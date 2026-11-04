@@ -20,6 +20,7 @@ export function applyActions(actions: Action[], navigate: (to: string) => void, 
       case 'navigate': navigate(action.to); break;
       case 'setSamples': run.setPlan({ samples: action.samples }); break;
       case 'setReplicates': run.setPlan({ replicates: action.replicates, ...(action.standardReplicates !== undefined ? { standardReplicates: action.standardReplicates } : {}) }); break;
+      case 'setStandards': run.setPlan({ standards: action.standards }); break;
       case 'nextStep': run.next(); break;
       case 'previousStep': run.previous(); break;
       // A vial or a step by its id; a sample's tube ("3") loaded, on the plate as the run lays it out.

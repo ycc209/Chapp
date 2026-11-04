@@ -38,6 +38,8 @@ function stepOf(protocol: Protocol | null, id: string) {
 }
 
 const REPLICATES = ['', 'Once each', 'In duplicate', 'In triplicate', 'Four of each'];
+/** How the standards are made, as the plan's choices say it. */
+export const STANDARDS_WAY = { kit: 'The kit’s own standards', halve: 'Halve from the top', five: 'Five standards', ready: 'Standards already made' } as const;
 
 /** What a button offers to do, in the user's terms. */
 function offerLabel(a: Action, protocol: Protocol | null): string {
@@ -45,6 +47,7 @@ function offerLabel(a: Action, protocol: Protocol | null): string {
     case 'nextStep': return 'Go to the next step';
     case 'previousStep': return 'Go back one step';
     case 'setSamples': return `Plan for ${a.samples} samples`;
+    case 'setStandards': return STANDARDS_WAY[a.standards];
     case 'setReplicates': return `Samples: ${REPLICATES[a.replicates] ?? `${a.replicates} replicates`}; ${a.standardReplicates === undefined ? 'keep standards unchanged' : `standards ×${a.standardReplicates}`}`;
     case 'markDone': {
       const step = stepOf(protocol, a.id);

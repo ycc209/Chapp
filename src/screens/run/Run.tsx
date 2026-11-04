@@ -73,6 +73,7 @@ const TIMER_STATES = ['choose', 'timer', 'running', 'stopped', 'confirm', 'done'
  * it and brings the buttons back. Under each step, gloves off, Back, Skip and Next move through the steps (StepNav); so
  * does a tap on the page, gloves or not: its right side Next, its left Back, twice Skip (TapNav). The button beside the
  * gloves makes the run small, floating over Home until it is opened again (src/app/RunDock.tsx).
+ * Gloves off, a tap on Tap to listen keeps Chapp listening too, turn after turn, until it is tapped again.
  * Either way the voice does everything: "next", "back", "C is OK", "start the timer", "stop", "two hours",
  * "photo", "use the sample export"; anything else is a question for Chapp, answered from the manual.
  *
@@ -466,29 +467,12 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     return s.title;
   };
 
-  /** "Next", "done", "mixed": the next vial or tube while there are some, else the next step. */
+  /**
+   * "Next", "next step": the next step, whatever is still unticked on this one (the standards, the plate's tubes). The
+   * vials and tubes are ticked by name ("A is ready", "B to E are done") or a tap, never one by one by "next".
+   */
   const advance = (said: string): Handled => {
-    const { step: at, done } = useRun.getState();
-    if (at === idx.standards && !bench.ready) {
-      const line = standardsLine(vials, done);
-      if (line.kind !== 'all') {
-        const patch = tickUpTo(vials, done, line.vial.id, true);
-        leaveReview();
-        setMany(patch);
-        setHeard(said);
-        return { say: standardsText(standardsLine(vials, { ...done, ...patch }), nextAfter(at)) };
-      }
-    }
-    if (at === idx.load) {
-      const cur = currentTube(plate, done);
-      if (cur < plate.tubes.length) {
-        leaveReview();
-        setMany(loadUpTo(plate, done, cur, true));
-        setFlash(true);
-        setHeard(said);
-        return { say: tubeText(plate, cur + 1, bench.load) };
-      }
-    }
+    const { step: at } = useRun.getState();
     if (at === idx.incubate && inc && livePhase() === 'choose') {
       leaveReview();
       startTimer();
@@ -712,9 +696,10 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     else mic.end();
   };
 
-  // Gloves on, "the screen stays on" (Gloves-Timer), where the browser can keep it on.
+  // Gloves on, or listening without them, "the screen stays on" (Gloves-Timer), where the browser can keep it on.
+  const awake = gloves || voice === 'talking';
   useEffect(() => {
-    if (!gloves || !('wakeLock' in navigator)) return;
+    if (!awake || !('wakeLock' in navigator)) return;
     let lock: WakeLockSentinel | null = null;
     let live = true;
     const hold = () =>
@@ -730,7 +715,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
       document.removeEventListener('visibilitychange', again);
       void lock?.release().catch(() => {});
     };
-  }, [gloves]);
+  }, [awake]);
 
   // ─── Time's up ─────────────────────────────────────────────────────────────────────────────────────────────────
   const timeUpTitle = `Incubation done · ${lengthText(timer.total)}${tempText ? ` at ${tempText}` : ''}`;
@@ -893,7 +878,8 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
               }}
             />
           ) : (
-            <BottomBar onPlus={() => setPlus(o => !o)} onKeyboard={() => setTyping(true)} onUtterance={send} />
+            // A tap listens for good, turn after turn, through every step, until tapped again: hands-free without gloves.
+            <BottomBar tapTalks onPlus={() => setPlus(o => !o)} onKeyboard={() => setTyping(true)} onUtterance={send} />
           )}
         </div>
       )}

@@ -107,20 +107,20 @@ describe('what the labmate is told they get', () => {
   it('matches Scan-Import: 7 steps; 9 standards ×2, 12 samples ×2, 10 mL working reagent; 12 samples measured', () => {
     const run = storyRun();
     const t = travels(buildShare('all', run, bca, { r2: 0.998 }), bca);
-    expect(t).toEqual({ steps: 7, plan: { standards: 9, standardReplicates: 2, samples: 12, replicates: 2, reagentMl: 10 }, results: { samples: 12, r2: 0.998 }, photos: 1 });
+    expect(t).toEqual({ steps: 7, plan: { standards: 9, standardReplicates: 2, samples: 12, replicates: 2, reagentMl: 10.1 }, results: { samples: 12, r2: 0.998 }, photos: 1 });
     expect(travels(buildShare('protocol', run, bca, {}, { photos: false }), bca)).toEqual({ steps: 7 });
   });
 
-  it('rounds the working reagent up like the Plan artboard (need + 10%, to a round number of mL)', () => {
-    // 42 wells × 200 µL = 8.4 mL → 9.24 → 10; triplicate 63 wells → 12.6 → 13.86 → 15.
-    expect(travels({ procedure: 'microplate', plan: { samples: 12, replicates: 2 } }, bca).plan!.reagentMl).toBe(10);
-    expect(travels({ procedure: 'microplate', plan: { samples: 12, replicates: 3 } }, bca).plan!.reagentMl).toBe(15);
+  it('makes the working reagent as Plan does (need + 20 %, to 0.1 mL)', () => {
+    // 42 wells × 200 µL = 8.4 mL → 10.08 → 10.1; triplicate 63 wells → 12.6 → 15.12 → 15.1.
+    expect(travels({ procedure: 'microplate', plan: { samples: 12, replicates: 2 } }, bca).plan!.reagentMl).toBe(10.1);
+    expect(travels({ procedure: 'microplate', plan: { samples: 12, replicates: 3 } }, bca).plan!.reagentMl).toBe(15.1);
   });
 
   it('counts the standards the plan made: five standards once beside samples ×3', () => {
     const t = travels({ procedure: 'microplate', plan: { samples: 12, replicates: 3, standardReplicates: 1, standards: 'five' } }, bca);
-    // 5 + 36 = 41 wells × 200 µL = 8.2 mL → 9.02 → 10 mL.
-    expect(t.plan).toEqual({ standards: 5, standardReplicates: 1, samples: 12, replicates: 3, reagentMl: 10 });
+    // 5 + 36 = 41 wells × 200 µL = 8.2 mL → 9.84 → 9.8 mL.
+    expect(t.plan).toEqual({ standards: 5, standardReplicates: 1, samples: 12, replicates: 3, reagentMl: 9.8 });
   });
 
   it('says when the results were shared', () => {

@@ -1,3 +1,4 @@
+import { vialRange } from '../../src/components/lab/model.ts';
 import { numbersIn } from '../../shared/a2ui.ts';
 import type { Action, ConverseContext } from '../../shared/ai.ts';
 
@@ -35,6 +36,8 @@ const ASKS = /可以|幫我|請|麻煩|能不能|可不可以|要不要幫|pleas
 const QUESTION = /(?:[?？]|[嗎吗呢])\s*[。.!！]?\s*$/;
 const NOT = /不要|不用|別|先不|還沒|不想|等一下|等等|don'?t|do not|not yet|no need|hold on|\bwait\b|never mind/i;
 
+/** How the standards are made, said: "five standards", "the kit's nine", "halve from 2,000", "already made". */
+const STANDARDS = /\bstandards?\b|\bvials?\b|\bkit'?s\b|\bhalv|\balready made\b|標準|標準品|稀釋|已經做好/i;
 const NEXT = /\bnext\b|\bmove on\b|\bgo on\b|\bcontinue\b|下一步|下一個步驟|下個步驟|往下|繼續/i;
 const PREVIOUS = /\bprevious\b|\bgo back\b|\bback (?:a|one) step\b|\bstep back\b|上一步|上一個步驟|回上|退回|回到前/i;
 const DONE = /\b(?:done|finished|complete|completed|ready|added|ok|okay|good)\b|好了|做完|完成|加好|加完|弄好|做好|ok/i;
@@ -145,6 +148,8 @@ export function authorize(action: Action, said: string, rules: Rules): { verdict
       const named = PLICATES.some(([re, n]) => n === action.replicates && re.test(said));
       return { verdict: verdict(named || numbers.has(action.replicates)), action };
     }
+    case 'setStandards':
+      return { verdict: verdict(STANDARDS.test(said)), action };
     case 'nextStep':
       return { verdict: verdict(NEXT.test(said)), action };
     case 'previousStep':
@@ -152,6 +157,8 @@ export function authorize(action: Action, said: string, rules: Rules): { verdict
     case 'markDone': {
       const tube = /^\d{1,2}$/.test(action.id) && Number(action.id) >= 1 && Number(action.id) <= (rules.samples ?? 0);
       if (tube) return { verdict: verdict(DONE.test(said) && names(said, action.id)), action };
+      // "B to E are done": a range of the run's vials (vialRange) counts as naming each of them.
+      if (vialRange(action.id, rules.vials.map(id => ({ id })))) return { verdict: verdict(DONE.test(said)), action };
       if (!rules.steps.includes(action.id) && !rules.vials.includes(action.id.toUpperCase())) return { verdict: 'drop', action };
       const id = rules.vials.includes(action.id.toUpperCase()) ? action.id.toUpperCase() : action.id;
       return { verdict: verdict(DONE.test(said)), action: { ...action, id } };

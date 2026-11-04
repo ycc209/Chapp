@@ -106,6 +106,8 @@ export type Action =
   | { type: 'navigate'; to: string }
   | { type: 'setSamples'; samples: number }
   | { type: 'setReplicates'; replicates: number; standardReplicates?: number }
+  /** How the standards are made: the kit's own table, halving across its range, five standards, or already made. */
+  | { type: 'setStandards'; standards: 'kit' | 'halve' | 'five' | 'ready' }
   | { type: 'nextStep' }
   | { type: 'previousStep' }
   | { type: 'markDone'; id: string }
