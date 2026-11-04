@@ -81,6 +81,14 @@ one. Reagent A and Reagent B look alike in a drawing; in the user's own video th
 
 ![The user's Reagent B outlined by SAM 3.1 in the kit video, Reagent A and B cut out and whole, and the same two bottles in Step 2](docs/img/bench.png)
 
+**What the photo hid, and only that.** A gloved hand hid Reagent B's cap. SAM 3.1 cut the bottle out and Muse Image
+drew it whole, but only the piece the photo lacked comes from the drawing (18 % of this bottle), lined up by outline,
+never by the words. The label and the rest stay the user's own photo (Muse Image had written its own product number,
+1656076; the label shows the real 1859078), and the step says which part was drawn.
+[How a bottle is made whole](docs/HOW_IT_WORKS.md#the-users-bottles-upright-and-whole).
+
+![Reagent B in a gloved hand that hides its cap, outlined by SAM 3.1, and the same bottle in the step with only its cap drawn by Muse Image](docs/img/hidden.png)
+
 **Two models at once.** While SAM 3.1 is still finding and following the bottles, Muse Spark is already at work on the
 same video:
 
