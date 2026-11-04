@@ -306,6 +306,18 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     useRun.getState().startTimer(inc.id, 0);
     useBench.getState().unpause(inc.id);
   };
+  /**
+   * Reset: the clock cleared, running, stopped or done, back to choosing the length (Run-Incubate), the one chosen
+   * kept. Its alarm and lock-screen push go with it (state/alarms.ts calls off a timer the run no longer has).
+   */
+  const resetTimer = () => {
+    if (!inc) return;
+    leaveReview();
+    useRun.getState().stopTimer(inc.id);
+    useBench.getState().unpause(inc.id);
+    setConfirm(false);
+    setHeard(null);
+  };
   /** Chapp's example readings for this plate (labeled Sample data wherever they show); real ones are kept unless asked. */
   const sampleIn = (force: boolean) => {
     const r = useRun.getState();
@@ -773,6 +785,7 @@ function RunBench({ p, bench }: { p: Protocol; bench: Bench }) {
     tapTube,
     choose,
     finish,
+    reset: resetTimer,
     toResults: () => navigate('/results'),
     check: at === idx.read ? checkView : null,
     reading,

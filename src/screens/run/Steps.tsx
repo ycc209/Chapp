@@ -362,8 +362,9 @@ export function IncubateStep({ v }: { v: View }) {
         label="Incubating"
         temperature={temp ?? undefined}
         onTap={t.phase === 'running' ? v.finish : undefined}
-        className="mb-6 shrink-0"
+        className="mb-4 shrink-0"
       />
+      <ResetTimer onReset={v.reset} className="mb-6" />
       {t.phase === 'running' && <LockScreenLine push={v.push} />}
       {t.phase === 'stopped' && <Answer>Stopped. Put it back, or read it as it is.</Answer>}
       {t.phase === 'done' && <Answer>Cool the plate to room temperature, then read.</Answer>}
@@ -375,6 +376,29 @@ export function IncubateStep({ v }: { v: View }) {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Reset timer, under the clock once it has started (running, stopped or done): back to choosing the length. Gloves on
+ * it is big enough to hit with a gloved finger (`big`), the one button on that layout besides the bar.
+ */
+export function ResetTimer({ onReset, big = false, className }: { onReset: () => void; big?: boolean; className?: string }) {
+  const icon = big ? 22 : 16;
+  return (
+    <div className={cn('flex shrink-0 px-1', className)}>
+      <button
+        type="button"
+        onClick={onReset}
+        className={cn(NAV_PILL, NAV_WHITE, big ? 'min-h-14 gap-2.5 rounded-[28px] px-6 text-[20px] leading-7' : 'gap-[7px]')}
+      >
+        <svg width={icon} height={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+        Reset timer
+      </button>
+    </div>
   );
 }
 

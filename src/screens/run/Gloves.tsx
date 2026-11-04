@@ -4,12 +4,13 @@ import { Waveform } from '../../components/voice/Waveform.tsx';
 import { cn } from '../../lib/cn.ts';
 import { useSession } from '../../state/session.ts';
 import { currentTube, standardsLine } from './model.ts';
-import { ReadingsIn, keepsFor } from './Steps.tsx';
+import { ReadingsIn, ResetTimer, keepsFor } from './Steps.tsx';
 import type { View } from './view.ts';
 import { PlateCheckView, checkSay } from './PlateCheck.tsx';
 
 /**
- * The same six steps with gloves on (Gloves-*.dc.html): Chapp keeps listening, so there are no buttons to aim for;
+ * The same six steps with gloves on (Gloves-*.dc.html): Chapp keeps listening, so there are no buttons to aim for
+ * but one, a big Reset timer once the incubation's clock has started;
  * the instruction is big enough to read from arm's length and the rest of the step stays in view below it. The step's
  * picture plays big (view.picture), the amounts written big on it, and the words under it by choice (view.words);
  * where a grid is the step (the standards, the plate), the picture is small beside the line, the grid in view under
@@ -196,6 +197,7 @@ export function GlovesIncubate({ v }: { v: View }) {
           onTap={t.phase === 'running' ? v.finish : undefined}
         />
       )}
+      <ResetTimer big onReset={v.reset} className="mt-5" />
       <div className="mt-6 flex flex-col">
         {t.phase === 'running' && !t.confirm && (
           <Say>

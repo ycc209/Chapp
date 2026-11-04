@@ -42,6 +42,8 @@ export type View = {
   choose: (seconds: number) => void;
   /** Tap the time: end the incubation now (Run-Timer). */
   finish: () => void;
+  /** Reset timer: the clock cleared (running, stopped or done), back to choosing the length. */
+  reset: () => void;
   toResults: () => void;
   /** Readings waiting on Run-Read for the user's look (a model's reading, or a file with wells left out), or null. */
   check: { check: PlateCheck; fit: PlanFit; wells: string[]; edit: (well: string, value: number | null) => void; confirm: () => void; again: () => void } | null;
