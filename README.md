@@ -27,7 +27,7 @@ four-fold axes into a square window (right).
 ![Chapp on a phone: the kit's bottles outlined by SAM 3.1 and named, step 4 at the bench, and the standard curve from sample readings](docs/img/screens.png)
 
 **Built for the [Meta Global AI Developer Hackathon](https://cerebralvalley.ai/e/meta-ai-developer-hackathon)** (Oct 26 – Nov 4, 2026, Indie Developer track).
-Everything in this repository was written during the hackathon, starting October 27, 2026:
+Everything in this repository was written during the hackathon, starting October 27, 2026, and submitted on November 4; the dates here and in the commits are Taiwan time (UTC+8):
 
 - **Oct 27–28**: the screens, the protocol format, and reading a manual with Muse Spark
 - **Oct 29–30**: the conversation, voice, SAM on the kit photos, and the step pictures
