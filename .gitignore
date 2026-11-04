@@ -5,5 +5,7 @@ dist/
 .DS_Store
 # Vendor manuals, extracted text and anything derived from them stay local (see README → Data).
 data/
-# Private planning notes stay local.
-docs/
+# Private planning notes stay local; only the README's details page and its pictures are shared.
+docs/*
+!docs/HOW_IT_WORKS.md
+!docs/img/
