@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { BenchLine, DoneAt, PlateMap, ReagentParts, StandardsTable, Timer, VialNow, amountText, shadeLevels, standardsOf } from '../../components/lab/index.ts';
 import { Waveform } from '../../components/voice/Waveform.tsx';
 import { cn } from '../../lib/cn.ts';
+import { useSession } from '../../state/session.ts';
 import { currentTube, standardsLine } from './model.ts';
 import { ReadingsIn, keepsFor } from './Steps.tsx';
 import type { View } from './view.ts';
@@ -251,20 +252,53 @@ const GLOW =
 const GLOW_DARK =
   'radial-gradient(120% 100% at 50% 100%, rgba(121, 185, 243, 0.45) 0%, rgba(111, 211, 198, 0.18) 42%, rgba(11, 11, 12, 0) 72%), linear-gradient(rgba(11, 11, 12, 0), rgba(11, 11, 12, 0.9) 62%)';
 
+/** The most of what is being said the bar shows: the latest words, the start cut with "…", three lines at most. */
+const HEARD_CHARS = 90;
+
+/** What is being said, as the bar shows it: the latest HEARD_CHARS, settled words first, then the words still being recognized. */
+export function heardTail(heard: string, interim: string): { settled: string; interim: string } | null {
+  const said = [heard, interim].filter(Boolean).join(' ');
+  if (!said.trim()) return null;
+  if (said.length <= HEARD_CHARS) return { settled: heard, interim: interim ? `${heard ? ' ' : ''}${interim}` : '' };
+  const cut = said.length - HEARD_CHARS;
+  const from = said.indexOf(' ', cut) + 1 || cut;
+  const settledEnd = heard.length;
+  return {
+    settled: `…${said.slice(from, Math.max(from, settledEnd))}`,
+    interim: interim ? said.slice(Math.max(from, settledEnd)) : '',
+  };
+}
+
+/** What is heard so far, over the waveform: the settled words in ink (white on the camera), the rest in grey. */
+export function HeardWords({ heard, interim, dark }: { heard: string; interim: string; dark?: boolean }) {
+  const words = heardTail(heard, interim);
+  if (!words) return null;
+  return (
+    <span data-heard="" className={cn('m-0 max-w-[340px] text-center text-[20px] leading-[26px] font-semibold', dark ? 'text-white' : 'text-ink')}>
+      {words.settled}
+      {words.interim && <span className={dark ? 'text-white/60' : 'text-faint'}>{words.interim}</span>}
+    </span>
+  );
+}
+
 /**
- * The bottom of the gloves layouts: the whole width is one target. While Chapp listens it says Listening, and a tap
+ * The bottom of the gloves layouts: the whole width is one target. While Chapp listens it says Listening, with what it
+ * hears so far just above the waveform (settled words in ink, the ones still being recognized in grey), and a tap
  * stops listening and goes back to the buttons. If the microphone is not on (opened by address, or after a reload),
  * it says Tap to listen and a tap turns it on.
  */
 export function GlovesBar({ listening, dark, onTap }: { listening: boolean; dark?: boolean; onTap: () => void }) {
+  const heard = useSession(s => s.heard);
+  const interim = useSession(s => s.interim);
   return (
     <button
       type="button"
       onClick={onTap}
       aria-label={listening ? 'Listening. Tap to stop listening and use the buttons' : 'Tap to listen, gloves on'}
-      className="absolute inset-x-0 bottom-0 z-[6] flex h-[calc(114px+var(--screen-bottom))] cursor-pointer flex-col items-center justify-end gap-2.5 border-0 px-5 pb-[calc(6px+var(--screen-bottom))] font-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-inset"
+      className="absolute inset-x-0 bottom-0 z-[6] flex min-h-[calc(114px+var(--screen-bottom))] cursor-pointer flex-col items-center justify-end gap-2.5 border-0 px-5 pt-10 pb-[calc(6px+var(--screen-bottom))] font-[inherit] outline-none focus-visible:ring-2 focus-visible:ring-blue focus-visible:ring-inset"
       style={{ background: dark ? GLOW_DARK : GLOW }}
     >
+      {listening && <HeardWords heard={heard} interim={interim} dark={dark} />}
       <Waveform moving={listening} height={22} className={dark ? '[&>span]:bg-white' : undefined} />
       <span className={cn('text-[15px] leading-5 font-semibold', dark ? 'text-white' : 'text-text')}>{listening ? 'Listening' : 'Tap to listen'}</span>
     </button>
