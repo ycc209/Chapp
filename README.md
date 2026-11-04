@@ -31,8 +31,11 @@ Everything in this repository was written during the hackathon, starting October
 
 - **Oct 27–28**: the screens, the protocol format, and reading a manual with Muse Spark
 - **Oct 29–30**: the conversation, voice, SAM on the kit photos, and the step pictures
-- **Oct 31 – Nov 1**: the conversation as one thread with tools, and the benchmark of eleven models
-- **Nov 2–4**: the kit video, the front assistant and its specialists, bottles made whole, and the demo video
+- **Oct 31 – Nov 1**: more SAM, and the AI behind it: how hard each call thinks, the order the calls run in, and the
+  logic between them; the benchmark of eleven models
+- **Nov 2–3**: more SAM: following each bottle through the kit video, and bottles made whole; the front assistant and
+  its specialists
+- **Nov 4**: the demo video
 
 ## Why Chapp
 
