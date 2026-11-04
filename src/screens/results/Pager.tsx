@@ -10,12 +10,11 @@ type PagerProps = {
   onPage: (page: number) => void;
 };
 
-// Results-Swipe.dc.html's pager: each page is the width less 36 px (346 of 382 on the design's 402 px screen), 12 px
-// apart, so the next one peeks in at the right edge and fades out under the mask. Each page also stops a swipe
-// (scroll-snap-stop), so a quick flick turns one page, never two.
-const GAP = 12;
-const MASK =
-  'linear-gradient(to right, transparent 0, transparent 8px, #000000 20px, #000000 calc(100% - 36px), rgba(0, 0, 0, 0.3) 100%)';
+// Each page is the screen's full content width, and the pages sit 40 px apart (the 20 px margin on each side), so
+// the next one never peeks in at the edge: only the page picked shows (2026-11-04; the design let the next page show
+// 24 px at the right edge, which read as an extra column). Each page also stops a swipe (scroll-snap-stop), so a
+// quick flick turns one page, never two.
+const GAP = 40;
 
 const reduced = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -129,8 +128,6 @@ export function Pager({ pages, page, onPage }: PagerProps) {
     height: heights?.[page] ?? 'auto',
     scrollSnapType: dragging ? 'none' : 'x mandatory',
     cursor: dragging ? 'grabbing' : 'grab',
-    WebkitMaskImage: MASK,
-    maskImage: MASK,
   };
 
   return (
@@ -151,7 +148,7 @@ export function Pager({ pages, page, onPage }: PagerProps) {
           aria-label={p.label}
           aria-hidden={i === page ? undefined : true}
           inert={i === page ? undefined : true}
-          className="flex shrink-0 grow-0 basis-[calc(100%-36px)] snap-start snap-always flex-col"
+          className="flex shrink-0 grow-0 basis-[calc(100%-20px)] snap-start snap-always flex-col"
         >
           {p.content}
         </section>

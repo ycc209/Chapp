@@ -88,10 +88,10 @@ describe('what a share carries', () => {
     expect(buildShare('all', { ...storyRun(), readings: {} }, bca).results).toBeUndefined();
   });
 
-  it('fits the sample plate as the results screens do', () => {
+  it('fits the sample plate as the results screens do: the straight regression line’s R²', () => {
     const r2 = standardR2(bca, storyRun())!;
-    expect(r2).toBeGreaterThan(0.99);
-    expect(r2).toBeLessThan(1);
+    // The example plate bends away from a straight line across 25–2,000 µg/mL (the curve page writes "R² = 0.961").
+    expect(r2).toBeCloseTo(0.9614, 3);
     expect(standardR2(bca, { ...storyRun(), readings: {} })).toBeUndefined();
   });
 

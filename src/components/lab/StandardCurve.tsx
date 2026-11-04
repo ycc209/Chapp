@@ -1,9 +1,10 @@
-import { predict, type Fit, type PlateAnalysis } from '../../../shared/fit.ts';
+import { fitLinear, predict, type Fit, type PlateAnalysis } from '../../../shared/fit.ts';
 import { cn } from '../../lib/cn.ts';
-import { concentrationText, shadeColor, shadeLevels } from './model.ts';
+import { concentrationText, r2Text, shadeColor, shadeLevels } from './model.ts';
 
-// The design's plot (Results-Swipe-Curve): a 300 × 210 drawing, axes from (36, 170) up to y 10 and across to x 290.
-const X0 = 36, X1 = 290, Y0 = 170, Y1 = 10;
+// The design's plot (Results-Swipe-Curve): a 300 × 210 drawing, axes from (46, 170) up to y 10 and across to x 290;
+// the 46 px on the left hold the y axis' numbers and its label.
+const X0 = 46, X1 = 290, Y0 = 170, Y1 = 10;
 
 /** A light point gets a darker ring so it shows on white, as drawn: the blank in --std-2, pale blues in --std-4/5. */
 function ring(level: number) {
@@ -30,6 +31,29 @@ const FIT_NAMES: Record<Fit['kind'], string> = {
 /** "Four-parameter fit, blank subtracted." */
 export const fitCaption = (fit: Fit) => `${FIT_NAMES[fit.kind]}, blank subtracted.`;
 
+/** The decimals a tick step needs: 0.5 → 1, 0.25 → 2, 500 → 0. */
+function decimalsOf(step: number) {
+  let d = 0;
+  while (d < 4 && Math.abs(Math.round(step * 10 ** d) - step * 10 ** d) > 1e-9) d++;
+  return d;
+}
+
+/** A coefficient as the equations write it: four significant figures, a true minus sign. */
+export const coefText = (n: number) => n.toLocaleString('en-US', { maximumSignificantDigits: 4 }).replace('-', '−');
+const plusTerm = (n: number) => (n < 0 ? ` − ${coefText(-n)}` : ` + ${coefText(n)}`);
+
+/** A straight line as an equation: "y = 0.000858x + 0.06364". */
+export const lineText = (fit: Extract<Fit, { kind: 'linear' }>) => `y = ${coefText(fit.slope)}x${plusTerm(fit.intercept)}`;
+
+/** The dashed key in front of the straight line's equation, so it reads as that line's. */
+function DashedKey() {
+  return (
+    <svg width="18" height="8" viewBox="0 0 18 8" aria-hidden="true" className="mt-[7px] shrink-0">
+      <path d="M1 4H17" stroke="var(--text)" strokeWidth="1.5" strokeDasharray="4 3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export type StandardCurveProps = {
   /** From shared/fit.ts analyzePlate(). */
   analysis: PlateAnalysis;
@@ -41,6 +65,11 @@ export type StandardCurveProps = {
   samples?: boolean;
   /** "Four-parameter fit, blank subtracted." under the plot. */
   caption?: boolean;
+  /**
+   * The straight regression line through the standards instead of the solid fitted curve (least squares, dashed), its
+   * R² written beside it on the plot and its equation under the plot: the results page, which reads the samples off it.
+   */
+  regression?: boolean;
   /** Drawn width, px (the design: 338, the page's full width). */
   width?: number;
   className?: string;
@@ -50,20 +79,32 @@ export type StandardCurveProps = {
  * The standard curve as an SVG: each standard's mean blank-corrected reading against its concentration, in the vials'
  * blues, and the fitted curve through them in Meta blue. Axes, ticks and labels as drawn on Results-Swipe-Curve.
  */
-export function StandardCurve({ analysis, xLabel = 'Concentration, µg/mL', yLabel = 'Net reading', samples = false, caption = true, width = 338, className }: StandardCurveProps) {
+export function StandardCurve({ analysis, xLabel = 'Concentration, µg/mL', yLabel = 'Net reading', samples = false, caption = true, regression = false, width = 338, className }: StandardCurveProps) {
   const { fit, standards, range } = analysis;
   const levels = shadeLevels(standards.map(s => ({ concentration: s.concentration, blank: s.blank })));
   const xMax = range.max;
-  const yMax = Math.max(...standards.filter(s => s.concentration === xMax).map(s => s.mean), predict(fit, xMax));
+  // The straight regression line through the same points the fit used (each standard's mean, the blank at 0).
+  const straight = regression ? fitLinear(standards.map(s => ({ x: s.concentration, y: s.mean }))) : null;
+  const yMax = Math.max(...standards.filter(s => s.concentration === xMax).map(s => s.mean), predict(fit, xMax), straight ? predict(straight, xMax) : 0);
   const x = (c: number) => X0 + (c / xMax) * (X1 - X0);
   const y = (v: number) => Y0 - (Math.max(0, v) / yMax) * (Y0 - Y1);
+  const inside = (v: number) => Math.max(Y1, Math.min(Y0, y(v))).toFixed(1);
   const steps = 64;
-  const line = Array.from({ length: steps + 1 }, (_, i) => {
-    const c = (xMax * i) / steps;
-    return `${i ? 'L' : 'M'}${x(c).toFixed(1)} ${Math.max(Y1, Math.min(Y0, y(predict(fit, c)))).toFixed(1)}`;
-  }).join('');
+  // The fitted curve, solid; with the straight line drawn (regression) there is no other line.
+  const line = straight
+    ? null
+    : Array.from({ length: steps + 1 }, (_, i) => {
+        const c = (xMax * i) / steps;
+        return `${i ? 'L' : 'M'}${x(c).toFixed(1)} ${inside(predict(fit, c))}`;
+      }).join('');
+  // Its R² sits just below and right of the line, three fifths of the way along: the side a BCA plate's standards,
+  // which bend above a straight line, leave empty.
+  const r2At = straight ? { x: x(0.6 * xMax) + 6, y: Number(inside(predict(straight, 0.6 * xMax))) + 16 } : null;
   const step = tickStep(xMax);
   const ticks = Array.from({ length: Math.floor(xMax / step + 1e-9) + 1 }, (_, i) => i * step);
+  const yStep = tickStep(yMax);
+  const yTicks = Array.from({ length: Math.floor(yMax / yStep + 1e-9) + 1 }, (_, i) => i * yStep);
+  const yDecimals = decimalsOf(yStep);
   const shown = samples ? analysis.samples.filter(s => s.flag !== 'missing' && s.flag !== 'above' && s.concentration !== null && s.mean !== null) : [];
   const height = Math.round((width * 210) / 300);
   return (
@@ -79,7 +120,22 @@ export function StandardCurve({ analysis, xLabel = 'Concentration, µg/mL', yLab
           className="block max-w-full"
         >
           <path d={`M${X0} ${Y1}V${Y0}H${X1}`} fill="none" stroke="#d9d9d5" strokeWidth="1" />
-          <path d={line} fill="none" stroke="var(--blue)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          {straight && (
+            <path
+              d={`M${x(0).toFixed(1)} ${inside(predict(straight, 0))}L${x(xMax).toFixed(1)} ${inside(predict(straight, xMax))}`}
+              fill="none"
+              stroke="var(--text)"
+              strokeWidth="1.5"
+              strokeDasharray="4 3"
+              strokeLinecap="round"
+            />
+          )}
+          {straight && r2At && (
+            <text x={r2At.x} y={r2At.y} fontSize="10" fontWeight="600" fill="var(--ink)">
+              R² = {r2Text(straight.r2)}
+            </text>
+          )}
+          {line && <path d={line} fill="none" stroke="var(--blue)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
           {standards.map((s, i) => {
             const stroke = ring(levels[i]!);
             return (
@@ -109,12 +165,23 @@ export function StandardCurve({ analysis, xLabel = 'Concentration, µg/mL', yLab
           <text x={(X0 + X1) / 2} y="204" fontSize="10" fontWeight="600" fill="var(--text)" textAnchor="middle">
             {xLabel}
           </text>
-          <text x="12" y="90" fontSize="10" fontWeight="600" fill="var(--text)" textAnchor="middle" transform="rotate(-90 12 90)">
+          {yTicks.map(t => (
+            <text key={`y${t}`} x={X0 - 5} y={y(t) + 3} fontSize="9" fontWeight="600" fill="var(--text)" textAnchor="end">
+              {t === 0 ? '0' : t.toFixed(yDecimals)}
+            </text>
+          ))}
+          <text x="9" y="90" fontSize="10" fontWeight="600" fill="var(--text)" textAnchor="middle" transform="rotate(-90 9 90)">
             {yLabel}
           </text>
         </svg>
       </div>
       {caption && <figcaption className="mt-2 px-1 text-[15px] leading-[22px] text-text">{fitCaption(fit)}</figcaption>}
+      {straight?.kind === 'linear' && (
+        <figcaption aria-label="Regression line" className="mt-3 flex items-start gap-2 px-1 text-[15px] leading-[22px] text-text">
+          <DashedKey />
+          <span className="min-w-0 flex-1 font-semibold text-ink tabular-nums">{lineText(straight)}</span>
+        </figcaption>
+      )}
     </figure>
   );
 }

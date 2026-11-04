@@ -1,20 +1,7 @@
-import { analyzePlate, type PlateAnalysis, type SampleResult, type WellRole } from '../../../shared/fit.ts';
+import { analyzePlate, type FitPlan, type PlateAnalysis, type WellRole } from '../../../shared/fit.ts';
 import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
-import {
-  commonRows,
-  concentrationRows,
-  concentrationText,
-  massRows,
-  r2Text,
-  runSetup,
-  standardsFor,
-  threeFigures,
-  type PlatePlan,
-  type ResultRow,
-  type StandardVial,
-} from '../../components/lab/model.ts';
+import { concentrationRows, concentrationText, r2Text, runSetup, standardsFor, type PlatePlan, type StandardVial } from '../../components/lab/model.ts';
 import type { RunState } from '../../state/run.ts';
-import { count } from '../../lib/count.ts';
 
 /**
  * The results screen's numbers and words, worked out from the run's plan and readings: which well holds what
@@ -23,14 +10,14 @@ import { count } from '../../lib/count.ts';
  * readings.
  */
 
-/** The four pages, in the order the tabs and the swipe show them; `?page=` takes these names. */
-export const PAGES = ['conc', 'volume', 'same', 'curve'] as const;
+/**
+ * The two pages, in the order the tabs and the swipe show them, the curve first; `?page=` takes these names. Only
+ * the standard curve and the samples' concentrations: the µL-for-an-amount and all-at-one-concentration pages were
+ * taken out (2026-11-04), and a question about either goes to Chapp.
+ */
+export const PAGES = ['curve', 'conc'] as const;
 export type PageId = (typeof PAGES)[number];
 
-/** The design's starting amount: µL that hold 20 µg (Results-Swipe-Volume). */
-export const DEFAULT_AMOUNT = 20;
-/** What each sample is brought up to on the "all at one concentration" page, µL. */
-export const FINAL_VOLUME = 100;
 /** A CV above this, %, gets the highlighter (Results-Swipe's `cvLimit`). */
 export const CV_LIMIT = 10;
 
@@ -60,10 +47,21 @@ export function sameWells(readings: Record<string, number>, roles: WellRole[]) {
   return keys.length === roles.length && roles.every(r => Number.isFinite(readings[r.well]));
 }
 
-/** The analysis of the run's readings; null when they do not make a curve (too few standards read). */
+/**
+ * How the samples are read off the standards: the straight regression line (least squares through each standard's
+ * blank-corrected mean, the blank at 0), the dashed line on the curve page with its equation and R² (2026-11-04: the
+ * user reads concentrations from that equation). A line that does not rise falls back to point to point.
+ */
+export const READ_FIT: FitPlan = { preferred: [], avoid: [] };
+
+/**
+ * The analysis of the run's readings, the samples read off the straight line (READ_FIT); null when they do not make
+ * a curve (too few standards read) or the protocol has no readout. Results, Share and Chapp's answers all use it.
+ */
 export function analyzeRun(p: Protocol, roles: WellRole[], readings: Record<string, number>): PlateAnalysis | null {
   try {
-    const a = analyzePlate(roles, readings, analysisOf(p).fit);
+    analysisOf(p);
+    const a = analyzePlate(roles, readings, READ_FIT);
     return a.standards.some(s => !s.blank) && Number.isFinite(a.range.max) ? a : null;
   } catch {
     return null;
@@ -78,16 +76,6 @@ export const sayText = (say: Say) => say.map(x => (typeof x === 'string' ? x : x
 
 /** R² as every screen writes it (Results-Swipe-Curve, Share-QR, Scan-Import): the lab parts' r2Text. */
 export { r2Text };
-
-/** µg as said and shown: 20, 2.5. */
-export const amountText = (micrograms: number) => String(+micrograms.toFixed(2));
-
-/** µg/mL as mg/mL: 400 → "0.4", 250 → "0.25". */
-export const mgText = (microgramsPerMl: number) => String(+(microgramsPerMl / 1000).toFixed(3));
-
-const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
-/** Small counts in words, as the design writes "all eleven". */
-export const countWord = (n: number) => WORDS[n] ?? String(n);
 
 /** "Sample 7", "Samples 7 and 9", "Samples 3, 7 and 9". */
 export function sampleNames(refs: string[]) {
@@ -134,73 +122,21 @@ export function concentrationSay(a: PlateAnalysis, unit = 'µg/mL'): Say {
   return say;
 }
 
-/** Page 2: µL for `amount` µg, and the lane that holds the largest load (Results-Swipe-Volume). */
-export function volumeSay(a: PlateAnalysis, amount: number): Say {
-  const m = massRows(a, amount);
-  if (!m.most) return ['No sample is in range, so there is nothing to load yet.'];
-  return [
-    'For ',
-    { b: `${amountText(amount)} µg` },
-    ', ',
-    { b: `Sample ${m.most.ref}` },
-    ' needs the most: ',
-    { b: `${m.most.volume.toFixed(1)} µL` },
-    `. Plan lanes of at least ${m.lane} µL.`,
-  ];
-}
-
-/** Page 3's rows and its ceiling: every in-range sample at one concentration, `final` µL of each. */
-export type Common = { ceiling: number; target: number; lowest: string; low: number; count: number; rows: ResultRow[] };
-
 /**
- * The common concentration: commonConcentration()'s ceiling (the lowest sample, rounded down to 0.1 mg/mL), or a
- * lower one the user asked for. Null when no sample is in range.
+ * The curve page: how well the curve fits, and who sits above it (Results-Swipe-Curve). No R² here: the only R² on
+ * the page is the straight regression line's, under the plot (2026-11-04).
  */
-export function common(a: PlateAnalysis, asked: number | null = null, final = FINAL_VOLUME): Common | null {
-  const c = commonRows(a, final);
-  if (!c) return null;
-  const low = a.samples.find(s => s.ref === c.lowest)!.concentration!;
-  const base = { ceiling: c.target, lowest: c.lowest, low, count: inRange(a).length };
-  if (asked === null || asked >= c.target) return { ...base, target: c.target, rows: c.rows };
-  const rows: ResultRow[] = a.samples.map((s: SampleResult) => {
-    if (s.flag !== 'ok' || !s.concentration) return { n: s.ref, name: `Sample ${s.ref}`, value: 'rerun', note: true, side: '' };
-    const take = (asked / s.concentration) * final;
-    return { n: s.ref, name: `Sample ${s.ref}`, value: take.toFixed(1), side: (final - take).toFixed(1), mark: s.ref === c.lowest };
-  });
-  return { ...base, target: asked, rows };
-}
-
-/** Page 3's sentence (Results-Swipe-Same), or how it reads after a lower concentration was asked for. */
-export function commonSay(c: Common | null, final = FINAL_VOLUME): Say {
-  if (!c) return ['No sample is in range, so there is nothing to bring to one concentration yet.'];
-  const tail = ` For ${final} µL of each: take, then buffer.`;
-  if (c.target < c.ceiling) return [`All ${countWord(c.count)} at `, { b: `${mgText(c.target)} mg/mL` }, '.', tail];
-  return [{ b: `${mgText(c.target)} mg/mL` }, ` is the highest all ${countWord(c.count)} can reach; Sample ${c.lowest} is only ${threeFigures(c.low)} µg/mL.`, tail];
-}
-
-/** Asked for more than the lowest sample allows: why not, and the highest there is. */
-export function tooHighSay(c: Common, asked: number): Say {
-  return [
-    `${mgText(asked)} mg/mL is too high: Sample ${c.lowest} is only ${threeFigures(c.low)} µg/mL. `,
-    { b: `${mgText(c.ceiling)} mg/mL` },
-    ` is the highest all ${countWord(c.count)} can reach.`,
-  ];
-}
-
-/** Page 4: how well the curve fits, and who sits above it (Results-Swipe-Curve). */
 export function curveSay(a: PlateAnalysis, unit = 'µg/mL'): Say {
   const good = a.fit.r2 >= 0.99;
-  const say: Say = [good ? 'The curve fits well: ' : 'The curve fits loosely: ', { b: `R² ${r2Text(a.fit.r2)}` }, '.'];
+  const say: Say = [good ? 'The curve fits well.' : 'The curve fits loosely.'];
   const high = above(a);
   if (high.length) say.push(` ${sampleNames(high.map(s => s.ref))} ${high.length === 1 ? 'sits' : 'sit'} above the top standard, ${concentrationText(a.range.max)} ${unit}.`);
   if (!good) say.push(' Check the standards’ wells before trusting the numbers.');
   return say;
 }
 
-/** The four tabs: µg/mL · 20 µg · 0.4 mg/mL · Curve. */
-export function tabLabels(amount: number, c: Common | null, unit = 'µg/mL') {
-  return [unit, `${amountText(amount)} µg`, c ? `${mgText(c.target)} mg/mL` : 'Same', 'Curve'];
-}
+/** The two tabs, in PAGES' order: Curve · µg/mL (or the kit's own unit). */
+export const tabLabels = (unit = 'µg/mL') => ['Curve', unit];
 
 /** Page 1's rows (concentration and CV), with the design's CV limit. */
 export const concentrationList = (a: PlateAnalysis) => concentrationRows(a, CV_LIMIT);
@@ -217,10 +153,6 @@ export function rerunLabel(a: PlateAnalysis) {
 // ─── What was said, understood on the phone ──────────────────────────────────────────────────────────────────────
 
 export type Heard =
-  /** "How much for 30 µg?": the µL page for another amount. */
-  | { kind: 'amount'; micrograms: number }
-  /** "All at 0.25 mg/mL": the one-concentration page at that concentration. */
-  | { kind: 'common'; microgramsPerMl: number }
   /** "Show the curve". */
   | { kind: 'page'; page: PageId }
   /** "Here's a sample plate-reader export": Chapp's example readings. */
@@ -238,50 +170,19 @@ function normalize(text: string) {
     .trim();
 }
 
-const NUMBER = String.raw`(\d+(?:\.\d+)?|\.\d+|[a-z]+(?:\s[a-z]+)?)`;
-const MICRO = String.raw`(?:µg|ug|mcg|micrograms?|micro\s?grams?)`;
-const MILLI = String.raw`(?:mg|milligrams?|milli\s?grams?)`;
-const PER_ML = String.raw`\s*(?:\/|per|a)\s*(?:ml|mls|milliliters?|millilitres?|mil)\b`;
-
-/** "30", "2.5", "thirty", "twenty five" → a number. Words go through the bench commands' own counting. */
-function amountOf(words: string): number | null {
-  if (/^\d*\.?\d+$/.test(words)) return Number(words);
-  // A number in words is at most two of them; the regex may have taken a word before it ("for thirty").
-  const parts = words.split(' ');
-  return count(words) ?? (parts.length === 2 ? count(parts[1]!) : null);
-}
-
 const PAGE_WORDS: [RegExp, PageId][] = [
   [/^(?:the )?(?:standard )?curve$|^(?:the )?fit$/, 'curve'],
-  [/^(?:the )?(?:concentrations?|µg per ml|µg\/ml|micrograms per ml)$/, 'conc'],
-  [/^(?:the )?(?:volumes?|µl|microliters?|microlitres?|loading volumes?)$/, 'volume'],
-  [/^(?:the )?(?:same concentration|one concentration|common concentration|dilutions?)$/, 'same'],
+  [/^(?:the )?(?:concentrations?|protein concentrations?|µg per ml|µg\/ml|micrograms per ml)$/, 'conc'],
 ];
 
 /**
- * What a sentence said on the results screen asks for, when it can be answered here without Chapp's model: another
- * amount, another common concentration, a page, the example plate, or sharing. Anything else returns null and goes
- * to the server (useConverse).
+ * What a sentence said on the results screen asks for, when it can be answered here without Chapp's model: a page,
+ * the example plate, or sharing. Anything else (µL for 30 µg, all at 0.25 mg/mL, why the curve bends) returns null
+ * and goes to the server (useConverse).
  */
 export function parseHeard(text: string): Heard | null {
   const said = normalize(text);
   if (!said) return null;
-
-  // A concentration first, so "0.4 mg/mL" is never read as an amount.
-  const conc = said.match(new RegExp(`${NUMBER}\\s*(${MICRO}|${MILLI})${PER_ML}`));
-  if (conc) {
-    const n = amountOf(conc[1]!);
-    if (n !== null && n > 0) {
-      const perMl = new RegExp(`^${MILLI}$`).test(conc[2]!) ? n * 1000 : n;
-      if (perMl <= 100000) return { kind: 'common', microgramsPerMl: perMl };
-    }
-  }
-
-  const mass = said.match(new RegExp(`${NUMBER}\\s*${MICRO}(?!\\s*(?:\\/|per|a)\\s*(?:ml|mls|milliliters?|millilitres?|mil)\\b)`));
-  if (mass) {
-    const n = amountOf(mass[1]!);
-    if (n !== null && n > 0 && n <= 10000) return { kind: 'amount', micrograms: n };
-  }
 
   if (/\b(?:a|the|your|chapp's|some)\s+sample\s+(?:plate\s?reader\s+|reader\s+)?(?:export|plate|data|readings?|file)\b|^sample data$/.test(said)) {
     return { kind: 'sample' };

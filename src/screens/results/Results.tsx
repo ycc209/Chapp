@@ -4,7 +4,7 @@ import { unitOf } from '../../../shared/calc.ts';
 import { sampleReadings } from '../../../shared/fit.ts';
 import { analysisOf } from '../../../shared/protocol.ts';
 import { ChappHeader } from '../../components/chapp/ChappHeader.tsx';
-import { MarkChips, ResultRows, SampleDataTag, SectionHead, StandardCurve, benchSteps, curveLabels, massRows } from '../../components/lab/index.ts';
+import { MarkChips, ResultRows, SampleDataTag, SectionHead, StandardCurve, benchSteps, curveLabels } from '../../components/lab/index.ts';
 import { BottomBar } from '../../components/voice/BottomBar.tsx';
 import { cn } from '../../lib/cn.ts';
 import { useProtocol } from '../../state/protocol.ts';
@@ -19,27 +19,18 @@ import { useConverse } from '../home/useConverse.ts';
 import { shortName } from '../protocol/content.ts';
 import { useFace } from '../share/parts.tsx';
 import {
-  DEFAULT_AMOUNT,
-  FINAL_VOLUME,
   PAGES,
-  amountText,
   analyzeRun,
-  common,
-  commonSay,
   concentrationList,
   concentrationSay,
   curveSay,
-  mgText,
   parseHeard,
-  r2Text,
   rerunLabel,
   reruns,
   runPlate,
   sameWells,
   sayText,
   tabLabels,
-  tooHighSay,
-  volumeSay,
   type Say,
 } from './analysis.ts';
 import { Pager } from './Pager.tsx';
@@ -47,10 +38,6 @@ import { Pager } from './Pager.tsx';
 const PILL = 'flex min-h-10 cursor-pointer items-center rounded-[20px] px-[18px] text-[15px] leading-5 font-semibold no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue';
 const WHITE_PILL = cn(PILL, 'bg-white text-ink shadow-[0_1px_2px_rgba(17,17,19,0.06),0_2px_8px_rgba(17,17,19,0.04)]');
 const INK_PILL = cn(PILL, 'gap-[7px] bg-ink text-white');
-const HINT = 'm-0 px-1 text-[13px] leading-[18px] font-semibold text-text';
-
-/** The amounts offered on the µL page; anything else is said ("how much for 15 µg?"). */
-const AMOUNTS = [10, 20, 30, 50];
 
 const pageFrom = (asked: string | null) => {
   const i = PAGES.indexOf(asked as (typeof PAGES)[number]);
@@ -73,26 +60,21 @@ function Said({ say }: { say: Say }) {
 }
 
 /**
- * Results (Results-Swipe, -Volume, -Same, -Curve): the plate read back four ways, swiped or picked from the tabs —
- * µg/mL with each sample's CV, µL that hold an amount (20 µg to start, another one tapped or said), every sample at
- * one concentration, and the standard curve. Every number is analyzePlate() over the run's readings in the wells
- * plateMap() gave them; Chapp's sentence above says what matters on that page. Chapp's example readings carry the
- * "Sample data" tag in the corner the whole time (STORYBOARD ⑦). With no readings yet, the reader's export is asked
- * for, and the example plate is one tap (or "here's a sample plate-reader export") away.
+ * Results (Results-Swipe-Curve, Results-Swipe): the plate read back two ways, swiped or picked from the tabs — the
+ * standard curve (the straight regression line the concentrations are read from, dashed, with its R² beside it and
+ * its equation below, and no other line) and the samples' protein concentration (µg/mL with each sample's CV). Every
+ * number is analyzePlate() over the
+ * run's readings in the wells plateMap() gave them; Chapp's sentence above says what matters on that page. Chapp's
+ * example readings carry the "Sample data" tag in the corner the whole time (STORYBOARD ⑦). With no readings yet, the
+ * reader's export is asked for, and the example plate is one tap (or "here's a sample plate-reader export") away.
  *
- * For design review a page opens from the address: ?page=conc|volume|same|curve (and ?amount=30).
+ * For design review a page opens from the address: ?page=curve|conc.
  */
 export function ResultsScreen() {
   useFace('excited');
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [page, setPage] = useState(() => pageFrom(params.get('page')));
-  const [amount, setAmount] = useState(() => {
-    const n = Number(params.get('amount'));
-    return n > 0 && n <= 10000 ? n : DEFAULT_AMOUNT;
-  });
-  /** A common concentration asked for below the highest (µg/mL); null is the highest. */
-  const [asked, setAsked] = useState<number | null>(null);
   /** An answer worked out here for one page ("0.6 mg/mL is too high…"), until the page changes. */
   const [note, setNote] = useState<{ page: number; say: Say } | null>(null);
   const [talked, setTalked] = useState(false);
@@ -130,9 +112,8 @@ export function ResultsScreen() {
     [protocol, plate, readings, hasReadings],
   );
   const sample = from === 'sample' && hasReadings;
-  const same = useMemo(() => (analysis ? common(analysis, asked) : null), [analysis, asked]);
   const labels = useMemo(() => (protocol ? curveLabels(protocol, procedure) : null), [protocol, procedure]);
-  // The unit the standards and results are in: the kit's own (nmol/well), or µg/mL, which the mass pages need.
+  // The unit the standards and results are in: the kit's own (nmol/well), or µg/mL.
   const unit = useMemo(() => {
     try {
       return protocol ? unitOf(protocol, procedure) : 'µg/mL';
@@ -189,19 +170,7 @@ export function ResultsScreen() {
     setNote(n => (n?.page === p ? n : null));
   };
 
-  const pickAmount = (micrograms: number) => {
-    setAmount(micrograms);
-    setNote(null);
-    setTalked(false);
-  };
-  const pickCommon = (target: number) => {
-    setAsked(same && target >= same.ceiling ? null : target);
-    setNote(null);
-    setTalked(false);
-  };
-
-  // What was said or typed: another amount, a concentration, a page, the example plate or Share are answered here,
-  // read aloud; the rest goes to Chapp.
+  // What was said or typed: a page, the example plate or Share are answered here, read aloud; the rest goes to Chapp.
   const heard = (text: string) => {
     const h = parseHeard(text);
     if (!h || (!analysis && h.kind !== 'sample' && h.kind !== 'share')) {
@@ -224,25 +193,6 @@ export function ResultsScreen() {
         say = ['These are your plate’s readings; I’ll keep them.'];
         hold = page;
         break;
-      case 'amount':
-        setAmount(h.micrograms);
-        setPage(1);
-        say = volumeSay(analysis!, h.micrograms);
-        break;
-      case 'common': {
-        setPage(2);
-        const highest = common(analysis!);
-        if (highest && h.microgramsPerMl > highest.ceiling) {
-          setAsked(null);
-          say = tooHighSay(highest, h.microgramsPerMl);
-          hold = 2;
-        } else {
-          const target = highest && h.microgramsPerMl < highest.ceiling ? h.microgramsPerMl : null;
-          setAsked(target);
-          say = commonSay(common(analysis!, target));
-        }
-        break;
-      }
       case 'page': {
         const p = PAGES.indexOf(h.page);
         setPage(p);
@@ -254,8 +204,7 @@ export function ResultsScreen() {
     void speak(sayText(say)).catch(() => {});
   };
 
-  const pageSay = (p: number): Say =>
-    !analysis ? [] : p === 0 ? concentrationSay(analysis, unit) : p === 1 ? volumeSay(analysis, amount) : p === 2 ? commonSay(same) : curveSay(analysis, unit);
+  const pageSay = (p: number): Say => (!analysis ? [] : PAGES[p] === 'curve' ? curveSay(analysis, unit) : concentrationSay(analysis, unit));
 
   // Held, the words show in the bar's own bubble.
   const hearing = voice !== 'idle' && voice !== 'holding' && (heardSoFar || interim);
@@ -283,68 +232,26 @@ export function ResultsScreen() {
   );
 
   const rerun = analysis ? rerunLabel(analysis) : null;
-  const tabs = analysis ? tabLabels(amount, same, unit) : null;
-  const vols = analysis ? massRows(analysis, amount) : null;
-  const amounts = [...new Set([...AMOUNTS, amount])].sort((x, y) => x - y);
-  const targets = same ? [...new Set([same.ceiling, ...[1, 2, 3].map(k => same.ceiling - k * 100).filter(t => t > 0), same.target])].sort((x, y) => y - x) : [];
+  const tabs = analysis ? tabLabels(unit) : null;
 
+  // In PAGES' order: the curve, then the concentrations.
   const pages = analysis
     ? [
-        {
-          label: 'Concentration',
-          content: (
-            <>
-              <SectionHead aside={`${unit} · CV`}>Your samples</SectionHead>
-              <ResultRows rows={concentrationList(analysis)} side="cv" />
-            </>
-          ),
-        },
-        {
-          label: `Volume for ${amountText(amount)} µg`,
-          content: unit !== 'µg/mL' ? massOnly(unit) : (
-            <>
-              <SectionHead aside={`µL for ${amountText(amount)} µg`}>Your samples</SectionHead>
-              <ResultRows rows={vols!.rows} />
-              <div className="mt-5 flex flex-col gap-2">
-                <MarkChips
-                  aria-label="Amount to load"
-                  options={amounts.map(v => ({ value: v, label: `${amountText(v)} µg` }))}
-                  value={amount}
-                  onChange={pickAmount}
-                />
-                <p className={HINT}>Or say another amount, like “{amount === 10 ? 30 : 10} µg”</p>
-              </div>
-            </>
-          ),
-        },
-        {
-          label: same ? `All at ${mgText(same.target)} mg/mL` : 'All at one concentration',
-          content: unit !== 'µg/mL' ? massOnly(unit) : (
-            <>
-              <SectionHead aside="take · buffer, µL">Per {FINAL_VOLUME} µL</SectionHead>
-              {same ? (
-                <>
-                  <ResultRows rows={same.rows} side="buffer" />
-                  <div className="mt-5 flex flex-col gap-2">
-                    <MarkChips
-                      aria-label="Concentration for all"
-                      options={targets.map(t => ({ value: t, label: `${mgText(t)} mg/mL` }))}
-                      value={same.target}
-                      onChange={pickCommon}
-                    />
-                    <p className={HINT}>Or say a concentration, like “0.25 mg/mL”</p>
-                  </div>
-                </>
-              ) : null}
-            </>
-          ),
-        },
         {
           label: 'Standard curve',
           content: (
             <>
-              <SectionHead aside={`R² ${r2Text(analysis.fit.r2)}`}>Standard curve</SectionHead>
-              <StandardCurve analysis={analysis} xLabel={labels?.x} yLabel={labels?.y} />
+              <SectionHead>Standard curve</SectionHead>
+              <StandardCurve analysis={analysis} xLabel={labels?.x} yLabel={labels?.y} caption={false} regression />
+            </>
+          ),
+        },
+        {
+          label: 'Protein concentration',
+          content: (
+            <>
+              <SectionHead aside={`${unit} · CV`}>Your samples</SectionHead>
+              <ResultRows rows={concentrationList(analysis)} side="cv" />
             </>
           ),
         },
@@ -434,6 +341,3 @@ export function ResultsScreen() {
     </div>
   );
 }
-
-/** The mass pages (µL for an amount, all at one mg/mL) are for kits that read a mass concentration; this one reads otherwise. */
-const massOnly = (unit: string) => <p className="px-1 text-[15px] leading-5 text-text">This page works in µg and mg/mL. This kit reads in {unit}, so there is nothing to work out here.</p>;

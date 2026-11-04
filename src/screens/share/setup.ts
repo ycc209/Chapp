@@ -1,7 +1,8 @@
 import { analyzePlate, type WellRole } from '../../../shared/fit.ts';
-import { analysisOf, type Protocol } from '../../../shared/protocol.ts';
+import type { Protocol } from '../../../shared/protocol.ts';
 import { SHARE_FORMAT, type SharedComponent, type SharedPlan, type SharedSetup, type ShareScope, type StoredShare } from '../../../shared/share.ts';
 import { NO_EDITS, runSetup, type RunPlan } from '../../components/lab/model.ts';
+import { READ_FIT } from '../results/analysis.ts';
 import type { Cover } from '../../state/library.ts';
 import type { RunState } from '../../state/run.ts';
 
@@ -123,7 +124,8 @@ export function standardR2(
   const plate = sharePlate(protocol, run);
   if (!plate) return undefined;
   try {
-    const r2 = analyzePlate(plate.roles, run.readings, analysisOf(protocol).fit).fit.r2;
+    // The straight line's R², as the curve page writes it beside the line (READ_FIT).
+    const r2 = analyzePlate(plate.roles, run.readings, READ_FIT).fit.r2;
     return Number.isFinite(r2) ? Math.min(1, Math.max(0, r2)) : undefined;
   } catch {
     return undefined;
