@@ -279,7 +279,7 @@ const samePlan = (a: SharedPlan, b: SharedPlan) =>
   (a.standards ?? 'kit') === (b.standards ?? 'kit');
 
 /**
- * "CJ Yu shared a Pierce BCA run: the protocol, a plan for 12 samples in duplicate, and the results from today. The kit
+ * "A labmate shared a Pierce BCA run: the protocol, a plan for 12 samples in duplicate, and the results from today. The kit
  * photos are not included; photograph your own and I will name the bottles." Shorter when the share was trimmed.
  */
 function Shared({ share, name }: { share: StoredShare; name: string }) {

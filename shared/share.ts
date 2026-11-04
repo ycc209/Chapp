@@ -97,7 +97,7 @@ export const SharedResults = z
 const fields = {
   format: z.literal(SHARE_FORMAT),
   scope: ShareScope,
-  /** Who shared it, when the phone knows ("CJ Yu shared a Pierce BCA run"). */
+  /** Who shared it, when the phone knows ("A labmate shared a Pierce BCA run"). */
   from: z.string().trim().min(1).max(40).optional(),
   protocolId: Id,
   /** The protocol's procedure the plan is for ("microplate"). */

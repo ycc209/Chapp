@@ -50,7 +50,7 @@ const PHOTO = /^data:image\/(?:jpeg|png|webp);base64,/;
 /**
  * The setup to share for one trim. The plan travels unless it is just the protocol; the results only with everything,
  * and only when there are readings. The kit photos and the kit's `cover` travel with any trim unless the user leaves
- * them out (10/28: on by default). `from` names the sharer ("CJ Yu shared…").
+ * them out (10/28: on by default). `from` names the sharer ("A labmate shared…").
  */
 export function buildShare(
   scope: ShareScope,
