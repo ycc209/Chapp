@@ -126,8 +126,7 @@ The model understands and proposes; the app checks, computes and decides.
   the app (`shared/calc.ts`, `shared/fit.ts`), never from the model.
 - **A front assistant and specialists.** A front assistant hears every sentence first, at the lowest effort, and
   finishes chat and bench commands by itself in one call, under two seconds. Why and how, new manuals and numbers go
-  to a specialist that continues the same conversation (`server/ai/agents.ts`). The plainest commands (next, back,
-  the timer) are matched on the server by sentence embedding and skip the model (`server/ai/router.ts`).
+  to a specialist that continues the same conversation (`server/ai/agents.ts`).
 - **One conversation per experiment.** The conversation is the thread through the app and the screens are what it
   opens. Every timer rings from any screen and reaches the lock screen.
 
@@ -170,7 +169,6 @@ made it slower (1 November, three runs each).
 | A kit video sent to SAM at 720p, 10 fps | An 11 s video followed in 9.3 s, not 31.6 s |
 | A science question answered from memory first, then with citations | The first answer at 3.2 s, not 24.0 s |
 | The conversation replayed from the server's own record | About 7 s faster per call than continuing Meta's stored response |
-| The plainest commands matched by embedding | No model call at all |
 
 Before all of this (28 October, reading only, no search), the whole PDF in every call at medium took 96.6 s with
 nothing on screen until done, and thinking more only made it slower: 189 s at xhigh, 215 s at max, with no fewer
@@ -223,7 +221,6 @@ are left).
 - [three.js](https://github.com/mrdoob/three.js), [React Three Fiber](https://github.com/pmndrs/react-three-fiber), [drei](https://github.com/pmndrs/drei) (3D Chapp)
 - [node-qrcode](https://github.com/soldair/node-qrcode), [jsQR](https://github.com/cozmo/jsQR) (sharing by QR code)
 - [A2UI](https://github.com/google/A2UI) v0.9 format for the cards Chapp draws (rendered by Chapp's own code)
-- [Transformers.js](https://github.com/huggingface/transformers.js) running [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) on the server (the embedding fast path for bench commands)
 - [Vitest](https://github.com/vitest-dev/vitest), [Puppeteer](https://github.com/puppeteer/puppeteer) (tests and screenshots)
 
 ## Layout
@@ -231,7 +228,7 @@ are left).
 - `shared/`: the protocol format (`protocol.ts`, [`chapp.protocol/1`](docs/PROTOCOL_FORMAT.md)), the numbers (`calc.ts`, `units.ts`, `fit.ts`),
   the cards Chapp may draw (`a2ui.ts`) and what a QR code carries (`share.ts`)
 - `server/ai/`: the Meta models (`meta.ts`), the front assistant and its specialists (`agents.ts`,
-  `conversation.ts`), the embedding fast path (`router.ts`), the checks against the user's words (`authorize.ts`),
+  `conversation.ts`), the checks against the user's words (`authorize.ts`),
   the confirmations (`confirm.ts`) and the mock (`mock.ts`); `server/demo/`: the demo BCA protocol a clean checkout
   starts with
 - `src/screens/`: one folder per screen; `src/state/`: the run and the changes Chapp makes to it; `src/voice/`:

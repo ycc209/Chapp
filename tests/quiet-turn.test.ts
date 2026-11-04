@@ -4,7 +4,7 @@ import { confirmation } from '../server/ai/confirm.ts';
 import { createConversation } from '../server/ai/conversation.ts';
 
 // A bench operation ends with the app's receipt: the app confirms it itself, so a command is one model call, or none
-// at all when the embedding router performed it.
+// at all when the app performed it through `route`.
 
 type Json = Record<string, any>;
 const message = (text: string, id = 'response_final') => ({ id, output: [{ type: 'message', content: [{ type: 'output_text', text }] }] });
@@ -62,7 +62,7 @@ describe("a bench operation ends with the app's receipt", () => {
   });
 });
 
-describe('the embedding fast path in the conversation', () => {
+describe('a command performed without a model call', () => {
   it('performs a routed command with no model call, confirms it, and records the turn for the next one', async () => {
     const respond = vi.fn(async (_body: Json) => message('這一步要加 working reagent。', 'front_2'));
     const route = vi.fn(async (request: { text: string }) => request.text === '下一步' ? { type: 'nextStep' as const } : null);

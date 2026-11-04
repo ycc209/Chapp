@@ -5,7 +5,7 @@ import { createMetaProvider, type MetaOptions } from './meta.ts';
 
 /**
  * The provider AI_PROVIDER asks for (see provider.ts), built from the environment. Throws on a bad setting. `extras`
- * reach the Meta provider only: the server passes its embedding router (index.ts); tests pass nothing.
+ * reach the Meta provider only; nothing passes any today.
  */
 export function createProvider(env: Record<string, string | undefined> = process.env, extras: Pick<MetaOptions, 'route'> = {}): { name: ProviderName; provider: AIProvider } {
   const name = chooseProvider(env);

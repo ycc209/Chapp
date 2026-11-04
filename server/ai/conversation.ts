@@ -10,7 +10,6 @@ import { actionFromArguments, proposalState, runLocalTool, type ToolResult } fro
 import { AGENTS, agentPrompt, DEFAULT_EFFORTS, HANDOFF_PROGRESS, handoffTarget, turnState, type AgentName, type Efforts } from './agents.ts';
 import { startWhenAsked } from './authorize.ts';
 import { confirmation } from './confirm.ts';
-import type { Router } from './router.ts';
 
 type Json = Record<string, any>;
 type FunctionCall = { type: 'function_call'; call_id: string; name: string; arguments: string };
@@ -23,8 +22,11 @@ type Options = {
   reviewAnswer?: (options: Parameters<typeof reviewScientificAnswer>[1]) => ReturnType<typeof reviewScientificAnswer>;
   previewProtocol?: (request: { protocolId?: string; url?: string }, live: ConverseLive) => Promise<ToolResult>;
   importProtocol: (url: string, live: ConverseLive) => Promise<ToolResult>;
-  /** The embedding fast path (router.ts): a bench command performed without a model call, or null for the model's turn. */
-  route?: Router['route'];
+  /**
+   * A bench command the app can perform without a model call (null: the model's turn). Nothing is wired to it in the
+   * app: every model Chapp calls is Meta's. (Until 2026-11-04 a sentence-embedding model matched "下一步" here.)
+   */
+  route?: (request: ConverseRequest) => Promise<Action | null>;
   /** One reasoning effort for every agent (a measuring sweep); `efforts` names each agent's own. */
   effort?: string;
   efforts?: Partial<Efforts>;
@@ -44,7 +46,7 @@ const conciseError = (error: unknown) => errorMessage(error).slice(0, 1000);
 const uniqueSources = (sources: Source[]) => [...new Map(sources.map(s => [`${s.url}#${s.page ?? ''}`, s])).values()].slice(0, 24);
 const CJK = /[぀-ヿ㐀-䶿一-鿿]/;
 const QUICK_TAKE = `Answer the question briefly from what you know, in the user's language (Traditional Chinese as used in Taiwan for Chinese): two to four plain sentences with the core of the answer, the way a knowledgeable colleague would across the bench. Chapp is finding and reading the original sources at this moment and will replace what you write with a cited answer, so do not mention sources, papers, checking, links or markers, give no number you are not sure of, and ask nothing. Plain text only.`;
-/** A performed action as the perform_action arguments the model would have written: the record of a routed turn. */
+/** A performed action as the perform_action arguments the model would have written: the record of a turn without a model. */
 const toolArguments = (action: Action): Json => ({ type: action.type, ...('id' in action ? { target: action.id } : {}), ...('protocolId' in action && action.protocolId ? { target: action.protocolId } : {}), ...('seconds' in action ? { value: action.seconds } : {}), ...('now' in action && action.now ? { yes: true } : {}) });
 /**
  * Every call replays the conversation itself instead of chaining on Meta's stored response: on 2026-10-31 a
@@ -81,7 +83,7 @@ type Turn = {
   agent: AgentName;
   nextAgent?: AgentName;
   handoffs: number;
-  /** Performed by the router without a model call; the model hears of it only if the app could not do it. */
+  /** Performed through `route` without a model call; the model hears of it only if the app could not do it. */
   routed?: boolean;
   /** Research begun at the handoff to the science specialist, for its research_science call to collect. */
   research?: { result: Promise<ToolResult>; abort: AbortController };
@@ -485,7 +487,7 @@ export function createConversation(options: Options) {
     const evidence = request.previousResponseId ? evidenceCache.get(request.previousResponseId)?.registry ?? new EvidenceRegistry() : new EvidenceRegistry();
     // Every turn starts at the front, whoever answered the last one: it is the cheapest call, and it routes again.
     const turn: Turn = { agent: 'front', handoffs: 0, lastVisibleAnswer: request.previousResponseId ? evidenceCache.get(request.previousResponseId)?.visibleAnswer : undefined, evidence, reads: 0, previews: 0, needsReview: Boolean(request.previousResponseId && evidenceCache.get(request.previousResponseId)?.reviewFollowup), request, chain: request.previousResponseId, prior: priorFor(request), transcript: [user], sources: [], rounds: 0, researchCalls: 0, scienceCalls: 0, imports: 0, deadline: Date.now() + timeoutMs };
-    // The plainest bench commands skip even that call (router.ts): the app performs the one operation and confirms it.
+    // A command `route` can perform skips even that call: the app performs the one operation and confirms it.
     const action = options.route ? await options.route(request) : null;
     if (action) {
       const token = randomUUID();

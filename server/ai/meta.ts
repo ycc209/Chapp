@@ -1,13 +1,12 @@
 import { z } from 'zod';
 import { createConversation, responseEvents } from './conversation.ts';
-import type { Router } from './router.ts';
 import { createScientificResearch, reviewScientificAnswer } from './science.ts';
 import { createProtocolPreview } from './protocolPreview.ts';
 import { readSource } from './sourceReader.ts';
 import { candidatesFromResponse } from './evidence.ts';
 import { downloadPdf, readManual } from '../imports.ts';
 import { checkA2ui, componentsOf, dataPaths, numbersIn, type A2uiMessage } from '../../shared/a2ui.ts';
-import type { Action, AIProvider, ConverseContext, ConverseReply, Expression, FindProtocolLive, FoundProtocol, ProtocolIntro, Source, Transcript } from '../../shared/ai.ts';
+import type { Action, AIProvider, ConverseContext, ConverseReply, ConverseRequest, Expression, FindProtocolLive, FoundProtocol, ProtocolIntro, Source, Transcript } from '../../shared/ai.ts';
 import type { Protocol } from '../../shared/protocol.ts';
 import { dataModel } from '../../src/components/a2ui/data.ts';
 import type { RunPlan } from '../../src/components/lab/model.ts';
@@ -63,8 +62,8 @@ export type MetaOptions = {
   timeouts?: { converse?: number; findProtocol?: number; transcribe?: number; attempt?: number; draw?: number };
   /** Overrides EFFORT, for measuring (scripts/converse-smoke.ts --effort); `converse` sets every conversation agent. */
   effort?: Partial<Record<keyof typeof EFFORT | 'converse', Effort>>;
-  /** The embedding fast path for the plainest bench commands (router.ts); none in tests. */
-  route?: Router['route'];
+  /** A bench command the app performs without a model call (conversation.ts `route`); nothing is wired to it. */
+  route?: (request: ConverseRequest) => Promise<Action | null>;
 };
 
 type Json = Record<string, any>;

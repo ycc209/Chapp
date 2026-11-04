@@ -10,7 +10,7 @@ pictures, and how a manual is read, with every benchmark number.
 - [The user's bottles, upright and whole](#the-users-bottles-upright-and-whole)
 - [How Chapp reads a manual](#how-chapp-reads-a-manual)
 - [The benchmark, every setup](#the-benchmark-every-setup)
-- [Science questions and bench commands](#science-questions-and-bench-commands)
+- [Science questions](#science-questions)
 
 ## A step at the bench
 
@@ -45,10 +45,8 @@ ends reaches the lock screen.
   operation ends with the app's own receipt and confirmation (`server/ai/confirm.ts`): a command is one model call,
   or none.
 - **Every sentence goes to the model**, bench commands included ("next", "A to D done", "B3 is bad, use H12"): nothing
-  is matched by pattern on the phone. The one exception runs on the server: the plainest bench commands (next step,
-  back a step, the timer) are matched by sentence embedding against example phrasings and performed at once when the
-  match is unmistakable (`server/ai/router.ts`). A question that only mentions a command goes to the model. The app
-  checks what comes back either way.
+  is matched by pattern on the phone or the server, and the app checks what comes back. (Until 4 November a
+  sentence-embedding model on the server performed the plainest commands itself; it was not a Meta model, so it went.)
 - **One way to start** (`src/state/start.ts`). "Start the experiment", said or typed, is one action (`startRun`): back
   to the run where it is once it has begun; a start card under the answer (the plan, Start, Change the plan) while the
   plan was never set; else straight into the run. A "yes" to the card starts it. The steps are never written out as a
@@ -256,9 +254,8 @@ nothing has no time, so the median of a setup with one is of its other two runs.
 The README's chart keeps one row per model (its fastest setup that was 100% right in all three runs, or else its
 fastest) and Muse Spark 1.3 Mixed, and leaves out Muse Spark 1.1, as the demo video does.
 
-## Science questions and bench commands
+## Science questions
 
 - **A science question** (為什麼 BCA 會變紫, 31 October 2026, n = 3, through `/api/converse` from outside): a quick call
   says what the model already knows, marked from memory, at 3.2 ± 0.5 s, while the sources are read; the cited,
   reviewed answer then replaces it at 24.0 ± 3.0 s, with 2–3 sources.
-- **Plain commands** like 下一步 skip the model: matched on the server by embedding, confirmed by the app.
