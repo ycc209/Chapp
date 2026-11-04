@@ -118,7 +118,8 @@ describe('mock provider: converse', () => {
         url: BCA.source.url,
         title: BCA.source.title,
         page: 2,
-        quote: 'When reagent B is first added to reagent A, turbidity is observed that quickly disappears on mixing to yield a clear, green WR.',
+        // The manual's own sentence, from the hand-made protocol (data/, not copied here).
+        quote: expect.stringMatching(/turbidity/),
       },
     ]);
     // Said as a statement at the bench, or asked on another screen with the protocol open: the same note.
@@ -127,7 +128,8 @@ describe('mock provider: converse', () => {
   });
 
   it.skipIf(!local)('finds the step or note a bench question is about', async () => {
-    expect(await ask('How long do I incubate?', run)).toMatchObject({ say: 'Cover the plate and incubate at 37°C for 30 minutes.', sources: [{ page: 3 }] });
+    // The step's own words from the manual, short enough to say (data/, not copied here).
+    expect(await ask('How long do I incubate?', run)).toMatchObject({ say: expect.stringMatching(/incubate at 37°C/), sources: [{ page: 3 }] });
     expect((await ask('How long does the working reagent keep?', run)).say).toBe('Keeps for several days at room temperature in a closed container.');
     expect((await ask('I only have a little sample, can I use 10 µL?', run)).sources[0]?.page).toBe(3);
   });

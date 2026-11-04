@@ -48,7 +48,7 @@ describe('what a mix picture says', () => {
   });
 
   it('counts in parts only where the manual does', () => {
-    const p = protocol([{ id: 'a', name: 'BCA Reagent A' }, { id: 'b', name: 'BCA Reagent B' }], [{ component: 'a', parts: 50 }, { component: 'b', parts: 1 }], 'Prepare WR by mixing 50 parts of BCA Reagent A with 1 part of BCA Reagent B (50:1).', 'WR');
+    const p = protocol([{ id: 'a', name: 'BCA Reagent A' }, { id: 'b', name: 'BCA Reagent B' }], [{ component: 'a', parts: 50 }, { component: 'b', parts: 1 }], 'Mix 50 parts of Reagent A with 1 part of Reagent B.', 'WR');
     expect(arrows(p)).toEqual(['50 parts', '1 part']);
     expect(tube(p)).toBe('WR · 50 : 1');
   });
@@ -72,7 +72,7 @@ describe('what the pictures say while the protocol plays, sized to the plan', ()
     [...new Set(scenes.get(id)!.actions.flatMap(a => (a.id === 'plate' && a.set?.wells ? Object.keys(a.set.wells) : [])))].sort();
 
   it("writes the run's amounts on the arrows and what they make by the tube, in place of the manual's parts", () => {
-    const p = protocol([{ id: 'a', name: 'BCA Reagent A' }, { id: 'b', name: 'BCA Reagent B' }], [{ component: 'a', parts: 50 }, { component: 'b', parts: 1 }], 'Prepare WR by mixing 50 parts of BCA Reagent A with 1 part of BCA Reagent B (50:1).', 'WR');
+    const p = protocol([{ id: 'a', name: 'BCA Reagent A' }, { id: 'b', name: 'BCA Reagent B' }], [{ component: 'a', parts: 50 }, { component: 'b', parts: 1 }], 'Mix 50 parts of Reagent A with 1 part of Reagent B.', 'WR');
     const s = benchScenes(p, p.procedures[0]!, { mix: { parts: { a: '9.8 mL', b: '196 µL' }, make: '10 mL' } }).get('make')!;
     expect(s.items.filter(i => i.kind === 'arrow').map(i => i.label)).toEqual(['9.8 mL', '196 µL']);
     expect(s.items.find(i => i.kind === 'conical')!.label).toBe('WR · 10 mL');

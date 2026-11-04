@@ -228,7 +228,7 @@ are left).
 
 ## Layout
 
-- `shared/`: the protocol format (`protocol.ts`, `chapp.protocol/1`), the numbers (`calc.ts`, `units.ts`, `fit.ts`),
+- `shared/`: the protocol format (`protocol.ts`, [`chapp.protocol/1`](docs/PROTOCOL_FORMAT.md)), the numbers (`calc.ts`, `units.ts`, `fit.ts`),
   the cards Chapp may draw (`a2ui.ts`) and what a QR code carries (`share.ts`)
 - `server/ai/`: the Meta models (`meta.ts`), the front assistant and its specialists (`agents.ts`,
   `conversation.ts`), the embedding fast path (`router.ts`), the checks against the user's words (`authorize.ts`),
