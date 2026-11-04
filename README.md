@@ -22,7 +22,7 @@ four-fold axes into a square window (right).
   <img src="public/chapp/icon-512.png" width="120" alt="The app icon: the same Hsp16.5 cage without the face, seen down a four-fold axis into a square window">
 </p>
 
-**[▶ Demo video](#)** · **[Run it yourself](#run-it)**
+**[▶ Demo video](https://www.youtube.com/watch?v=SOVCPl4UhEw)** · **[Run it yourself](#run-it)**
 
 ![Chapp on a phone: the kit's bottles outlined by SAM 3.1 and named, step 4 at the bench, and the standard curve from sample readings](docs/img/screens.png)
 
