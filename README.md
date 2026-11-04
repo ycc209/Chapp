@@ -145,6 +145,10 @@ Muse Spark 1.3 at Chapp's setting, Mixed (the steps at low, the rest at minimal)
 
 ![What one manual costs, per setup](docs/img/cost.png)
 
+The other vendors' models were run only for this benchmark, through their own APIs or CLIs (`scripts/bench/`), never
+by the app: Chapp calls Meta's models and nothing else. The pipeline they were run through is the one built and tuned
+for Muse Spark 1.3, so this compares them at Chapp's job, not in general.
+
 ## What the benchmark changed
 
 **What matters first.** One Mixed run, call by call (the median of three, 1 November): the search's intro from the web
